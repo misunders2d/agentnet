@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -19,13 +20,18 @@ import (
 // fetched from the authenticated Hub. It is not a successor record or grant.
 const continuityHeadPrefix = "continuity-head/"
 
-// Cached maps are immutable after publication.
-type continuityCache struct {
-	mu         sync.Mutex
-	generation [2]int64
-	valid      bool
-	aliases    map[string]string
-}
+// One immutable alias map per exact input state (continuityGenerationSchema).
+// History catch-up asks for it on every proof check of every item, and each
+// computation parses and verifies every pinned roster.
+const continuityAliasesKept = 32
+
+var continuityAliases = struct {
+	sync.Mutex
+	byToken map[string]map[string]string
+}{byToken: map[string]map[string]string{}}
+
+// continuityResolves counts real computations, for the regression test.
+var continuityResolves atomic.Int64
 
 func (s *store) Query(query string, args ...any) (*sql.Rows, error) {
 	return s.db.Query(query, args...)
@@ -34,36 +40,38 @@ func (s *store) QueryRow(query string, args ...any) *sql.Row { return s.db.Query
 
 // Missing map entries mean identity. With no checkpoint, do not parse persons.
 // Native grants and historical signature verification still use exact IDs.
+// The result is computed from current rows whenever those rows changed, in the
+// caller's own transaction too; this never remembers authority across a change.
 func logicalPersons(q dbq) (map[string]string, error) {
 	if have, e := hasContinuity(q); e != nil || !have {
 		return nil, e
 	}
-	var cache *continuityCache
-	var generation [2]int64
-	// Transactions must read their own writes and are deliberately uncached.
-	// SQLite's two counters cover local writes and other connections' commits.
-	if s, ok := q.(*store); ok {
-		cache = &s.continuity
-		if e := s.db.QueryRow(`SELECT total_changes(),data_version FROM pragma_data_version`).Scan(&generation[0], &generation[1]); e != nil {
-			return nil, e
-		}
-		cache.mu.Lock()
-		aliases, valid := cache.aliases, cache.valid && cache.generation == generation
-		cache.mu.Unlock()
-		if valid {
-			return aliases, nil
-		}
+	var token string
+	if e := q.QueryRow(`SELECT token FROM continuity_generation`).Scan(&token); e != nil {
+		return nil, e
 	}
+	continuityAliases.Lock()
+	aliases, ok := continuityAliases.byToken[token]
+	continuityAliases.Unlock()
+	if ok {
+		return aliases, nil
+	}
+	continuityResolves.Add(1)
 	aliases, e := resolveLogicalPersons(q)
-	if e == nil && cache != nil {
-		var after [2]int64
-		if q.QueryRow(`SELECT total_changes(),data_version FROM pragma_data_version`).Scan(&after[0], &after[1]) == nil && after == generation {
-			cache.mu.Lock()
-			cache.aliases, cache.generation, cache.valid = aliases, generation, true
-			cache.mu.Unlock()
-		}
+	if e != nil {
+		return nil, e
 	}
-	return aliases, e
+	// Outside a transaction a write may land between the statements above.
+	var after string
+	if q.QueryRow(`SELECT token FROM continuity_generation`).Scan(&after) == nil && after == token {
+		continuityAliases.Lock()
+		if len(continuityAliases.byToken) >= continuityAliasesKept {
+			clear(continuityAliases.byToken)
+		}
+		continuityAliases.byToken[token] = aliases
+		continuityAliases.Unlock()
+	}
+	return aliases, nil
 }
 
 func resolveLogicalPersons(q dbq) (map[string]string, error) {

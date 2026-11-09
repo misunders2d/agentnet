@@ -316,7 +316,7 @@ func TestHeldLookReachesRowsPastFirstPage(t *testing.T) {
 	answer("")
 	for range 6 {
 		carol.convWork.due(convRetry) // evidence before every page
-		carol.convSync(tctx(t))
+		carol.convSyncByHand(tctx(t))
 		if inboxHas(t, carol, env.ID) {
 			return
 		}
@@ -395,7 +395,7 @@ func TestDaemonSelfWakeStartsNoHeldLook(t *testing.T) {
 func TestHistoryCatchupSkipsRowsFromTheTargetDevice(t *testing.T) {
 	w, phone, _, ids := historyCatchupFixture(t, 3)
 	for range 4 {
-		if _, err := w.alice.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		if _, err := w.alice.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -412,7 +412,7 @@ func TestHistoryCatchupSkipsRowsFromTheTargetDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 4 {
-		if _, err := phone.historyCatchupPage(tctx(t), w.alice.Self()); err != nil {
+		if _, err := phone.pageByHand(tctx(t), w.alice.Self()); err != nil {
 			t.Fatal(err)
 		}
 	}

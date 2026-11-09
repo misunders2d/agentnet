@@ -36,6 +36,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
   const [editTime,setEditTime] = useState("");
   const [removeFiles,setRemoveFiles] = useState(false), [review,setReview] = useState<T.ScheduledAudience | null>(null), [approved,setApproved] = useState<T.ScheduledAudience | undefined>();
   const [loading,setLoading] = useState(false), [busy,setBusy] = useState(false), busyRef = useRef(false);
+  const [acting,setActing] = useState<Record<string,{text:string;patch:Partial<T.ScheduledSend>}>>({}), actingRef = useRef(new Set<string>());
   const epoch = useRef(0), mounted = useRef(true);
   useEffect(() => {mounted.current=true;return ()=>{mounted.current=false;epoch.current++;};},[]);
 
@@ -105,11 +106,23 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     catch {setNotice("The current audience could not be verified. The saved audience is unchanged.");}
     finally {busyRef.current=false;setBusy(false);}
   }
-  async function action(run:()=>Promise<unknown>) {
-    if(busyRef.current)return;busyRef.current=true;setBusy(true);setNotice("");
-    try {await run();if(mounted.current&&store.isActive()){setSelected(null);setReview(null);setApproved(undefined);await refresh();}}
-    catch {if(mounted.current&&store.isActive()){setSelected(null);setReview(null);setApproved(undefined);try {await refresh();}catch{}setNotice("The action was not confirmed or the revision changed. Review the refreshed list before trying again. No audience was changed automatically.");}}
-    finally {busyRef.current=false;setBusy(false);}
+  // A row's action shows at once and waits on that row alone, as tdlib applies
+  // a change locally before the server answers. The refreshed list then decides.
+  async function action(id:string,text:string,patch:Partial<T.ScheduledSend>,done:Partial<T.ScheduledSend>,run:()=>Promise<unknown>) {
+    if(busyRef.current||actingRef.current.has(id))return;
+    actingRef.current.add(id);setActing(all=>({...all,[id]:{text,patch}}));setNotice("");
+    if(selected?.id===id){setSelected(null);setReview(null);setApproved(undefined);}
+    let failed=false,unread=false;
+    try {await run();} catch {failed=true;}
+    try {if(mounted.current&&store.isActive())await refresh();} catch {unread=true;}
+    actingRef.current.delete(id);
+    if(mounted.current&&store.isActive()){
+      // It succeeded: an unread list must not bring the old row back.
+      if(unread&&!failed)setRows(list=>list.map(r=>r.id===id?{...r,...done}:r));
+      setActing(all=>{const {[id]:_done,...rest}=all;return rest;});
+      if(failed)setNotice("The action was not confirmed or the revision changed. Review the refreshed list before trying again. No audience was changed automatically.");
+      else if(unread)setNotice("Done. This list could not refresh; it catches up with the next change.");
+    }
   }
   const previous = slot?.attempt;
   const same = !!previous && !!snapshot && previous.payload.body===snapshot.body && previous.draft.text===snapshot.draft.text && previous.payload.topic===(snapshot.draft.topic || "") && previous.payload.reply_to===snapshot.draft.replyTo && localScheduleTime(new Date(previous.payload.due))===due && JSON.stringify(previous.payload.audience)===JSON.stringify(audience) && previous.files.length===(snapshot.draft.files || []).length && previous.files.every((f,i)=>f.file===snapshot.draft.files?.[i].file);
@@ -130,15 +143,16 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
   const renderRow = (current:T.ScheduledSend) => {
     const expanded = selected?.id===current.id;
     // A push may replace the list row; an open edit keeps its captured revision.
-    const row = expanded ? selected! : current;
+    const act = acting[current.id];
+    const row = expanded ? selected! : act ? {...current,...act.patch} : current;
     return <article key={row.id} className="border-b border-hairline py-3" aria-label={"Scheduled message: "+(states[row.state] || "Unavailable")}>
     <div className="flex min-w-0 items-start gap-3">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold">{chatTitle(row)}</p>
         <p className="mt-1 truncate text-sm">{row.body.slice(0,180) || (row.files?.length ? row.files.length+" attachment"+(row.files.length===1?"":"s") : "Message")}</p>
-        <p className="mt-1 flex flex-wrap gap-x-2 text-[13px] text-text-2"><time className="whitespace-nowrap" dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time><span className="whitespace-nowrap">{states[row.state] || "Unavailable"}</span>{!!row.files?.length&&<span className="whitespace-nowrap">{row.files.length+" file"+(row.files.length===1?"":"s")}</span>}</p>
+        <p className="mt-1 flex flex-wrap gap-x-2 text-[13px] text-text-2"><time className="whitespace-nowrap" dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time><span className="whitespace-nowrap" role={act?"status":undefined}>{act?.text || states[row.state] || "Unavailable"}</span>{!!row.files?.length&&<span className="whitespace-nowrap">{row.files.length+" file"+(row.files.length===1?"":"s")}</span>}</p>
       </div>
-      <Button size="sm" variant="ghost" disabled={busy} aria-expanded={expanded} onClick={()=>{if(expanded){retainedBody.discard();setSelected(null);}else edit(current);}}>{expanded?"Close details":mutable(row)?"Edit schedule":"View schedule"}</Button>
+      <Button size="sm" variant="ghost" disabled={busy||!!act} aria-expanded={expanded} onClick={()=>{if(expanded){retainedBody.discard();setSelected(null);}else edit(current);}}>{expanded?"Close details":mutable(row)?"Edit schedule":"View schedule"}</Button>
     </div>
     {expanded&&<div className="mt-3 rounded-xl bg-surface p-3 stroke">
     <p className="font-semibold"><time dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time></p>
@@ -147,7 +161,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     {row.files?.map((f,i)=><p key={i} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}
     {row.state==="needs_review"&&<p className="mt-2 text-sm text-text-2">The chat, audience or attachments need review before sending.</p>}
     {row.state==="dispatching"&&<p className="mt-2 text-sm text-text-2">Preparing to send. Delivery is confirmed separately.</p>}
-    {mutable(row)&&<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={()=>void action(()=>store.api.sendScheduleNow(row.id,row.rev))}>Send now</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void action(()=>store.api.cancelSchedule(row.id,row.rev))}>Cancel schedule</Button></div>}
+    {mutable(row)&&!act&&<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={()=>void action(row.id,states.dispatching!,{},{state:"dispatching"},()=>store.api.sendScheduleNow(row.id,row.rev))}>Send now</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>void action(row.id,"Cancelling…",{},{state:"cancelled"},()=>store.api.cancelSchedule(row.id,row.rev))}>Cancel schedule</Button></div>}
     <details className="mt-2 text-sm text-text-2">
       <summary className="min-h-11 cursor-pointer py-3 font-semibold">Recipients</summary>
       <p className="break-words">{audienceText(row.audience)}</p>
@@ -166,7 +180,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
       <p className="text-sm text-text-2">{approved?"New audience explicitly confirmed: "+audienceText(approved):"Editing text or time keeps the saved audience ceiling and attachments unless explicitly removed."}</p>
       <Button size="sm" disabled={busy} onClick={()=>void reviewAudience(row)}>Review audience</Button>
       {review&&<div className="rounded-xl bg-sunken p-3 text-sm"><p>{audienceText(review)}</p><Button size="sm" disabled={busy} onClick={()=>{setApproved(review);setReview(null);}}>Confirm reviewed audience</Button></div>}
-      <div className="flex flex-wrap gap-2"><Button variant="act" size="sm" disabled={busy} onClick={()=>{try {const change=scheduleEdit(selected,body,scheduleDue(editTime),timezone(),removeFiles,approved),confirmed=retainedBody.capture();void action(async()=>{await store.api.editSchedule(change);confirmed();});}catch{setNotice("Choose a date and time in the future. No change was saved.");}}}>Save schedule changes</Button><Button variant="ghost" size="sm" disabled={busy} onClick={()=>{retainedBody.discard();setSelected(null);setReview(null);setApproved(undefined);}}>Keep saved schedule</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="act" size="sm" disabled={busy} onClick={()=>{try {const change=scheduleEdit(selected,body,scheduleDue(editTime),timezone(),removeFiles,approved),confirmed=retainedBody.capture();void action(row.id,"Saving…",{body:change.body,due:change.due},{body:change.body,due:change.due},async()=>{await store.api.editSchedule(change);confirmed();});}catch{setNotice("Choose a date and time in the future. No change was saved.");}}}>Save schedule changes</Button><Button variant="ghost" size="sm" disabled={busy} onClick={()=>{retainedBody.discard();setSelected(null);setReview(null);setApproved(undefined);}}>Keep saved schedule</Button></div>
     </div>}
     </div>}
   </article>;

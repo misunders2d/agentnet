@@ -242,6 +242,7 @@ async function checkPanelLayout(page,width,nav,shots){
  if(width<1024)await chats.getByRole('button',{name:'Search chats',exact:true}).click();
  else await page.keyboard.press('Control+k');
  const search=chats.getByRole('searchbox',{name:/^Search chats/});await search.waitFor();
+ await search.page().waitForTimeout(0);for(let i=0;i<20&&!await search.evaluate(el=>el.getRootNode().activeElement===el);i++)await search.page().waitForTimeout(50); // focus follows the frame that shows it
  assert(await search.evaluate(el=>el.getRootNode().activeElement===el),'chat search receives keyboard focus');
  await search.fill('Z'.repeat(80));await chats.getByText(/Nothing matches/).waitFor();
  await capture('search-empty');await search.press('Escape');assert.equal(await search.inputValue(),'');
@@ -265,7 +266,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
   for(const width of [1280,390]){
-   const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];page.setDefaultTimeout(10000);
+   const phone=width<1024,context=await browser.newContext({viewport:{width,height:900},isMobile:phone,hasTouch:phone}),page=await context.newPage(),errors=[];page.setDefaultTimeout(10000);
    await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());page.on('pageerror',e=>errors.push(e.stack));
    await page.goto(origin);await page.waitForFunction(()=>window.ready);
    const nav=page.getByRole('navigation',{name:'Main'}),sent=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').map(r=>r.body));

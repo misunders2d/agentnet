@@ -279,6 +279,7 @@ export interface DMMessage {
   replica?: boolean;
   pid?: string;
   attachments?: FileView[];
+  queued_send?: QueuedSendView;
   verified_agent: boolean;
   via?: string;
   copies?: CopyView[];
@@ -981,6 +982,12 @@ export interface QuestionApproval {
   person?: string;
   label?: string;
   status?: string;
+}
+
+export interface QueuedSendView {
+  state: string;
+  rev: number;
+  diagnostic?: string;
 }
 
 export interface ReactionView {

@@ -81,7 +81,13 @@ instrument() {
     seconds=150
     args+=(-e latencySuite "$suite")
   fi
+  if [[ $mode == latency ]]; then adb -s "$serial" shell rm -f "$app_data/cache/latency-result.json"; fi
   timeout --kill-after=5s "${seconds}s" adb -s "$serial" shell am instrument -w -r "${args[@]}" "$runner" > "$output" 2>&1 || status=$?
+  # The latency report arrives as a file, not in the instrumentation result.
+  if [[ $mode == latency ]] && grep -q 'LATENCY_JSON_FILE=latency-result.json' "$output"; then
+    report=$(timeout --signal=KILL 20s adb -s "$serial" shell cat "$app_data/cache/latency-result.json" 2>/dev/null | tr -d '\r') || report=
+    if [[ $report == '{'* ]]; then printf 'LATENCY_JSON=%s\n' "$report" >> "$output"; fi
+  fi
   if (( status == 124 || status == 137 )); then
     # 137 can also mean an external SIGKILL; never call it a proven timeout.
     printf 'INSTRUMENTATION_INTERRUPTED mode=%s suite=%s status=%s\n' "$mode" "${suite:-none}" "$status" >> "$output"

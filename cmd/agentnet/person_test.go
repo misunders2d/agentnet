@@ -15,7 +15,8 @@ import (
 )
 
 func TestAdminRevokeExactPerson(t *testing.T) {
-	alice, bob, carol, _, _ := dmWorld(t)
+	stops := map[*client.Agent]func(){}
+	alice, bob, carol, _, _ := dmWorld(t, stops)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	p, ok, err := bob.Person()
@@ -39,6 +40,10 @@ func TestAdminRevokeExactPerson(t *testing.T) {
 	if err := runAdmin(ctx, carol, []string{"revoke", "--person", p.Person}); err == nil {
 		t.Fatal("non-admin could remove a person")
 	}
+	// The removed device's own daemon ends with the Hub's revocation (403) once
+	// it reconnects, as it should; it is stopped first, so that expected end
+	// is not read as the fixture's failure.
+	stops[bob]()
 	if err := runAdmin(ctx, alice, []string{"revoke", "--person", p.Person}); err != nil {
 		t.Fatal(err)
 	}

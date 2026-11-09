@@ -42,6 +42,12 @@ func liveWorld(t *testing.T) (alice, bob *client.Agent, live *Live) {
 
 func liveWorldHub(t *testing.T) (alice, bob *client.Agent, live *Live, hub *testhub.Proc) {
 	t.Helper()
+	return liveWorldHubAt(t, filepath.Join(t.TempDir(), "bob"))
+}
+
+// liveWorldHubAt keeps bob's home at a path the caller chose.
+func liveWorldHubAt(t *testing.T, bobHome string) (alice, bob *client.Agent, live *Live, hub *testhub.Proc) {
+	t.Helper()
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
@@ -56,7 +62,7 @@ func liveWorldHub(t *testing.T) (alice, bob *client.Agent, live *Live, hub *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	bob, err = client.Join(ctx, filepath.Join(t.TempDir(), "bob"), code, "desk")
+	bob, err = client.Join(ctx, bobHome, code, "desk")
 	if err != nil {
 		t.Fatal(err)
 	}

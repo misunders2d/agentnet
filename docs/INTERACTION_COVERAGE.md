@@ -1,5 +1,377 @@
 # Next-release interaction coverage and responsiveness
 
+## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
+
+Not qualified, not released, pre-CI hold. Focused evidence only.
+
+**Counterpart reused.** TDLib `4c6377aa` `fail_send_message` (inspected for
+MEL-748 above): a message that cannot go keeps its identity, place and retry.
+A held send is exactly that existing `needs_review` state with its in-chat
+Retry/Discard. Telegram has no "stop, keep the files" for an upload in flight;
+the hold is an AgentNet adaptation and is not verified against a counterpart flow.
+
+| Entry | Interaction/state | Evidence (failed before, passed after) |
+|---|---|---|
+| `send.cancel-restore` | Cancel of a queued send returns the exact original to the composer, no second send | `TestCancelRestoreRendered` case 1 at 1440 and 390 |
+| `send.cancel-refused-restore` | Storage refuses the restoration; after reload, Saved messages → Put back | same test, case 2 |
+| `send.cancel-held` (B7) | After a restart the files can't return: Cancel holds the message on this device (`POST /api/schedule/hold_send`); "Stopping…" with no failure or controls until the exact receipt; then Retry/Discard | `TestQueuedSendHoldKeepsFilesAndBeatsAttempt` (race with dispatch, real close/reopen, exact bytes on Retry), `TestLiveSendAcceptsThroughAStalledRequest`, Store harness B7 rows, rendered case 4 |
+| `drafts.older-replaced` (B6) | A draft an older AgentNet version's whole-map write replaced is kept first and offered in Saved messages under its own label; Put back fills the composer | journal B6 rows (byte-identical reload, genuine rollback erase, closed page, crash at each write, quota, isolation), Store B6 row, rendered case 5 |
+| `drafts.one-tab` | A second tab waits and writes nothing until the first closes | rendered case 3 (guard; browser only) |
+| `native.no-locks` (B5) | A browser page without Web Locks (missing, or its request refused) is refused before anything writes. A native shell's page without them (desktop or Android marker) opens read-only: chats, Settings and update stay usable; Saved messages can be read and copied (no Retry, Restore, Put back or Discard); the composer is replaced by "Drafts are read-only in this window"; an unsent message row offers Stop (it holds the message; the host keeps it and its files), and a held row offers no Retry or Discard and says "Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here."; other host actions (reactions, edits, answers) work as usual. With locks the native page writes as usual and a second page waits | `TestNativeWithoutLocksRendered`: two native pages per variant (missing, rejected × desktop, Android) on one localStorage seeded with an older version's draft map, a saved send and a kept original; storage byte-identical in both pages and after a reload, no `/api/dm/send`, no legacy acknowledgement; rejected variants also inject own pending, held and stored rows: the held row shows no Retry/Discard, Stop reaches only `hold_send` (desktop 1280, Android marker 390), Reply's refused draft change says so, the stored send releases nothing; read-only Saved messages Copy text and Open chat work; lock variants: kept item Open chat, Copy text, Discard (newer draft kept), on Android with the lock, legacy records for two synthetic hex chat IDs that stand for the fixture chat on the wire: Restore draft into an empty chat (saved, one acknowledgement), an older legacy draft refused over a newer one (no acknowledgement, newer kept), Retry saved send (one request, one acknowledgement, host holds it once); read-only desktop Outbox: Edit schedule → Save sends one `/api/schedule/edit` and writes no schedule token (host schedule routes stood in; host-side edit persistence is `TestLiveScheduleAPI`); lock variants write and the second page waits. Synthetic Chromium with injected markers: the shells' own web views and a second native activity/instance are not run |
+| `recovery.retry-saved-send` | Saved messages → Retry saved send: a held message is never sent from here and says it is stopped in its chat; pending, sent and discarded each say so; a failed lookup keeps it saved | `send-recovery.test.mjs` replay rows; `TestQueuedSendHoldKeepsFilesAndBeatsAttempt` (a replayed admission keeps a held row held; failed before `70a77e12`) |
+
+Click to local feedback / confirmed result, ms, at `8144f161`: send→queued
+row and Cancel→restored under 1000 (asserted); held Cancel 60/72 (1440) and
+66/76 (390) at `580e04cc`; replaced-draft Put back 60 and 51 at `8144f161`.
+Mocked queued-send endpoints over the real daemon page and built Comic bundle;
+no skins, native shells, Android or physical devices.
+
+Open: whether each shipped shell (WebKitGTK in the AppImage, WKWebView,
+WebView2, Android System WebView) has Web Locks is not proven at runtime.
+Refusing a native page was tried (`6bb2899c`) and withdrawn (owner,
+November 7): it also took away the app's update and Saved messages.
+
+## MEL-748 v0.10.10 candidate — November 4, 2026
+
+Not qualified and not released. Pre-CI checkpoint not cleared. Owner reports:
+the app froze during catch-up, messages sat in queue and were cancelled, every
+interaction was slow on the ThinkPad, and a delayed reply reached Amazon_team.
+
+**Counterparts inspected.** TDLib `4c6377aa`, `MessagesManager.cpp`
+(`get_next_yet_unsent_message_id`, `fail_send_message`,
+`set_dialog_last_message_id`, `set_dialog_last_read_inbox_message_id`,
+`send_update_chat_last_message`): a sent message is stored before any network
+step and keeps its identity, its place and its retry; a chat's last message and
+read state are kept per chat and updated by the write, not recomputed for the
+list. Telegram Desktop `a8de5f92`, `api/api_sending.cpp`. Signal Desktop
+`5dad34ad`, `sql/main.main.ts`, `jobs/JobQueue.std.ts`. Slack is closed source,
+unverified. Adaptation: per-chat scope comes from SQLite triggers (`view_dirty`)
+because a second process writes the same store; native checks are unchanged.
+
+**Causes, measured on a private copy of the owner's Zenbook store.** One history
+page took 32 s, 87.5% in repeated roster and signature work; the store's only
+connection and the spool lock were held meanwhile. A group send then waited on
+that lock until its 20 s budget ended, and the failed chain request returned
+before anything was stored, so the text came back to the composer. Proven from
+source; the exact 12:49 timing is inferred. A held chain request stopped the
+one goroutine reading the push stream for up to 30 s per member. The chat list
+rebuilt every chat on any write, which is why every control felt slow. Task and
+proposal lookups scanned a whole table per row.
+
+| Fix | Commit | Regression |
+|---|---|---|
+| Catch-up no longer re-verifies rosters per item; pages bounded, rest between turns | `3e41afbe` `a96642c6` `25814cca` | production-default pacing tests, page ≤ flow-control window |
+| An accepted message is stored before any network step, same ID through retries | `99b76efd` | `TestQueuedSend*`: stalls, busy spool, restart at each stage, ambiguous accept, terminal failure, cancel/retry/repeat, timeout never cancels, place kept |
+| A slow roster request holds that message, not the stream | `cde9b868` `d013bf5b` | `TestHeldChainRequest*`, `TestInboundWaits*`, `TestChainFailure*`, `TestFailingChain*` |
+| Group waiting row in place and in view | `b5a55126` | `TestQueuedGroupSendKeepsItsPlace`, `TestQueuedSendRendered` |
+| Lists read again only the chats a write touched | `d7ebde4d` `ac2ec42c` `248af359` `f0a55cf6` `60a5c9a7` | `TestViewDirty*`, `TestOverviewKeptSummariesMatchAFreshRead`; every UI test comparing kept and fresh lists fails the package on any difference |
+| Task and proposal lookups use indexes | `356fc795` `60a5c9a7` | `TestProposalLookupsFindTheirRowsByIndex` |
+| "Mark unread" is refused only for a write to its own chat | `60a5c9a7` | `TestAttentionScopeMovesOnlyWithItsOwnChat` |
+| Reactions, edits and deletes do not wait on a stalled request | `4151cbe5` | `TestLiveControlsAcceptThroughAStalledRequest`: 2–13 ms |
+| Discard no longer retries first; a refused message keeps its place; a failed list build keeps its marks | `cfc63a4c` | `TestDiscardingAStoppedMessageDoesNotRetryIt`, `TestARefusedMessageStaysInItsPlace`, failed-build step in `TestOverviewKeptSummariesMatchAFreshRead` |
+| A group reaction or new chat naming a newer roster step waits without stopping the stream | `391812ad` | `TestHeldChainRequestHoldsAGroupReaction`, `TestHeldChainRequestHoldsANewChatNamingANewerStep` |
+| A refusal and a lost request read differently on every host, so a lost request is never told to retype | `4e6aba4b` | `TestP12SendRendered`, `TestMenuOfflineRendered`, `queued_send_check.mjs` |
+| Mark unread shows before the server answers | `e7288625` | `unread.mark`, `unread.mark-refused` in `TestUIResponsivenessRendered`; failed without the fix |
+| Outbox rows act at once and alone; a deleted chat leaves first; any other write unanswered after 600 ms says so | `b5a81f26` | `TestUIResponsivenessRendered` slow-write pass, `chat.delete`, `chat.delete-refused`; failed without the fix |
+| A pending delete does not hide a newer message; unread marks add up and clear alone; a failed list refresh keeps the result | `e66237be` | `chat.delete`, `unread.mark-second`, `unread.mark-third-refused`, `outbox.schedule-cancel`; each failed without the fix |
+| A link or notification changing the page fragment is not Back, so it lands where it points; Back after it still reaches the open layer, also after Forward entries are cut and at history's cap (on base too) | `d3d62ac6`, final form `b13be097` `1d4efabf` | `TestComicNotificationLandingRendered`, `TestBrowserBackRendered` |
+| A refused dismiss keeps the report list open with its retry (on base too) | `97a14cf4`, corrected in `b13be097` | `TestHeldPersonTurnRendered`; `TestAttentionReplyPendingRendered` and `TestResponsiveEditorDraftsRendered` caught that first version freezing the list when no parent owns its state |
+| Deleting a chat that came back keeps it hidden when the first delete answers | `b13be097` | `chat.delete-again` in `TestUIResponsivenessRendered` |
+
+**Measured, input to result on the native route: no HTTP and no rendering.**
+ThinkPad at `d013bf5b`, real disk (btrfs on LUKS), a read-only copy of its store,
+no network, idle otherwise, built with temporary measurement helpers that are
+not in the tree. "Busy" is a history sweep alternating with each route. n=5 idle,
+n=8 busy. Milliseconds, p50 / max.
+
+| Route | Current size, idle | Current size, busy | 10x, idle | 10x, busy |
+|---|---:|---:|---:|---:|
+| First chat list (cold) | 827 | – | 9833 | – |
+| Chat list, one chat changed | 130 / 139 | 230 / 275 | 561 / 600 | 924 / **1208** |
+| Comic's topic list | 100 / 112 | 151 / 200 | 301 / 311 | 349 / 616 |
+| Open biggest chat | 215 / 242 | 305 / 362 | **1959 / 2109** | **1861 / 2093** |
+| Open another chat | 134 / 146 | 146 / 185 | **1332 / 1481** | **1179 / 1345** |
+| Unread page | 0 | 55 / 171 | 113 / 118 | 477 / **2201** |
+| One peer's topics | 103 / 109 | 119 / 134 | **1115 / 1396** | **1120 / 1251** |
+| Approvals | 83 / 90 | 118 / 149 | 96 / 107 | 94 / 232 |
+| Send accepted | 99 / 101 | 260 / 265 | 148 / 171 | 124 / 258 |
+
+Current size is 256 MB; 10x duplicates its rows (1.77 GB). Zenbook, DB on tmpfs,
+loaded by other work, current size: first list 2559 ms, busy list max 783 ms, open
+biggest chat busy max 605 ms. Same machine before these fixes: list rebuild
+1420 ms, busy p95 3300 ms.
+
+**Amazon_team late arrival, checked against stored times; no message text read.**
+The Hub accepted nothing from the sender the owner named from at least November 3
+06:00 UTC until November 4 09:00 UTC, so that reply was delayed before the Hub, on
+the sender's device. Why is not provable from here; a device suspended for being
+outdated is the leading hypothesis and needs that device's records. No row sent
+on November 3 arrived late on the ThinkPad or the Zenbook. Rows delayed about 25
+minutes on November 4 were held by the Hub while the ThinkPad's app was not running
+(13:03–13:28; no crash record, reason unknown) or the Zenbook was off (until 12:14),
+and arrived within 24 s of the app starting. Those are offline catch-up, not a
+stall. Live arrival on the ThinkPad was 6–10 s on November 4 against at most 3 s on
+November 2, during catch-up on v0.10.9; the candidate's fixes address that path,
+and live arrival on the candidate is not yet measured.
+
+**Rendered on a real store copy.** Comic at 1440×960 in Chromium on the Zenbook,
+real `Live` over a private copy of the owner's store on tmpfs, no network, mostly
+build `e7288625`; the 10x reaction picker rows are from a later build. "Busy" is a
+catch-up sweep running throughout. Milliseconds, p50 / max.
+Sends cannot reach the Hub in that namespace, so confirmed network results are not
+measured here. The ThinkPad's rendered numbers are not measured.
+
+| Local feedback | Current, idle | Current, busy | 10x, idle | 10x, busy |
+|---|---:|---:|---:|---:|
+| First list visible (cold) | **2243** | **1261** | **8642** | **3238** |
+| Main tabs, worst of five | 121 / 267 | 150 / 193 | 204 / 207 | 205 / 227 |
+| Chat row selected | 167 / 308 | 149 / 502 | 125 / 349 | 173 / 561 |
+| Messages visible (a result, not local feedback) | 454 / 1120 | 549 / 1147 | 640 / 2590 | 1891 / **10747** |
+| Send row appears | 116 / 134 | 252 / 298 | 88 / 104 | 110 / 151 |
+| Composer cleared | 6 / 7 | 8 / 32 | 5 / 6 | 5 / 7 |
+| Message menu | 351 / 929 | 225 / 315 | 368 / 585 | 408 / 486 |
+| Mark unread | 118 / 198 | 138 / 154 | 125 / 125 | 145 / 145 |
+| Reaction picker | 141 / 370 | 98 / 138 | 77 / 92 | 91 / 110 |
+| Reaction shown | 79 / 236 | 151 / 178 | 102 / 107 | 108 / 131 |
+| Search, type and clear | 28–43 / 45 | 35 / 94 | 25–32 / 36 | 41–55 / 100 |
+
+Later, at `ebe6933b`, normal size: the app shell is visible in 529 ms idle and 708
+ms busy; its first list follows at 1860 ms idle and 1507 ms busy. So the screen
+responds under a second, and the list content does not.
+
+The only local feedback over a second here is the cold first list. Each cycle ran
+two to four times, so these are not percentile evidence. Two misses in these runs
+came from the measurement. Mark unread reported "row stayed read" only when the
+open chat was already unread (`currentAlreadyUnread: true`), so its count could not
+rise. At 10x, a reused store copy kept 👍 from earlier runs, so the click removed
+it; with the check accepting removal, 6 of 6 passed. The per-row state was not
+logged, so that second cause is consistent with the result, not proven.
+
+**With every write held.** `AGENTNET_LATENCY_WRITE_DELAY` holds each write in the
+rendered harness and records each control's first change on screen.
+`TestUIResponsivenessRendered` now also runs `actions` and `outbox` this way, so
+this runs in CI. Before `b5a81f26`, Outbox Cancel, Send now and Save showed only a
+disabled button until the server answered, and chat delete showed nothing. After
+it, across all 16 suites at 1100 ms: 104 write controls, 0 silent. Of those, 34
+change at once but their check passes only when the mock server answers, so whether
+that first change is the intended one is not judged. The harness reached 48 of the
+84 API paths named in `api.ts`. The others have no measured control: the 600 ms
+notice is their only cover, proven on chat delete alone. This is a mocked host and
+proves nothing about database or sync contention. The survey ran on a fixture host:
+the first version of the notice crashed the real frozen host, which only
+`TestScheduleLiveRendered` showed.
+
+Counterpart for the Back guard: Telegram Web K `28bba1b2`,
+`src/components/appNavigationController.ts`. Its entries carry a state id that tells
+them from others; with the Navigation API it reads `navigationType === 'push'` as a
+hash change and compares `destination.index` for direction. AgentNet's browser host
+adapts that without the Navigation API, which not every browser it serves has: an
+entry with no mark is new, and each mark holds its place, so direction never depends
+on `history.length`.
+
+Counterpart for `b5a81f26`: Telegram Desktop `a8de5f92`,
+`window/window_connecting_widget.cpp` shows connection status only after a delay
+(`kConnectingStateDelay` 1000 ms). AgentNet's 600 ms is shorter to stay under the
+gate. TDLib `4c6377aa`, `MessagesManager.cpp:8613` `delete_dialog_history`, removes
+the messages locally before `delete_dialog_history_on_server`, and a later message
+brings the chat back.
+
+**Not met or not shown.** The first list is over one second at current size and
+far over at 10x, with no saved first page to show meanwhile. At 10x under sync,
+opening a chat took up to 10.7 s to show its messages, though the row selected
+within 561 ms. Fetch paging or a saved first page would be needed: proposals, not
+in this candidate. Rendered numbers on the ThinkPad and confirmed network results
+are not measured. Other gaps:
+
+- `invites` asks for sign-in synchronously, so it fails with no network.
+- 49 UI actions in `Live` still wait on the network inside the request. Their local
+  feedback is shown only where a control above measures it.
+- Selected reply receivers, `AskAgent`, `/api/send`, `/api/act` replies and
+  `/api/request/followup` stay synchronous under the 20 s budget.
+- Chain failure with no newer step can leave a message waiting up to 45 s.
+- Roster asks on the stream reader traced and not converted, full budget per ask:
+  `groupproof.go:411,422,514`, `groupparticipationstatus.go:99`,
+  `groupwithdrawaldelivery.go:443`, `groupwithdrawal.go:17`,
+  `participation_external.go:1310`, `modelreport.go:331`, `conv.go:1241`,
+  `daemon.go:739`, `persons.go:887`, `grouplifecycle.go:214,657`, `groups.go:78`.
+  The call graph is by name and over-approximates.
+- Freeze: its measured cause is fixed, and every control above stayed under a second
+  during a sweep on a copy. A real catch-up with the network running is not measured,
+  and send to custody under load on the real app is not measured. Two parts I looked
+  at again are not causes on this evidence. `syncContinuityGroups` costs about 100 ms
+  before each group send on the Zenbook copy (7 groups, 1 recovered person), after
+  the message is already stored. Own-device mirror copies travel in the live lane
+  but hold only their own device's queue; both stores have 0 queued there now, and a
+  backlog was not measured.
+- Every group message asks for one chain per member.
+- The browser engine's errors carry no status, so its refusals read "Not confirmed".
+  Standalone skins keep their own optimistic copy with no Discard on a `failed`
+  answer; the skins gate has not been run.
+- Rendered tests with invented data do not exercise the native list: CI's 36
+  compared none. Live and browser tests compared 148 kept lists with a fresh read, 0
+  differed; real data 15, 0 differed, with one history page error at 10x treated as
+  an artifact of duplicating rows, not shown otherwise.
+- Comparison cases not run: a writer between stamps, eviction, two concurrent
+  readers, delayed duplicate history against read and delete, family writes,
+  withdrawal and head changes beyond removal, topic moves, clock archive, last
+  message edit or delete in the comparison, Waiting and Held transitions, selected
+  receiver changes.
+
+**Bounded runs at `e698f61e`, Zenbook, other work running, `nice`, one browser at a
+time.** CI's 36 in 408 s: 35 passed. `TestDeviceRemovalRendered` failed once at its own
+`feedbackMs<500` bound with load near 10, then passed 3 of 3 at the same load on the
+next commit; this is not qualification. The rendered tests outside CI's list, in 668 s:
+36 of 37 passed. `TestScheduleLiveRendered`, `TestUIResponsivenessRendered` with
+`actions,outbox` written held, the UI batch and the client send, stream and history
+batches passed. At `1d4efabf`, the only later change, `TestBrowserBackRendered` and
+`TestComicNotificationLandingRendered` passed. At `e8eaf6dd`, CI's 36 passed, 36 of 36
+in 405 s.
+
+**Rendered tests outside CI's list.** CI names 36 rendered tests; no other rendered
+test runs there. Of the others, 34 failed on both this candidate and base `cabe5c3c`
+when first run. 33 now pass, in one run at `e698f61e`: 9 needed nothing more, 22 had stale
+expectations repaired, and 2 found the real defects above. `TestComicSetupParityRendered`
+still fails on base and here, at wording changed by `9133893b`, and its later steps
+have not run. MEL-749 tracks it and CI's fixed list. Repairs dropped three checks:
+first focus on a desktop list row, the steps inside the laptop–Pixel thread, which
+no longer has a row, and the Needs you chip in `TestTopicsRendered`, whose fixture has
+no current agent. That test also no longer requires a topic switch to keep the last
+topic's messages: since `753a4795` the selection is immediate and a topic not yet
+loaded shows the opening sketch. `TestHeldPersonTurnRendered` showed a notice can
+cover a button at some widths; no check covers that.
+
+**Inventory, by exact definition.** 2052 definitions at this candidate: Comic 943,
+standalone skins 753, static pages 217, Android 124, desktop 11, overlay 4. Labels
+close no row. Every figure below keys on `definition_id`, from a test-only tagged
+bundle (`AGENTNET_INTERACTION_TAGS=1`) that wraps each handler; none of it is the
+shipped bundle, and it is not final-SHA acceptance.
+
+| Comic, 943 definitions | Count | Source |
+|---|---:|---|
+| Own handler in source | 796 | inventory (147 others are structural elements) |
+| Handler ran, wide crawl with exact binding | 134 | `runtime_crawl_wide.py`, 3000 s box, 2672 trials |
+| Handler ran, ordinary rendered tests | 401 | 53 harnesses, tagged copy of `94689878`: 141 pass, 4 fail, 5 skip |
+| Handler ran, either source | 444 | |
+| Handler never ran anywhere | 352 | |
+| Trial changed the view within 1000 ms | 95 | crawl, 2447 of 2672 trials; 225 no visible change; 41 unbound |
+
+The 4 harvest failures pass on the untagged checkout, `TestMenuOfflineRendered` only
+after a harness fix (a retried row stops being failed before its request lands). The 5
+skips need their own opt-ins. Of those, `TestExternalAgentUIRendered`,
+`TestTypingCombinedRenderedLinkedEngineAndDaemon` and `TestOnboardingRenderedNativeChoices`
+pass. `TestGroupReplyReceiverRendered` and `TestRemoteReplyReceiverRendered` fail the same
+way at base and here: `#receiver-summary` is not visible at 390 wide. Not investigated;
+tracked in MEL-749.
+
+Handlers never run are concentrated in `NewChat.tsx` 19 of 37, `WorkspaceSwitcher.tsx` 19
+of 22, `Settings.system.tsx` 16 of 19, `Approvals.conv.tsx` 15 of 20, `InviteSheet.tsx` 15
+of 31, `Message.tsx` 13 of 33, `Approvals.card.tsx` 12 of 28, `Settings.profile.tsx` 12 of
+24, `Conversation.header.tsx` 11 of 26, `RoomPanel.cards.tsx` 10 of 13 and `Teams.tsx` 10
+of 29.
+
+The earlier 87-minute crawl cannot be reconciled: its 3107 rows bound to nothing, and
+it ran the untagged bundle. Its figures (2300 fired, 2079 within 1000 ms) are
+label-level. A handler having run proves that it ran under a rendered test, not that the
+intended result appeared. A measured local-feedback bound exists only for the crawl's 95,
+the rows of `TestUIResponsivenessRendered` and rendered tests with their own feedback
+assertions. The 1109 definitions outside Comic have no exact evidence: the tags cover only
+Comic. This is not exhaustive and it is not a pass.
+
+**Nested JSX discovery repair, November 5: source only.** The pinned build
+compiler now supplies TS/TSX JSX nodes and each node's own attributes for both
+inventory and test tagging. A child callback inside `footer`, `trigger` or
+`render` no longer becomes a parent callback, and nested physical inputs retain
+their own definitions. The concrete Bring back, Reset title and Save inputs are
+separate required rows; the rename input and form-submit callback remain separate
+from the Save button. Synthetic source regressions reject malformed JSX and
+check comments, strings, templates, generics, spreads and following siblings.
+
+Exact unchanged product sources reconcile 2077 prior rows to 2151: 2028 retain
+IDs, 46 rename at the same positions, 77 positions are added and 3 false parent
+rows are removed. Sixteen old IDs now name different positions; old execution
+evidence must not transfer through those IDs. The six list-snapshot fixture IDs
+retain their exact source positions. These are source populations, not distinct
+reachable-control or state totals. Four non-JSX fragment warnings, opaque
+spreads, owner/state/keyboard/native/skin mapping and rendered acceptance remain
+open. No new rendered case or production behavior is qualified by this repair.
+
+**List-snapshot rapid input, November 5: focused source fix only.** Scrolling the
+whole pending-selection card could move Cancel beneath Add's pointer: a repeated
+click cancelled the selection while its snapshot request remained held. TeamPeople
+now reveals the status text, leaving the later recovery actions below it. There
+is no debounce or event-detail filter. The actual Comic component fixture
+(`--family team-snapshot`) has 16 wide/narrow cases for pending/rejected snapshots,
+duplicate input, concurrent selection/removal, deliberate Cancel/Retry and stale
+completion. Twelve separate adjacent cases cover fixed-coordinate detail1 clicks,
+emulated touch taps and Enter/Space Cancel/Retry at both widths. Each checks intended
+local feedback separately from the mock-backed result, independent controls and
+zero parent submits, group creates/invites or navigation. Two live handler-noop
+faults fail the measuring path. These are synthetic component results, not unique
+control totals, real-store proof or complete C1 acceptance. Other owners,
+touch Cancel/Retry, pen, skins, native platforms, real sync/DB contention and the
+remaining states are unverified; production bundle rebuild is still pending.
+The task-owned wrapper records configured runtime policy, process pins and cleanup;
+earlier receipts sampled pre-activation settings, while later keyboard/negative
+receipts additionally record active/running policy. Neither group clears pre-CI.
+
+**C1 harness repair, November 5: subset only.** The 43-row discovery index is
+not an executable all-control gate. `c1_controls_rendered.cjs --family
+new-group-selection --part 0` (and part 1) defines disjoint wide/narrow selections:
+six control types, 41 individually bound checkbox targets and 91 state/input
+cases per viewport/backend cell, 546 required cases across both widths and three
+synthetic backend modes. Seven C1 source rows participate; the parent `onBack`
+callback aliases the Back button, while its `onCreated` callback remains missing.
+The runner records trusted input, new intended DOM states across paint opportunities,
+rendered screenshot completion as a conservative feedback upper bound, separate
+local-result timing and another bounded control while the synthetic request is held
+or failed. Candidate/source, bundle, browser payload and runner hashes bind each run.
+Live injected failures exercise the measuring path, not just fabricated validator
+records. This does not close all dimensions of any source row: the other 36 C1 rows,
+selected-person Remove buttons, creation/recovery controls, real normal/10x history,
+cold/warm app and DB/sync contention, stale/newer state, input variants, other skins
+and supported platforms remain open. No release or pre-CI qualification follows.
+
+Routes: `docs/HOST_API_ROUTES.md` documents 126 paths; 46 were seen as real requests under
+those tests. Many rendered tests answer from an in-page stub, so unseen does not mean
+unused, and seen does not mean correct.
+
+The 16 definitions the earlier oracle marked failed or unreached: 12 now have a
+handler or a within-bound result; 4 do not (`Approvals.card.tsx#reply/div/#1`,
+`Message.tsx#needsHumanDetail/summary/#2`, `NewChat.tsx#shownAgents/Button/onClick#2`,
+and `Message.tsx#needsHumanDetail/button/onClick#8`, which no longer exists under
+that id). A handler having run does not settle the intent those trials found missing.
+
+**Browser Back.** With the navigation API, leaving goes in one hop to the entry before
+this document, from the browser's own list, and at most one more step past it. A load
+records what was behind it on the entry, so a traversal it can be sure of needs no
+timer. Real runs of `TestBrowserBackRendered`: Chromium and Firefox pass every case
+locally, walk at the history cap 49 and 75 ms (Chromium was 413 ms, Firefox stuck: it
+goes on listing entries it dropped). macOS WebKit runs only in CI, for the first time
+in this candidate's run. Real older browsers and Safari: not run; "older engine" here
+is Chromium with the API removed. A page-cache return is covered by the contract
+model only: Playwright's browsers do not exercise it here.
+
+Stated limits, each without a timer-free answer because a slow traversal and none look
+the same to the page: a tab open from before this version and an engine without the
+API at the cap or with an unmarked entry can write the guard on input after a second,
+while a traversal may still be coming (two writes, and Back still leaves). `location.replace`
+on an engine without the API, with forward entries and nothing behind, records the wrong
+side: Back stops dismissing layers until reload. Rare and older engines only; not tested on a
+real one.
+
+**Send to custody under real catch-up.** `TestSendCustodyDuringCatchUp` (opt-in, real
+binaries, local Hub). Results at the frozen SHA are recorded in the release evidence. Two
+measured behaviours stand without a change here, because each is stream design or the
+owner's 45-second retry rule: a message sent to a device draining 1000 missed messages can
+wait behind that backlog (21 to 40 s at most, p50 under 700 ms), and after a relay outage
+arrival took 26 to 42 s, mostly after custody, which is consistent with the peer's
+reconnect wait (inferred from timing).
+
+**`view_dirty` triggers under contention.** Same commit, same journey, side by side at
+load about 20, triggers on and off, one run each, 3000 rows, non-race. Send accept p50 on
+and off: 124/125, 160/140, 162/257 ms by phase. No send cost is visible at this sample
+size. Bulk insertion cost stays as measured: +118 microseconds per row.
+
 ## MEL-741 / MEL-742 candidate — November 3, 2026
 
 Bounded frontend changes on `mel741-742-read-scroll`; no release qualification
@@ -234,6 +606,12 @@ only the per-message share (~0.3 → ~0.2 s) and needs every consumer that
 reads the whole `messages` list guarded (about 15, one of them topic merge).
 Unverified: Comic-side processing time of a whole view; a Telegram server
 page size other than these client constants.
+
+Corrected November 4 (MEL-748): those shares were measured on one chat at
+current size. The same store at 10x, and the list under write load, showed
+whole-table scans per row and a list rebuilt on every write; fixing those took
+the 10x open on the Zenbook from 4.4 s to 1.4 s without paging. Paging remains the remaining
+step for a chat that size.
 
 ## Message times carry their day — unreleased, November 1
 

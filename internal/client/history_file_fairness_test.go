@@ -60,7 +60,7 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	envs, err := a.store.queued()
@@ -143,7 +143,7 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 		return phoneBase.RoundTrip(r)
 	})
 	phone.convWork.due(convHistory)
-	phone.sync(tctx(t))
+	phone.syncByHand(tctx(t))
 	phone.stopBackgroundPosts()
 	phone.stopArchivePosts()
 	phone.hub.http.Transport = phoneBase
@@ -201,17 +201,17 @@ func TestHistoryFlushYieldsToRequestedFile(t *testing.T) {
 	if pending != 1 {
 		t.Fatalf("signed request not pending: %d", pending)
 	}
-	a.convSync(tctx(t))
+	posted = nil
+	a.convSyncByHand(tctx(t))
 	var offerID string
 	if err = a.store.db.QueryRow(`SELECT id FROM outbox WHERE sub='file'`).Scan(&offerID); err != nil {
 		t.Fatal(err)
 	}
-	posted = nil
+	if len(posted) == 0 || posted[0] != offerID {
+		t.Fatal("prepared file waited behind this sync's bulk work")
+	}
 	if err = a.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
-	}
-	if len(posted) == 0 || posted[0] != offerID {
-		t.Fatal("prepared file waited behind bulk history")
 	}
 	state, _, _, err = a.store.outboxState(history[2])
 	if err != nil || state == stateQueued {

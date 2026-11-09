@@ -127,7 +127,12 @@ func TestHistoryWindowOfflineReceiptRestartAndCompletion(t *testing.T) {
 	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&first); err != nil {
 		t.Fatal(err)
 	}
-	for range 8 {
+	if first < 1 || first > historyPage {
+		t.Fatalf("first paced page: %d", first)
+	}
+	// Pages follow their cost; the offline window does not. Enough turns to fill
+	// it at the smallest page, then it must stay exactly full.
+	for range historyPage + 8 {
 		if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
@@ -136,9 +141,10 @@ func TestHistoryWindowOfflineReceiptRestartAndCompletion(t *testing.T) {
 	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if first != historyPage || count != first {
-		t.Fatalf("offline producer grew beyond its outstanding page: %d -> %d", first, count)
+	if count != historyPage {
+		t.Fatalf("offline producer left its window at: %d -> %d", first, count)
 	}
+	first = count
 	if _, err := a.store.db.Exec(`UPDATE outbox SET state='custody' WHERE recipient=? AND sub='history'`, phone.Address); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +184,7 @@ func TestHistoryWindowOfflineReceiptRestartAndCompletion(t *testing.T) {
 	// Drain actual signed carriers into the phone and acknowledge proven storage;
 	// each subsequent bounded producer pass must eventually cover all originals.
 	seq := int64(1)
-	for rounds := 0; rounds < 12; rounds++ {
+	for rounds := 0; rounds < len(ids)+12; rounds++ { // the smallest page takes one round per row
 		envs, err := a.store.queued()
 		if err != nil {
 			t.Fatal(err)

@@ -159,13 +159,13 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       await p.evaluate(() => __p24.person());
       // Return from phone Profile through its section header. Main nav
       // also has a You button, which keeps the current section open.
-      if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
+      if (width < 1024) await p.locator('[data-settings-back]').click();
       if (platform === 'daemon') {
-        await p.getByRole('button', { name: /^Your agent/ }).click();
+        await p.getByRole('button', { name: /^Coding agents/ }).click(); // renamed in 9133893b
         await p.getByRole('button', { name: 'Find them', exact: true }).click();
         await p.getByText('Ready', { exact: true }).waitFor(T);
-        await p.getByText('Fictional helper is set up for chats, questions and approved tasks.',{exact:true}).waitFor(T);
-        await p.getByText('Agent: Fictional helper',{exact:true}).waitFor(T);assert.equal(await p.getByRole('radio',{name:'Fictional helper',exact:true}).count(),0,'sole exact agent needs no selector');
+        await p.getByText(/ is set up for chats, questions and approved tasks\.$/).waitFor(T); // names the harness since 9133893b
+        await p.getByText('Where Codex works',{exact:true}).waitFor(T);assert.equal(await p.getByRole('radio',{name:'Fictional helper',exact:true}).count(),0,'sole exact agent needs no selector'); // its own line was removed in 9133893b
         assert.equal(await p.getByRole('radio',{name:/Codex/}).isVisible(),false,'default responder is subordinate');
         await p.getByText('Native sessions',{exact:true}).click();
         const reads = await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').length);
@@ -188,7 +188,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         await p.getByText('Ready',{exact:true}).waitFor(T);
         assert.ok(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').every(c=>c.body===undefined)),'hook-unsupported configure makes no native changes');
         await snap('hook-unsupported-ready-agent');
-        if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
+        if (width < 1024) await p.locator('[data-settings-back]').click();
       }
       await p.evaluate(()=>__p24.clearCatalog());
       if(process.env.AGENTNET_SETUP_ONLY){
@@ -202,6 +202,8 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       let team = p.getByRole('dialog', { name: 'Dock crew', exact: true });
       await team.getByRole('button', { name: 'Leave list' }).click();
       await p.getByText('The last manager cannot leave.', { exact: true }).waitFor(T);
+      // Leaving closes the list at once since 1c714303; its refusal stays on the list's card.
+      await p.getByRole('button', { name: /Dock crew.*3 people.*0 agents/ }).click();
       await team.getByRole('button', { name: 'Make manager', exact: true }).first().click();
       await p.getByRole('alertdialog').getByRole('button', { name: 'Confirm change' }).click();
       await team.getByRole('button', { name: 'Take manager role' }).waitFor(T);
@@ -266,7 +268,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       assert.deepEqual(await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/groups/invite').at(-1).body), { conv: '4'.repeat(64), person: 'b'.repeat(64), history: { refs: [{ lid: '3'.repeat(64), author: 'b'.repeat(64), hash: 'e'.repeat(64) }] } });
       await existing.getByRole('button', { name: 'Close', exact: true }).click();
       await p.evaluate(() => __p24.openDM());
-      await p.getByRole('button', { name: 'Save to project space', exact: true }).waitFor(T);
+      await p.getByRole('button', { name: 'Save a readable copy to Google Drive', exact: true }).waitFor(T);
       await p.getByRole('button', { name: 'More', exact: true }).click();
       await p.getByRole('menuitem', { name: 'Project space', exact: true }).click();
       const space = p.getByRole('dialog', { name: 'Project space', exact: true });
@@ -288,7 +290,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         assert.equal(await p.evaluate(() => __p24.calls.find(c => c.google === 'consent').request.confirm_account), true);
       }
       await space.getByRole('button', { name: 'Close', exact: true }).click();
-      await p.getByRole('button', { name: 'Save to project space', exact: true }).click();
+      await p.getByRole('button', { name: 'Save a readable copy to Google Drive', exact: true }).click();
       const copy = p.getByRole('alertdialog', { name: 'Save to Google Drive?' });
       assert.match(await copy.textContent(), /outside AgentNet end-to-end encryption/);
       assert.equal(await p.evaluate(() => __p24.calls.filter(c => c.drive?.action === 'save-attachment').length), 0);
@@ -297,12 +299,10 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       assert.deepEqual(await p.evaluate(() => __p24.calls.find(c => c.drive?.action === 'save-attachment').drive), { conv: '1'.repeat(64), action: 'save-attachment', dir: 'in', message: '2'.repeat(64), index: 0, confirm_outside_e2ee: true });
       if (width < 1024) await p.getByRole('button', { name: /^Back to chats/ }).click();
       await settings().click(); await p.getByRole('button', { name: /^Storage/ }).click();
-      const storage = p.getByRole('region', { name: 'File storage options' });
-      await storage.getByRole('button', { name: 'Save local setup progress' }).waitFor(T);
-      await snap('storage-setup'); await noSideways(storage);
-      await storage.getByLabel('Google Cloud project ID').fill('parity-project');
-      await storage.getByRole('button', { name: 'Save local setup progress' }).click();
-      await p.waitForFunction(() => __p24.calls.some(c => c.path === '/api/drive/setup' && c.body?.action === 'save-draft'));
+      // Since 7b78e0e5 Storage holds the relay's attachment storage, not the
+      // Google project draft; latency suite `storage` runs its actions.
+      await p.getByRole('heading', { name: 'Workspace attachments', exact: true }).waitFor(T);
+      await snap('storage-setup');
       await p.evaluate(() => __p24.unmount());
       assert.equal(await p.evaluate(() => __p24.root.childElementCount), 0, 'unmount empties skin root');
       assert.equal(await p.evaluate(() => __p24.listeners.size), 0, 'unmount releases workspace listeners');

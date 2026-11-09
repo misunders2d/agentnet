@@ -329,7 +329,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema}
 
 // Lookups by logical ID alone (a request's continuation and stop, proposal
 // confirmation, sent copies) otherwise read every outbox row with its inline
@@ -343,6 +343,19 @@ const outboxLogicalIDSchema = `CREATE INDEX outbox_lid ON outbox(lid);`
 // biggest chat 15 MB. With sub in the index the skipped copies are never read.
 const outboxConvSubSchema = `CREATE INDEX outbox_conv_sub ON outbox(conv, created_at, sub);`
 
+// Every write to logicalPersons' inputs gives continuity_generation a fresh
+// random token, and a rollback restores the old one, so one token names one
+// exact input state, a transaction's own uncommitted writes included. Copies
+// of a file carry their token with the same contents.
+const continuityGenerationSchema = `CREATE TABLE continuity_generation(id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL);
+INSERT INTO continuity_generation VALUES(1, hex(randomblob(16)));
+CREATE TRIGGER continuity_persons_insert AFTER INSERT ON persons BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
+CREATE TRIGGER continuity_persons_update AFTER UPDATE ON persons WHEN OLD.person IS NOT NEW.person OR OLD.record IS NOT NEW.record OR OLD.state IS NOT NEW.state OR OLD.conflict IS NOT NEW.conflict BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
+CREATE TRIGGER continuity_persons_delete AFTER DELETE ON persons BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
+CREATE TRIGGER continuity_config_insert AFTER INSERT ON config WHEN NEW.k GLOB 'continuity-head/*' OR NEW.k GLOB 'revoked-exact-device/*' BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
+CREATE TRIGGER continuity_config_update AFTER UPDATE ON config WHEN NEW.k GLOB 'continuity-head/*' OR NEW.k GLOB 'revoked-exact-device/*' OR OLD.k GLOB 'continuity-head/*' OR OLD.k GLOB 'revoked-exact-device/*' BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;
+CREATE TRIGGER continuity_config_delete AFTER DELETE ON config WHEN OLD.k GLOB 'continuity-head/*' OR OLD.k GLOB 'revoked-exact-device/*' BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;`
+
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
 	stateQueued = "queued" // not yet accepted by the Hub; retried
@@ -350,7 +363,6 @@ const (
 )
 
 type store struct {
-	continuity      continuityCache
 	continuityDirty atomic.Bool
 	db              *sql.DB
 	onChange        func() // set by the Agent: local state changed (changes.go)

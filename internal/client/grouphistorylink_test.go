@@ -174,7 +174,7 @@ func TestGroupHistoryLinkOutgoingControlPersistenceTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	reopened.historyStep(tctx(t))
+	reopened.stepByHand(tctx(t))
 	var state string
 	if err = reopened.store.db.QueryRow(`SELECT state FROM history_jobs WHERE device=?`, phone.Address).Scan(&state); err != nil || state != "done" {
 		t.Fatalf("history did not finish after restart: %s %v", state, err)
@@ -199,7 +199,7 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 	if n := groupHistoryCarrierCount(t, a, phone.Address, packet.State.Conv); n != 0 {
 		t.Fatalf("unexpected pre-link delivery %d", n)
 	}
-	a.historyStep(tctx(t))
+	a.stepByHand(tctx(t))
 	var state, pos string
 	if err := a.store.db.QueryRow(`SELECT state,pos FROM history_jobs WHERE device=?`, phone.Address).Scan(&state, &pos); err != nil || state != "done" {
 		t.Fatalf("job %s %v", state, err)
@@ -266,7 +266,7 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	reopened.historyStep(tctx(t))
+	reopened.stepByHand(tctx(t))
 	if groupHistoryCarrierCount(t, reopened, phone.Address, packet.State.Conv) != n {
 		t.Fatal("restart duplicated completed batch")
 	}
@@ -277,7 +277,7 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 	// A completed sweep retries only when new evidence/reconnect wakes it.
 	// Raw SQL bypasses that normal event, so exercise the existing wake here.
 	reopened.convWork.due(convRetry)
-	reopened.convSync(tctx(t))
+	reopened.convSyncByHand(tctx(t))
 	if groupHistoryCarrierCount(t, reopened, phone.Address, packet.State.Conv) != n {
 		t.Fatal("done snapshot failed to reconcile missing context")
 	}
@@ -291,12 +291,12 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened.convWork.due(convRetry)
-	reopened.convSync(tctx(t))
+	reopened.convSyncByHand(tctx(t))
 	want := 2 * n
 	if groupHistoryCarrierCount(t, reopened, phone.Address, packet.State.Conv) != want {
 		t.Fatal("expired batch suppressed recovery")
 	}
-	reopened.historyStep(tctx(t))
+	reopened.stepByHand(tctx(t))
 	if groupHistoryCarrierCount(t, reopened, phone.Address, packet.State.Conv) != want {
 		t.Fatal("recovery duplicated usable batch")
 	}
@@ -434,7 +434,7 @@ func TestGroupHistoryLinkAuthorityChangesAndVisitor(t *testing.T) {
 	if result := <-await; result.err != nil {
 		t.Fatal(result.err)
 	}
-	visitor.historyStep(tctx(t))
+	visitor.stepByHand(tctx(t))
 	if groupHistoryCarrierCount(t, visitor, sibling.Address, p.State.Conv) != 0 {
 		t.Fatal("visitor sibling gained room authority")
 	}

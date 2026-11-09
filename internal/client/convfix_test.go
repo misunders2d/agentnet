@@ -48,7 +48,7 @@ func TestRosterStepsFromMemberList(t *testing.T) {
 	}
 	data, _ := json.Marshal(members)
 	w.bob.onMembers(data)
-	w.bob.convSync(tctx(t))
+	w.bob.convSyncByHand(tctx(t))
 	got, err := w.bob.personOfKey(tctx(t), w.alice.Address, pub)
 	if err != nil || got.info.Person != before.info.Person || got.info.Seq != 1 || got.info.Label != "Alice (new label)" || got.info.State != personPinned {
 		t.Fatalf("after the step: %+v %v", got.info, err)
@@ -118,7 +118,7 @@ func TestMemberListNeverFabricatesOrPins(t *testing.T) {
 		}
 		data, _ := json.Marshal(members)
 		w.bob.onMembers(data)
-		w.bob.convSync(tctx(t))
+		w.bob.convSyncByHand(tctx(t))
 		p, _, _ := w.bob.store.personByAddress(w.alice.Address)
 		if p.info.State != personPinned || p.info.Roster != pinned.info.Roster {
 			t.Fatalf("reference %+v changed the pinned person: %+v", ref, p.info)
@@ -185,7 +185,7 @@ func drain(t *testing.T, a *Agent) (pages, repeats int) {
 	a.convWork.due(convRetry)
 	for a.convWork.bits.Load()&(convRetry|convRetryMore) != 0 {
 		before := at()
-		a.convSync(tctx(t))
+		a.convSyncByHand(tctx(t))
 		if a.convWork.bits.Load()&(convRetry|convRetryMore) != 0 && at() == before {
 			repeats++
 		} else {
@@ -230,7 +230,7 @@ func TestProofQueueOneEventAndRestart(t *testing.T) {
 
 	w2, _, valid2 := setupProofQueue(t, 130)
 	w2.bob.convWork.due(convRetry)
-	w2.bob.convSync(tctx(t)) // the first page only, then the daemon stops
+	w2.bob.convSyncByHand(tctx(t)) // the first page only, then the daemon stops
 	w2.bob.Close()
 	again, err := Open(w2.bobHome)
 	if err != nil {

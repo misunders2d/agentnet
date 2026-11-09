@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isSendPersisted } from "./send-recovery.mjs";
+import { isSendPersisted, replaySavedSend, savedSendReceipt } from "./send-recovery.mjs";
 
 const id = "a".repeat(32), parentID = "b".repeat(32), conv = "c".repeat(64);
 const me = { address: "test/phone", fingerprint: "d".repeat(64) };
@@ -147,4 +147,75 @@ test("ordinary projection cannot prove exact bound follow-up admission",async()=
  const entry={...dmEntry(),endpoint:"/api/request/followup",request:{id,conv,body:"original",ref:{id:parentID,fingerprint:me.fingerprint}}};
  const h=dmHost({...dmMessage(),kind:"question",reply_to:parentID});
  assert.equal(await isSendPersisted(h,entry),false);assert.deepEqual(h.calls,[],"unproven intent remains saved without replay");
+});
+
+// Explicit "Retry saved send" after a lost admission answer: what the host
+// already holds decides, and the receipt says only that.
+function replayHost(rows, { lookup = true, post } = {}) {
+  const calls = [];
+  return { calls, async api(path, body) {
+    calls.push(body === undefined ? path : "POST " + path);
+    if (body !== undefined) return post ? post(body, rows) : { id: body.id, state: "queued" };
+    if (path === "/api/overview") return structuredClone({ me, dms: [] });
+    if (path === "/api/dm?id=" + conv) { if (!lookup) throw Error("host unavailable"); return structuredClone({ id: conv, messages: rows, agents: [] }); }
+    throw Error("not stored");
+  } };
+}
+const posts = h => h.calls.filter(c => c.startsWith("POST ")).length;
+
+test("held: a saved send this device stopped is never sent from recovery, even with files", async () => {
+  for (const files of [undefined, ["stage-gone"]]) {
+    const e = dmEntry(); if (files) e.request.files = files;
+    const h = replayHost([{ ...dmMessage(), queued_send: { state: "needs_review", rev: 2 } }]);
+    assert.equal(await replaySavedSend(h, e), "held");
+    assert.equal(posts(h), 0, "no send for a held message");
+  }
+  assert.match(savedSendReceipt("held"), /stopped in its chat and was not sent/);
+  assert.doesNotMatch(savedSendReceipt("held"), /outbox/);
+});
+
+test("pending, sent and newer host state: no second request, words match the row", async () => {
+  for (const [row, want] of [[{ queued_send: { state: "pending", rev: 1 } }, "pending"], [{ queued_send: { state: "dispatching", rev: 3 } }, "pending"],
+    [{ state: "delivered" }, "sent"], [{ queued_send: { state: "sent", rev: 4 } }, "sent"]]) {
+    const h = replayHost([{ ...dmMessage(), ...row }]);
+    assert.equal(await replaySavedSend(h, dmEntry()), want, JSON.stringify(row));
+    assert.equal(posts(h), 0);
+  }
+  assert.equal(savedSendReceipt("pending"), "Saved send is in the outbox.");
+  assert.match(savedSendReceipt("sent"), /not sent again/);
+});
+
+test("discarded: the host's refusal is the answer, and nothing is sent", async () => {
+  // A discarded row leaves the chat view (queuedActive), so the request is made once and refused.
+  const h = replayHost([], { post: () => { throw Object.assign(Error("You discarded this message."), { status: 409 }); } });
+  assert.equal(await replaySavedSend(h, dmEntry()), "discarded");
+  assert.equal(posts(h), 1);
+  assert.match(savedSendReceipt("discarded"), /was not sent/);
+});
+
+test("unknown: a failed chat lookup or a failed request keeps the saved intent", async () => {
+  const down = replayHost([], { lookup: false });
+  await assert.rejects(replaySavedSend(down, dmEntry()), /could not be checked, so nothing was sent/);
+  assert.equal(posts(down), 0, "a lookup failure never sends");
+  const refused = replayHost([], { post: () => { throw Object.assign(Error("offline"), { status: 503 }); } });
+  await assert.rejects(replaySavedSend(refused, dmEntry()), /offline/);
+  // A first lookup with no stored copy, then the explicit request: the host queues it.
+  const fresh = replayHost([]);
+  assert.equal(await replaySavedSend(fresh, dmEntry()), "pending");
+  assert.equal(posts(fresh), 1);
+});
+
+test("a row under this ID decides without a request; a hold between the look and the request is answered as held", async () => {
+  // A file message never matches persistedSend; its row under the same ID still decides.
+  for (const [q, want] of [[{ state: "pending", rev: 1 }, "pending"], [{ state: "cancelled", rev: 3 }, "discarded"], [undefined, "sent"]]) {
+    const e = dmEntry(); e.request.files = ["stage-gone"];
+    const h = replayHost([{ ...dmMessage(), attachments: [{ name: "a.bin" }], ...(q ? { queued_send: q } : {}) }]);
+    assert.equal(await replaySavedSend(h, e), want, JSON.stringify(q));
+    assert.equal(posts(h), 0, "no request when the row is there");
+  }
+  // No row when looked at; the person holds it before the request lands. The host
+  // keeps it held and answers "failed" with its words (livedm queueDM).
+  const h = replayHost([], { post: body => ({ lid: body.id, id: body.id, state: "failed", detail: "Stopped. Its files are kept on this device: Retry sends it, Discard removes it." }) });
+  assert.equal(await replaySavedSend(h, dmEntry()), "held");
+  assert.equal(posts(h), 1);
 });

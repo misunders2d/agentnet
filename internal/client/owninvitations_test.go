@@ -26,7 +26,7 @@ func TestOwnInvitationVisibleOnLinkedDevice(t *testing.T) {
 	stop()
 	inv := groupLifecycleInvite(t, w, p, nil)
 	w.alice.convWork.due(convHistory)
-	w.alice.convSync(tctx(t))
+	w.alice.convSyncByHand(tctx(t))
 	rows, err := w.alice.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND sub='invitation-sync' ORDER BY rowid`, phone.Address)
 	if err != nil {
 		t.Fatal(err)

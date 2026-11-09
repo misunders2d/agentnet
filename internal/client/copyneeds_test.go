@@ -123,6 +123,11 @@ func TestGroupDeletionWaitsWithoutPingPong(t *testing.T) {
 		t.Fatal(err)
 	}
 	signCapsAfter(t, carol, without(ownCaps, protocol.CapControl))
+	// Alice's profile cache drops only on the Hub's push: retract after she sees it.
+	eventually(t, "alice observes carol's control downgrade", func() bool {
+		p, err := w.alice.peerProfile(tctx(t), carol.Address)
+		return err == nil && !p.Supports(carol.Address, carol.Self().SignKey, protocol.CapControl)
+	})
 	if _, err = w.alice.Retract(tctx(t), ControlRef{Conv: conv, ID: sent.LID, Fingerprint: w.alice.Self().Fingerprint()}, ""); err != nil {
 		t.Fatal(err)
 	}

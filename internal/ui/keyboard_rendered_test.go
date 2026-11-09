@@ -39,7 +39,7 @@ func TestKeyboardViewportRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	alice, bob, live := liveWorld(t)
-	const total = 30 // one topic, taller than the screen
+	const total = 20 // one topic, taller than the screen, all of it drawn
 	root := ""
 	for i := range total {
 		// The topic starts with a task that waits for bob's OK: its card has a Reply of its own.
@@ -56,6 +56,12 @@ func TestKeyboardViewportRendered(t *testing.T) {
 			waitTopic(t, bob, root)
 		}
 	}
+	// A plain note has a list row of its own, for the first focus a row gives.
+	note, err := alice.SendMessage(t.Context(), client.Outgoing{To: bob.Address, Kind: envelope.KindMessage, Body: "A separate note about the dock list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTopic(t, bob, note.ID)
 	// The Notebook example, installed, stands for any skin but Comic.
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "notebook"), 0700); err != nil {

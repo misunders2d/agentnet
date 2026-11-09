@@ -441,7 +441,12 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 		return hold(reasonDuplicate, "group: lifecycle logical conflict")
 	}
 	if in.Sub == envelope.SubGroupConsent && consent.Decision == "accepted" {
-		if e := a.PublishGroupInvitation(ctx, consent.Invitation); e != nil {
+		// A publication fans out to every member. On the stream's reader it would
+		// hold every later message; the group work publishes what is accepted.
+		if a.awayFromReader(ctx) != nil {
+			a.groupWork.recover.Store(true)
+			a.kickNow()
+		} else if e := a.PublishGroupInvitation(withoutReaderBudget(ctx), consent.Invitation); e != nil {
 			a.Logf("group invitation publication: %v", e)
 			a.groupWork.recover.Store(true)
 			a.kickNow()

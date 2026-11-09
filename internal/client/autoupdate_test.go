@@ -149,7 +149,7 @@ func TestSuspendedDeviceStopsRequestsUntilServed(t *testing.T) {
 		t.Fatalf("send while suspended: %+v %v (it must wait, not fail)", res, err)
 	}
 	for range 3 {
-		w.bob.sync(tctx(t)) // the retry pass every ping runs
+		w.bob.syncByHand(tctx(t)) // the retry pass every ping runs
 		w.bob.kickNow()
 		w.bob.wakeWorker()
 	}
@@ -687,7 +687,7 @@ func TestSuspendedDeviceDrainsAdmittedWork(t *testing.T) {
 	}
 	uploads = hub.uploads.Load()
 	for range 3 {
-		w.bob.sync(tctx(t)) // the retry pass a ping runs
+		w.bob.syncByHand(tctx(t)) // the retry pass a ping runs
 	}
 	if pending, err := w.bob.store.unsentReceipts(); err != nil || len(pending) != 0 {
 		t.Fatalf("receipts still unsent while suspended: %v %v", pending, err)

@@ -169,11 +169,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
   const topicAgents = t && overview?.person?.state === "self" ? (t.agents || []).filter(a => a.topic === currentTopic && a.state === "active" && !!a.agent_id
     && overview.person!.devices?.some(d => d.address === a.host.address && d.fingerprint === a.host.fingerprint)) : [];
   const muted = !!t && !!notify && (notify.mutes || []).includes(t.id);
-  const remove = () => void store.run((a) => a.deleteConversation(t ? { conv: t.id } : { peer: th!.peer, thread: th!.topic?.id || ctx.conv })).then((r) => {
-    if (!r) return;
-    store.close();
-    if (r.note) store.toast(r.note, "ok");
-  });
+  const remove = () => void store.deleteChat(t ? t.id : th!.topic?.id || ctx.conv, t ? { conv: t.id } : { peer: th!.peer, thread: th!.topic?.id || ctx.conv });
 
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   const copyLink=async(topic:string)=>{

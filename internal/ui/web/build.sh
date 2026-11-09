@@ -58,6 +58,12 @@ fi
 cd "$work"
 npm ci --ignore-scripts --no-audit --no-fund >/dev/null
 ./node_modules/.bin/tsc -p tsconfig.json
+# Test-only source-to-DOM binding for the interaction inventory.  It operates
+# on this build's copied src/, after type checking, and never changes checked-in
+# sources or normal build output.
+if [ -n "${AGENTNET_INTERACTION_TAGS:-}" ]; then
+	node "$here/../testdata/interaction_inventory.cjs" --tag "$work/src"
+fi
 # Reuse the pinned lexer for raw-link labels in the plain-text skin packages
 # (Classic and Zoom, in agentnet-skins). Only when building Comic in place:
 # an overlay build writes nothing here.

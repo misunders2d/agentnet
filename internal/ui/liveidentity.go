@@ -40,7 +40,7 @@ func (l *Live) identityOverview(o *Overview) error {
 			}
 		}
 	}
-	jobs, err := l.a.HistoryProgress()
+	jobs, err := l.historyProgress()
 	if err != nil {
 		return err
 	}
@@ -58,6 +58,37 @@ func (l *Live) identityOverview(o *Overview) error {
 		}
 	}
 	return nil
+}
+
+// historyProgress reads the progress of history copies only when copying wrote
+// something, and while it runs for at most 5% of the time: a counter on one
+// settings page must not take time from everything else during a catch-up. The
+// last read waits for a wake so the page ends on the final count.
+func (l *Live) historyProgress() ([]client.HistoryJob, error) {
+	if l.viewCachesOff {
+		return l.a.HistoryProgress()
+	}
+	if l.historyKept && !l.historyDirty {
+		return l.historyJobs, nil
+	}
+	if wait := 20*l.historyCost - time.Since(l.historyAt); l.historyKept && wait > 0 {
+		if l.historyWake.CompareAndSwap(false, true) {
+			time.AfterFunc(wait, func() {
+				l.historyWake.Store(false)
+				l.a.NoteViewChange()
+			})
+		}
+		return l.historyJobs, nil
+	}
+	start := time.Now()
+	l.historyDirty = false // first: a write during the read marks it again
+	jobs, err := l.a.HistoryProgress()
+	if err != nil {
+		l.historyDirty = true
+		return nil, err
+	}
+	l.historyJobs, l.historyAt, l.historyCost, l.historyKept = jobs, start, time.Since(start), true
+	return jobs, nil
 }
 
 // deviceViews are a person's devices for the page.

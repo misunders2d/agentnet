@@ -959,7 +959,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err := a.prepareRemoteCopies(ctx, binding, copies, out.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutbox(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, binding); err != nil {
+	if err := a.store.addConvOutboxGuarded(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
@@ -1519,7 +1519,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 			a.wakeStatus() // its requester hears it waits here (stored with it)
 		}
 		if ev != nil {
-			a.trySelfConsent(ctx, in.PID) // an invite of this person's own agent, hosted here (a group's)
+			a.consentAway(ctx, in.PID) // an invite of this person's own agent, hosted here (a group's)
 		}
 	}
 	return true, nil

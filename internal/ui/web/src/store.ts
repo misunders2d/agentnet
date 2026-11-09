@@ -6,6 +6,8 @@
 // again with a new host when the person switches workspace, so nothing here
 // can act on another workspace by accident.
 import { pendingSends, sendID } from "./optimistic.mjs";
+import { savedSendDrafts, readPending, type SavedDraftOwner, type SavedSendDraft } from "./send-journal.mjs";
+import { savedStorage, savedReadOnly, readOnlyTitle } from "./saved-storage";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type ReminderResult, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
@@ -58,6 +60,18 @@ export interface StagedFile {
   mediaNote?: string;
 }
 
+interface PendingSendDraft {
+  workspace: string;
+  handle?: string;
+  address?: string;
+  fingerprint?: string;
+  revision?: string;
+  durable?: string;
+  missingFiles?: boolean;
+  hold?: boolean;        // its files cannot be put back in a draft here: Cancel holds it on the host
+  draft: Draft;
+}
+
 export interface Toast { id: number; text: string; tone?: "ok" | "error" }
 export interface MessageLanding {
   target: { id: string; context?: OpenContext };
@@ -71,6 +85,7 @@ export type Tab = "chats" | "agents" | "oks" | "outbox" | "settings";
 /** A conversation as last loaded: a DM or group, or a device thread (one topic). */
 export type View = T.DMThread | T.Thread;
 type ConfirmedRead = { kind: "dm" | "thread"; id: string; seq: number; unread: number; group?: string; archived_unread?: number };
+const WRITE_NOTICE_MS = 600; // how long a write may go unanswered before the app says it is still working
 const VIEWS_KEPT = 24; // conversations kept for an instant reopen (loaded again when opened)
 
 export interface PendingReaction {
@@ -139,6 +154,8 @@ export interface State {
   drafts: Record<string, Draft>;
   scheduleSaves: Record<string, ScheduleSave>;
   toasts: Toast[];
+  // A write the server has not answered for a noticeable time.
+  working: boolean;
   messageLanding: MessageLanding | null; // one exact notification, only for this mounted workspace
   loadError: string;
   groupContextPending: string; // selected group keeps its last verified view while its new context arrives
@@ -206,6 +223,11 @@ export class Store {
   unreadReview: import("./features/Conversation.choices").ChoiceCache<T.UnreadRow> = {};
   readonly api: Api;
   readonly sends: ReturnType<typeof pendingSends>;
+  private draftWrites = new Map<string, string>();
+  private readonly savedDrafts: ReturnType<typeof savedSendDrafts>;
+  private readonly draftHandle: string;
+  private draftStorageError = false;
+  private olderTabNoticed = false;
   private readonly scheduled: ReturnType<typeof scheduleSaves>;
   private state: State;
   private subs = new Set<() => void>();
@@ -279,8 +301,10 @@ export class Store {
   };
 
   constructor(readonly host: Host) {
+    this.savedDrafts = savedSendDrafts(savedStorage(), draftsKey(host.workspace.id));
+    this.draftHandle = host.workspace.handle || "";
     this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
-    const calls = api(host);
+    const calls = api(this.watchWrites(host));
     this.api = { ...calls, act: action => action.do === "resolve" ? this.dismiss(action, calls) : calls.act(action),
       edit: c => this.changeMessage("edit", c, calls), retract: c => this.changeMessage("delete", c, calls),
       setPersonPicture: png => this.changePicture(png, calls),
@@ -300,13 +324,18 @@ export class Store {
       // A send clears its draft as it begins: until it is stored, a reload
       // waits for it (hasUnsent).
       this.set({ ...(o ? this.viewPatch(o, this.state.views[o.id] ?? null, true) : {}), unsent: this.sends.unsent() });
-    });
+    }, (conv, draft) => this.restoreSendDraft(conv, draft as PendingSendDraft),
+      (conv, message, prior) => this.captureQueuedSendDraft(conv, message as NonNullable<T.DMThread["messages"]>[number], prior as PendingSendDraft | undefined),
+      (id, conv) => this.releaseSendDraft(id, conv));
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
-      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
+      conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], working: false, messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
-    const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab']}|undefined;
-    if(saved&&saved.handle===host.workspace.handle)Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
+    const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab'];draftWrites?:Map<string,string>}|undefined;
+    if(saved&&saved.handle===host.workspace.handle){
+      Object.assign(this.state,{open:saved.open,dm:saved.dm,thread:saved.thread,tab:saved.tab});
+      if(saved.draftWrites){for(const [conv,rev] of this.draftWrites)saved.draftWrites.set(conv,rev);this.draftWrites=saved.draftWrites;}
+    }
     this.scheduled=scheduleSaves(host,()=>this.syncScheduleSaves());
     this.state.scheduleSaves=this.scheduled.snapshot();
   }
@@ -327,6 +356,11 @@ export class Store {
   // Keep native snapshots intact: a failed write restores the current snapshot,
   // while every stale refresh is presented through the same exact-key overlay.
   private localReads = new Map<string, Map<string, { kind: "dm" | "thread"; id: string; saved: boolean; accepted?: number }>>();
+  // A chat's unread mark shows before the server is asked, as Telegram sets its
+  // own first (TDLib toggle_dialog_is_marked_as_unread), until a list read after
+  // the answer says. Never below what the list says: arrivals keep counting.
+  // Marks the server has not answered yet, per chat. Each request clears alone.
+  private localUnreads = new Map<string, { kind: "dm" | "thread"; requests: Set<string[]> }>();
   private readState?: { source: State; value: State };
   private readIdentity(m: T.DMMessage | T.Message): string {
     return JSON.stringify([this.readKey(m), m.dir, (m as T.DMMessage).lid || m.id,
@@ -337,7 +371,7 @@ export class Store {
     for (const fn of this.subs) fn();
   }
   private presentReads(s: State): State {
-    if (!this.localReads.size) return s;
+    if (!this.localReads.size && !this.localUnreads.size && !this.deletingChats.size) return s;
     if (this.readState?.source === s) return this.readState.value;
     let overview = s.overview;
     const views = { ...s.views };
@@ -380,6 +414,16 @@ export class Store {
           unread: summary ? Math.min(summary.unread, project(summary.unread, left)) : left,
           ...(group ? { ...group, archived_unread: latest ? project(latest.archived_unread, Math.max(0, group.archived_unread - cleared)) : Math.max(0, group.archived_unread - cleared) } : {}) });
       }
+    }
+    for (const [id, mark] of this.localUnreads) {
+      const summary = mark.kind === "dm" ? overview?.dms?.find(d => d.id === id) : overview?.threads?.find(t => t.id === id) || overview?.topics?.find(t => t.latest.id === id)?.latest;
+      const shown = views[id]?.messages;
+      const waiting = [...new Set([...mark.requests].flat())].filter(m => !shown?.some(x => x.id === m && x.unread)).length;
+      if (overview && summary && waiting) overview = this.readOverview(overview, { kind: mark.kind, id, seq: overview.seq || 0, unread: summary.unread + waiting });
+    }
+    if (overview && this.deletingChats.size) {
+      const kept = (c: { id: string; last_at: string; last_id?: string }) => this.deletingChats.get(c.id) !== this.chatStamp(c);
+      overview = { ...overview, dms: overview.dms?.filter(kept) ?? null, threads: overview.threads?.filter(kept) ?? null, topics: overview.topics?.filter(t => kept(t.latest)) ?? overview.topics };
     }
     const value = { ...s, views, overview,
       dm: s.dm && (views[s.dm.id] as T.DMThread || s.dm),
@@ -1239,6 +1283,7 @@ export class Store {
   // first load then says why.
   async start() {
     this.syncScheduleSaves();
+    window.addEventListener("storage", this.draftStorageChanged);
     if (this.host.platform === "android") {
       document.addEventListener("visibilitychange", this.mobileVisible);
       this.offNativeVisibility = this.host.android?.onVisibility(this.mobileVisible);
@@ -1246,10 +1291,13 @@ export class Store {
     }
     try { this.listen(); } catch { /* the first load fails and shows it */ }
     await Promise.all([this.load(true), this.refreshOpen()]);
+    this.hydrateSendDrafts();
+    this.refreshDraftStorage();
     await this.retryMessageLanding(true);
   }
 
   stop() {
+    window.removeEventListener("storage", this.draftStorageChanged);
     ++this.unreadLanding;this.unreadReturn=null;
     this.dismissMessageLanding();
     // A native grant belongs to this renderer. Keep an interrupted draft
@@ -1258,7 +1306,7 @@ export class Store {
       if (draft.files?.some(file => file.nativeReading)) this.setDraft(conv, { ...draft, files: draft.files.map(file => file.nativeReading ? { ...file, nativeReading: false, nativeError: "Attachment interrupted. Remove it and drop it again." } : file) });
     }
     const saved=this.host.workspaces?.state?.(this.host.workspace.id);
-    if(saved)saved.comicDrafts={handle:this.host.workspace.handle,drafts:this.state.drafts,open:this.state.open,dm:this.state.dm,thread:this.state.thread,tab:this.state.tab};
+    if(saved)saved.comicDrafts={handle:this.host.workspace.handle,drafts:this.state.drafts,draftWrites:this.draftWrites,open:this.state.open,dm:this.state.dm,thread:this.state.thread,tab:this.state.tab};
     this.alive = false;
     if (this.host.platform === "android") {
       document.removeEventListener("visibilitychange", this.mobileVisible);
@@ -2084,7 +2132,19 @@ export class Store {
     const anchor = messages.findIndex(m => m.id === id && this.canMarkUnread(m));
     if (anchor < 0) { this.toast("That message is no longer available here.", "error"); return; }
     const ids = [...new Set((fromHere ? messages.slice(anchor) : [messages[anchor]]).filter(m => this.canMarkUnread(m)).map(m => m.id))];
-    await this.run(a => a.act({ do: "unread", id, ids }));
+    const request = messages.filter(m => ids.includes(m.id) && !m.unread).map(m => m.id);
+    const summary = o.kind === "dm" ? this.state.overview?.dms?.find(d => d.id === o.id)
+      : this.state.overview?.threads?.find(t => t.id === o.id) || this.state.overview?.topics?.find(t => t.latest.id === o.id)?.latest;
+    const mark = this.localUnreads.get(o.id) || { kind: o.kind, requests: new Set<string[]>() };
+    if (request.length && summary) { mark.requests.add(request); this.localUnreads.set(o.id, mark); this.publishReads(); }
+    const clear = () => {
+      if (!mark.requests.delete(request)) return;
+      if (!mark.requests.size && this.localUnreads.get(o.id) === mark) this.localUnreads.delete(o.id);
+      this.publishReads();
+    };
+    if (await this.run(a => a.act({ do: "unread", id, ids })) === undefined) clear(); // refused: its toast says so
+    await this.refetch();
+    clear();
   }
 
   private markOpenRead() {
@@ -2227,34 +2287,239 @@ export class Store {
 
   // ---- drafts, kept per workspace and conversation; File objects stay in memory
   private loadDrafts(): Record<string, Draft> {
-    const saved=this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as {handle?:string;drafts:Record<string,Draft>}|undefined;
-    if(saved&&saved.handle===this.host.workspace.handle)return Object.fromEntries(Object.entries(saved.drafts).map(([id,d])=>[id,{...d,
-      files:d.files?.map(f=>f.preparing?{...f,preparing:false,mediaProgress:undefined,mediaNote:"Preparation was interrupted. The original file is kept."}:f)}]));
+    const saved=this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as
+      {handle?:string;drafts:Record<string,Draft>;draftWrites?:Map<string,string>}|undefined;
     try {
-      const raw = JSON.parse(localStorage.getItem(draftsKey(this.host.workspace.id)) || "{}");
-      const out: Record<string, Draft> = {};
-      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = {
-        text: v.text, replyTo: typeof v.replyTo === "string" ? v.replyTo : undefined,
-        agent: typeof v.agent === "string" ? v.agent : undefined,
-        topic: typeof v.topic === "string" ? v.topic : undefined, newTopic: v.newTopic === true,
-        plainReply: v.plainReply === true || undefined,
-        mediaMode: v.mediaMode === "smaller" ? "smaller" : v.mediaMode === "original" ? "original" : undefined,
-      };
-      return out;
-    } catch { return {}; }
+      const persisted=this.savedDrafts.all();
+      return Object.fromEntries(Object.entries(persisted).map(([conv,value])=>{
+        this.draftWrites.set(conv,value.revision);
+        const memory=saved && saved.handle===this.host.workspace.handle && saved.draftWrites?.get(conv)===value.revision ? saved.drafts[conv] : undefined;
+        const draft=memory || value.draft;
+        return [conv,{...draft,files:memory?.files?.map(f=>f.preparing?{...f,preparing:false,mediaProgress:undefined,mediaNote:"Preparation was interrupted. The original file is kept."}:f)}];
+      }));
+    } catch {
+      this.draftStorageError=true;
+      return saved && saved.handle===this.host.workspace.handle ? {...saved.drafts} : {};
+    }
   }
 
-  private saveDrafts(drafts: Record<string, Draft>) {
+  private draftOwner(): SavedDraftOwner | undefined {
+    const me=this.state.overview?.me,workspace=this.host.workspace,members=this.host.workspaces;
+    if(!me?.address || !me.fingerprint || (workspace.handle || "")!==this.draftHandle
+      || workspace.address && workspace.address!==me.address || workspace.state && workspace.state!=="enrolled")return;
+    if(members?.has && !members.has(workspace.id))return;
+    if(members?.list){
+      const current=members.list().find(w=>w.id===workspace.id);
+      if(!current || current.state!=="enrolled" || (current.handle || "")!==this.draftHandle
+        || current.address && current.address!==me.address || current.endpoint!==workspace.endpoint || current.realm!==workspace.realm)return;
+    }
+    return {workspace:this.host.workspace.id,handle:this.draftHandle,endpoint:this.host.workspace.endpoint || "",realm:this.host.workspace.realm || "",address:me.address,fingerprint:me.fingerprint};
+  }
+  private draftStorageChanged = (event: StorageEvent) => {
+    if(this.alive && this.savedDrafts.isStorageKey(event.key)){
+      // Every older write is recorded (a reload trusts only the last one seen); the notice shows once.
+      if(this.savedDrafts.olderWriterSeen() && !this.olderTabNoticed){this.olderTabNoticed=true;
+        this.toast("AgentNet is also open in an older version in another tab. Close that tab: drafts typed there are not kept here.","error");}
+      this.hydrateSendDrafts();this.refreshDraftStorage();}
+  };
+  private refreshDraftStorage() {
+    // Storage cannot be authoritative over an edit it refused to save.
+    // Keep that input in this window until an explicit edit can persist it.
+    if(this.draftStorageError)return;
+    const owner=this.draftOwner();if(!owner)return;
     try {
-      const keep: Record<string, Draft> = {};
-      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent || d.topic || d.newTopic || d.mediaMode) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, topic: d.topic, newTopic: d.newTopic, plainReply: d.plainReply, mediaMode: d.mediaMode };
-      localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
-    } catch { /* a convenience only */ }
+      const values=this.savedDrafts.all(owner),drafts={...this.state.drafts};let changed=false;
+      for(const [conv,value] of Object.entries(values))if(this.draftWrites.get(conv)!==value.revision){
+        // Cross-window scalar changes never discard this renderer's File objects.
+        drafts[conv]={...value.draft,files:drafts[conv]?.files};this.draftWrites.set(conv,value.revision);changed=true;
+      }
+      if(changed)this.set({drafts});
+      if(this.draftStorageError)this.toast("Some draft changes could not be saved. Keep this window open until storage is available.","error");
+    }catch{this.draftStorageError=true;this.toast("Saved drafts could not be read. Current input was kept.","error");}
+  }
+  private savedCapture(record: SavedSendDraft): PendingSendDraft {
+    return {workspace:record.owner.workspace,handle:this.draftHandle,address:record.owner.address,fingerprint:record.owner.fingerprint,
+      revision:record.revision,durable:record.id,missingFiles:record.hadFiles,draft:{...record.draft}};
+  }
+  private hydrateSendDrafts() {
+    const owner=this.draftOwner();if(!owner)return;
+    for(const record of this.savedDrafts.entries(owner))this.sends.rememberDraft(record.id,record.conversation,this.savedCapture(record));
+    for(const [conv,view] of Object.entries(this.state.views))this.sends.merge<NonNullable<T.DMThread["messages"]>[number] | NonNullable<T.Thread["messages"]>[number]>(conv,view.messages || []);
+  }
+  private releaseSendDraft(id:string,conv:string) {
+    const owner=this.draftOwner();if(!owner || savedReadOnly())return; // a read-only window keeps saved recovery as it is
+    try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("The send finished, but its original draft recovery could not be cleared. It remains saved.","error");}
   }
 
   draft(conv: string): Draft { return this.state.drafts[conv] || { text: "" }; }
 
-  setDraft(conv: string, d: Draft, topicSelected = false) {
+  private captureQueuedSendDraft(conv: string, message: NonNullable<T.DMThread["messages"]>[number], prior?: PendingSendDraft): PendingSendDraft | undefined {
+    const owner=this.draftOwner();if(!owner)throw Error("Current workspace identity is unavailable. The message was kept.");
+    const record=this.savedDrafts.pending(message.id,conv,owner);
+    if(record){
+      // Its files can't be put back in a draft after a restart: Cancel holds it (host keeps the files).
+      if(record.hadFiles && !prior?.draft.files?.length)return {...this.savedCapture(record),hold:true};
+      return prior?.durable===record.id && !prior.missingFiles ? prior : this.savedCapture(record);
+    }
+    if(prior)return prior;
+    // Legacy sends have no original editor metadata. Keep the narrower body
+    // recovery; it never claims original whitespace, File or routing context.
+    const current = this.draft(conv), me = this.state.overview?.me;
+    if (this.draftWrites.get(conv)?.startsWith("legacy:")===false || current.replyTo || current.topic || current.newTopic || current.agent || current.mediaMode
+      || message.dir !== "out" || message.from !== me?.address || message.kind !== "message"
+      || typeof message.body !== "string" || !message.body || message.topic || message.reply_to || message.quote || message.pid
+      || message.attachments?.length || ("files" in message && Array.isArray(message.files) && message.files.length)) return;
+    const captured=this.captureSendDraft(conv,{text:message.body});if(!captured)return;
+    this.savedDrafts.prepare(message.id,conv,owner,captured.draft,captured.revision || "");
+    return {...captured,durable:message.id};
+  }
+
+  captureOriginalDraft(conv:string,draft:Draft): PendingSendDraft | undefined {
+    const owner=this.draftOwner();if(!this.alive || !owner)return;
+    const revision=this.draftWrites.get(conv) || this.savedDrafts.read(conv,owner).revision;
+    if(!this.draftWrites.has(conv))this.draftWrites.set(conv,revision);
+    return {workspace:owner.workspace,handle:owner.handle,address:owner.address,fingerprint:owner.fingerprint,
+      revision,draft:{...draft,files:draft.files?.map(f=>({...f,staged:undefined}))}};
+  }
+  captureSendDraft(conv: string, draft: Draft): PendingSendDraft | undefined {
+    if(this.draft(conv).text || this.draft(conv).files?.length)return;
+    return this.captureOriginalDraft(conv,draft);
+  }
+  clearSendDraft(conv:string,id:string,original:PendingSendDraft|undefined,next:Draft):PendingSendDraft {
+    const owner=this.draftOwner();
+    if(!owner || !original || original.workspace!==owner.workspace || (original.handle || "")!==owner.handle || original.address!==owner.address || original.fingerprint!==owner.fingerprint)
+      throw Error("The selected workspace identity changed. Your draft was kept.");
+    const existed=this.savedDrafts.pending(id,conv,owner);
+    // A Retry resubmits the same ID: its original was kept and its draft cleared by
+    // the first attempt. Nothing is captured or written again (so no draft fence),
+    // and a Cancel still restores that first original, bound to its clear's revision.
+    if(existed)return {...this.savedCapture(existed),missingFiles:existed.hadFiles && !original.draft.files?.length,
+      draft:{...existed.draft,files:original.draft.files}};
+    const current=this.savedDrafts.read(conv,owner);
+    if(current.revision!==this.draftWrites.get(conv))throw Error("This draft changed in another window. Nothing was submitted; keep the newer draft first.");
+    const revision=this.savedDrafts.nextRevision(),expected=original.revision===current.revision ? revision : "";
+    const record=this.savedDrafts.prepare(id,conv,owner,original.draft,expected);
+    // `next` removes exactly what was sent and keeps anything changed since (text
+    // that differs, other files, another reply); a newer revision only stops a
+    // later Cancel from restoring over it (expected is then empty).
+    const cleared=next;
+    try{this.changeDraft(conv,cleared,false,revision,true);}
+    catch(e){
+      // Release the original only while the saved draft still holds it intact.
+      let intact=false;try{intact=this.savedDrafts.read(conv,owner).revision===current.revision;}catch{ /* keep the original */ }
+      if(!existed && intact)try{this.savedDrafts.release(id,conv,owner);}catch{this.toast("Send was not submitted. Its original draft recovery remains saved.","error");}
+      else if(!existed)this.toast("Send was not submitted. Its original draft recovery remains saved.","error");
+      throw e;
+    }
+    return {...original,revision:record.revision,durable:id};
+  }
+
+  private restoreSendDraft(conv: string, captured: PendingSendDraft): boolean {
+    const me = this.state.overview?.me,owner=this.draftOwner();
+    if (!owner || !captured.address || !captured.fingerprint || captured.workspace !== this.host.workspace.id || (captured.handle || "") !== (this.host.workspace.handle || "")
+      || captured.address !== me?.address || captured.fingerprint !== me?.fingerprint || captured.missingFiles
+      || captured.revision !== this.draftWrites.get(conv)) return false;
+    const saved = this.host.workspaces?.state?.(this.host.workspace.id)?.comicDrafts as
+      {handle?:string;drafts:Record<string,Draft>;draftWrites?:Map<string,string>} | undefined;
+    const drafts = this.alive ? this.state.drafts : (saved?.handle || "") === (captured.handle || "") && saved?.draftWrites === this.draftWrites ? saved.drafts : undefined;
+    if (!drafts || drafts[conv]?.text || drafts[conv]?.files?.length) return false;
+    let restored,revision:string|undefined;
+    const draft = () => ({...captured.draft,files:captured.draft.files?.map(f=>{
+      let url: string | undefined;
+      try {if(f.url)url=URL.createObjectURL(f.file);} catch { /* original File remains usable without a preview */ }
+      return {...f,staged:undefined,url};
+    })});
+    try{
+      if(captured.durable){restored=this.savedDrafts.restore(captured.durable,conv,owner);if(!restored)return false;}
+      revision=restored?.revision || this.savedDrafts.write(conv,captured.draft);
+    }catch{
+      // Storage is full or damaged: show the text here, keep the saved original.
+      this.draftStorageError=true;
+      this.toast("Your draft is back here but could not be saved. Keep this window open until storage is available.","error");
+      if(this.alive)this.set({drafts:{...drafts,[conv]:draft()}});
+      else if(saved)saved.drafts={...drafts,[conv]:draft()};
+      return !captured.durable;
+    }
+    this.draftWrites.set(conv,revision);
+    const shown=draft();
+    if (this.alive) this.set({drafts:{...drafts,[conv]:shown}});
+    else if(saved)saved.drafts={...drafts,[conv]:shown};
+    return true;
+  }
+
+  /** Kept original drafts with no send this window knows about. "offer": the chat's
+   *  loaded view has no stored message or queued row with that ID, no send here
+   *  and no Retry request holds it, so its text may go back into an empty
+   *  composer. "check": the chat is not loaded yet; open it first. */
+  keptOriginals(): (SavedSendDraft & {state:"offer"|"check";replaced?:boolean})[] {
+    const owner=this.draftOwner();if(!owner||!this.alive)return [];
+    let retry:Set<string>;try{retry=new Set(readPending(savedStorage(),this.host.workspace.id).map(e=>e.id));}catch{return [];}
+    const sends=this.savedDrafts.entries(owner).flatMap(r=>{
+      if(this.sends.has(r.id)||retry.has(r.id))return [];
+      const view=this.state.views[r.conversation];
+      if(view?.messages?.some(m=>m.id===r.id||("lid" in m && m.lid===r.id)))return [];
+      return [{...r,state:view?"offer" as const:"check" as const}];
+    });
+    // Drafts an older AgentNet version replaced in this workspace's storage (shown
+    // only to its current verified identity, like the drafts themselves).
+    let replaced:ReturnType<typeof this.savedDrafts.replaced>=[];try{replaced=this.savedDrafts.replaced();}catch{ /* none readable */ }
+    return [...sends,...replaced.map(r=>({version:1 as const,id:"replaced:"+r.conversation+":"+r.revision,conversation:r.conversation,owner,draft:r.draft,
+      revision:r.revision,hadFiles:false,replaced:true,state:this.state.views[r.conversation]?"offer" as const:"check" as const}))];
+  }
+  private releaseKept(kept:{id:string;conversation:string;revision:string;replaced?:boolean},owner:SavedDraftOwner) {
+    if(kept.replaced)this.savedDrafts.releaseReplaced(kept.conversation,kept.revision);else this.savedDrafts.release(kept.id,kept.conversation,owner);
+  }
+  /** Puts a kept original's text into its chat's empty composer, then lets it go. */
+  putBackKept(id:string,conv:string) {
+    const owner=this.draftOwner();if(!owner)throw new Error("Your workspace identity is unavailable. The saved text was kept.");
+    const kept=this.keptOriginals().find(r=>r.id===id&&r.conversation===conv&&r.state==="offer");
+    if(!kept)throw new Error("This saved text can't be put back now. It was kept.");
+    const cur=this.draft(conv);
+    if(cur.text||cur.files?.length||cur.replyTo||cur.agent||cur.newTopic||cur.mediaMode||(cur.topic&&cur.topic!==(kept.draft.topic||"")))
+      throw new Error("There is already a draft in this chat. Keep or send it first, then put this text back.");
+    this.saveDraftNow(conv,{...kept.draft});
+    try{this.releaseKept(kept,owner);}catch{this.toast("The text is back in the draft, but its saved copy could not be cleared. You can discard it.","error");}
+  }
+  /** Lets a kept original go; the chat's draft is unchanged. */
+  discardKept(id:string,conv:string) {
+    const owner=this.draftOwner();if(!owner)throw new Error("Your workspace identity is unavailable. The saved text was kept.");
+    const kept=this.keptOriginals().find(r=>r.id===id&&r.conversation===conv);
+    if(kept)this.releaseKept(kept,owner);else this.savedDrafts.release(id,conv,owner);
+  }
+
+  /** Saves a draft durably before returning. Throws when storage refuses; if only the copy older
+   *  versions read lags, the record is already saved here and the earlier source stays untouched. */
+  saveDraftNow(conv: string, d: Draft) {
+    const revision=this.savedDrafts.nextRevision();
+    try{this.changeDraft(conv,d,false,revision,true);}
+    catch{
+      // Saved here (its revision is tracked); only the older versions' copy lags: show it and say so.
+      if(this.draftWrites.get(conv)===revision){this.changeDraft(conv,d,false,revision,false);return;}
+      throw new Error("This draft could not be saved on this device. The earlier copy was kept.");
+    }
+  }
+
+  setDraft(conv: string, d: Draft, topicSelected = false, preserveRevision = false) {
+    this.changeDraft(conv,d,topicSelected,preserveRevision ? this.draftWrites.get(conv) || this.savedDrafts.nextRevision() : this.savedDrafts.nextRevision(),false);
+  }
+  private changeDraft(conv:string,d:Draft,topicSelected:boolean,revision:string,strict:boolean) {
+    try{this.savedDrafts.write(conv,d,revision);this.draftStorageError=false;}
+    catch(e){
+      if(strict){
+        // A lagging mirror means the record is already saved: track it, so the
+        // next attempt is not refused as a change from another window.
+        if(e instanceof Error && /older versions may still show/.test(e.message))this.draftWrites.set(conv,revision);
+        throw Error("The original draft could not be saved. Nothing was submitted; your current draft was kept.");
+      }
+      // Saved here; only the copy older versions read lags behind. Say exactly that.
+      if(e instanceof Error && /older versions may still show/.test(e.message)){this.draftStorageError=false;this.toast("Draft saved. Older AgentNet versions may still show an earlier copy until the next save.","error");}
+      else if(savedReadOnly())this.toast(readOnlyTitle+": this change wasn’t saved.","error");
+      else{
+      if(!this.draftStorageError)this.toast("Your draft could not be saved. Keep this window open; Send will not clear unsaved input.","error");
+      this.draftStorageError=true;
+      }
+    }
+    this.draftWrites.set(conv, revision);
     const prior = this.state.drafts[conv];
     if (topicSelected || (prior?.topic || "") !== (d.topic || "") || !!prior?.newTopic !== !!d.newTopic) this.dismissMessageLanding();
     const drafts = { ...this.state.drafts };
@@ -2279,7 +2544,6 @@ export class Store {
     const o = this.state.open, view = this.state.views[conv];
     this.set({ drafts, ...(selected && o && view ? { readVisit: this.prepareReadScope(o, view, d) } : {}),
       ...(selected && topicSelected && o && !this.readAcknowledged.entering ? { open: { ...o, focus: undefined, ...(o.kind === "dm" ? { preview: undefined } : {}), focusSeq: undefined, unread: true } } : {}) });
-    this.saveDrafts(drafts);
     if (selected) this.markOpenRead();
   }
 
@@ -2387,6 +2651,53 @@ export class Store {
     const id = ++this.toastSeq;
     this.set({ toasts: [...this.state.toasts, { id, text, tone }] });
     setTimeout(() => this.set({ toasts: this.state.toasts.filter((t) => t.id !== id) }), tone === "error" ? 7000 : 3500);
+  }
+
+  // Nothing a person asks for may look ignored. Most actions show their own
+  // change at once; any write still unanswered after a moment also says so, as
+  // tdesktop's connecting widget does, so a slow server is never silence. Sends
+  // and reactions have their own pending row; the rest here nobody asked for.
+  private watchWrites(host: Host): Host {
+    const own = /^\/api\/(typing|notify\/seen|upload|refresh|dm\/send|send\b|message\/react|topic\/transfer\/location|dm\/guest\/check)/;
+    const watched = <R>(path: string, body?: unknown): Promise<R> => {
+      const work = host.api<R>(path, body);
+      return body === undefined || own.test(path) || (body as { do?: string }).do === "read" ? work : this.trackWrite(work);
+    };
+    // Hosts are frozen, so this shadows host.api rather than assigning it.
+    return Object.create(host, { api: { value: watched } }) as Host;
+  }
+  private writes = 0;
+  private writeTimer?: ReturnType<typeof setTimeout>;
+  private trackWrite<R>(work: Promise<R>): Promise<R> {
+    if (this.writes++ === 0) this.writeTimer = setTimeout(() => { if (this.alive && this.writes > 0) this.set({ working: true }); }, WRITE_NOTICE_MS);
+    return work.finally(() => {
+      if (--this.writes > 0) return;
+      clearTimeout(this.writeTimer);
+      if (this.alive && this.state.working) this.set({ working: false });
+    });
+  }
+
+  // A deleted chat leaves at once, as tdlib deletes a chat's messages locally
+  // before the server answers. A refusal puts it back and says why.
+  // Only what was there when deleted: a message arriving meanwhile brings it back.
+  private deletingChats = new Map<string, string>();
+  private chatStamp(c: { last_at: string; last_id?: string }) { return c.last_at + "\0" + (c.last_id || ""); }
+  async deleteChat(id: string, ref: Parameters<Api["deleteConversation"]>[0]) {
+    const open = this.state.open, o = this.state.overview;
+    const summary = o?.dms?.find(d => d.id === id) || o?.threads?.find(t => t.id === id) || o?.topics?.find(t => t.latest.id === id)?.latest;
+    const stamp = summary ? this.chatStamp(summary) : "";
+    this.deletingChats.set(id, stamp);
+    this.publishReads();
+    this.close();
+    const result = await this.run(a => a.deleteConversation(ref));
+    if (result) await this.refetch();
+    // A later delete of what came back meanwhile keeps its own hold.
+    const latest = this.deletingChats.get(id) === stamp;
+    if (latest) this.deletingChats.delete(id);
+    this.publishReads();
+    if (!this.alive) return;
+    if (result?.note) this.toast(result.note, "ok");
+    if (latest && !result && open && !this.state.open && !this.state.pending) void this.open(open);
   }
 
   // run performs one action and reports its failure in words; the change

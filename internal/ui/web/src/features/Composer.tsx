@@ -1,5 +1,6 @@
 import { Button } from "../ui/Button";
 import { saveBatch, acknowledge, recordFailure, type JournalEntry } from "../send-journal.mjs";
+import { savedStorage, savedReadOnly, readOnlyTitle, readOnlyDetail } from "../saved-storage";
 import { sendID } from "../optimistic.mjs";
 import { pastePictures, pasteTable } from "../pictures.mjs";
 // The message composer: attachments, @ picker, text and send. Typing @ offers
@@ -159,7 +160,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // Why nothing can be written here now, in words.
   const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here && scopeMatches(g, draft.newTopic ? "__new__" : draft.topic || "")) : undefined;
   const closed: { title: string; detail?: string } | null =
-    groupPending ? { title: "Updating group details", detail: "Sending is paused until verification finishes. Your draft stays here." }
+    savedReadOnly() ? { title: readOnlyTitle, detail: readOnlyDetail }
+    : groupPending ? { title: "Updating group details", detail: "Sending is paused until verification finishes. Your draft stays here." }
     : humanGuest && !author ? (mine?.state === "invited" ? { title: "Join to write here", detail: "You’re invited as a guest. Accept the invitation to write; your draft stays." }
       : mine && (mine.state === "dismissed" || mine.state === "left") ? { title: "You’re no longer a guest here", detail: "New messages don’t reach you. What was already shared stays with you." }
       : { title: "You can read this chat but not write in it", detail: dm?.frozen || "Choose the topic you were invited to." })
@@ -434,7 +436,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   };
 
   // ---- sending
-  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string; followup?: ComposerFollowup }) {
+  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string; at?: string; followup?: ComposerFollowup }) {
     if (!retry && target.kind === "readonly") { setNotice({ conv, text: target.note }); return; }
     if (store.host.platform === "android") { if (!retry) await sendAndroid(); return; }
     if (!retry && (!ready || (!dm && !thread))) return;
@@ -474,20 +476,27 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
     const id = retry?.id || sendID(), group = retry?.group, selectedView = store.get().open;
+    const retain = !!here && to.kind === "conversation" && !followup && !retry?.fanout;
+    const original = retain ? store.captureOriginalDraft(c,captured) : undefined;
+    let recovery = original;
     const was = decode(d.text);
     const body = encode(was.text, was.spans, true).trim();
     const sent = d.files || [];
     const progress = (s: string) => setBusy((b) => ({ ...b, [c]: s }));
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
     if (to.kind === "none" || to.kind === "readonly") return;
-    if (store.isActive()) {
-      clearSent(c, d, sent);
-      if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
-    }
+    const at = retry?.at || new Date().toISOString(); // a retry keeps the place the message took
+    try {
+      if (store.isActive()) {
+        recovery=clearSent(c, d, sent, retain ? {id,original} : undefined);
+        if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) },false,true);
+      }
+    } catch(e){setNotice({conv:c,text:errorText(e)});return;}
     store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", send_group: group, send_group_author: store.get().overview?.me.fingerprint, pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
-      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: followup?.kind || (to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question"), body, at: new Date().toISOString(),
+      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: followup?.kind || (to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question"), body, at,
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
-      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, followup }); });
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group, at, followup }); },
+      recovery);
     setNotice(null);
     typing.stop();
     try {
@@ -548,13 +557,17 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       void store.refetch();
     } catch (e) {
       if (!store.sends.has(id)) return; // a pushed durable turn already proves this save
-      if (!store.isActive()) { store.sends.fail(id, errorText(e)); return; }
+      // Only an answer refusing it is definite. No answer may mean it was kept:
+      // the row stays with a retry under the same id, never a second draft.
+      const status = (e as { status?: unknown }).status;
+      const definite = typeof status === "number" && status < 500;
+      if (!store.isActive()) { store.sends.fail(id, errorText(e), !definite); return; }
       const current = store.get().drafts[c] ?? EMPTY;
-      const restored = !followup && !retry?.fanout && !current.text && !(current.files || []).length;
+      const restored = definite && !followup && !retry?.fanout && !current.text && !(current.files || []).length;
       if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
-      else store.sends.fail(id, errorText(e));
+      else store.sends.fail(id, errorText(e), !definite);
       const why = errorText(e).replace(/\.?$/, ".");
-      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : " Your newer draft is kept. Retry the failed message above.") });
+      if (visible.current === c) setNotice({ conv: c, text: (definite ? "Not sent: " : "Not confirmed: ") + why + (restored ? " Your text and files are restored." : followup ? " The exact steering request and files are kept above. Check the original work before retrying." : current.text || (current.files || []).length ? " Your newer draft is kept. Retry the failed message above." : " It’s kept above. Retry it there.") });
       else store.toast("Not sent to " + title + ": " + why + " It’s kept in that chat.", "error");
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);
@@ -565,7 +578,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // draft. Recovery retries these payloads explicitly; it never recreates IDs.
   async function sendAndroid() {
     if (!ready || (!dm && !thread) || androidPreparing.current.has(conv)) return;
-    const c = conv, captured = latest(), here = dm, selectedView = store.get().open;
+    const c = conv, captured = {...latest(),files:latest().files?.map(f=>({...f}))}, here = dm, selectedView = store.get().open;
+    const original = here && target.kind === "conversation" ? store.captureOriginalDraft(c,captured) : undefined;
+    let recovery: ReturnType<typeof store.captureOriginalDraft>, journaled:string[]=[];
     let device = thread;
     const host = store.host, workspace = host.workspace.id;
     const decoded = decode(captured.text), body = encode(decoded.text, decoded.spans, true).trim();
@@ -624,14 +639,18 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         forgetStaged(c, sent);
         throw Error("The chat changed before steering was submitted. Your original draft is kept.");
       }
-      saveBatch(localStorage,workspace,plans.map(p=>p.entry));
+      journaled=saveBatch(savedStorage(),workspace,plans.map(p=>p.entry));
+      if (store.isActive()) {
+        const retain=plans.length===1 && plans[0].entry.endpoint==="/api/dm/send";
+        recovery=clearSent(c,captured,sent,retain?{id:plans[0].entry.id,original}:undefined);
+        if (captured.newTopic) store.setDraft(c,{...store.draft(c),newTopic:false,...(here?{topic}:{})},false,true);
+      }
     } catch(e) {
+      // No submit call has started. Roll back only these unsubmitted records;
+      // if storage refuses that too, the exact records and active draft remain.
+      for(const id of journaled){try{acknowledge(savedStorage(),workspace,id);}catch{/* never hide or replace the retained request */}}
       setNotice({conv:c,text:"Send was not submitted. Your draft is kept: "+errorText(e),refresh:(e as Error).name==="ComposerRecovery"});
       setBusy(({[c]:_,...rest})=>rest);androidPreparing.current.delete(c);return;
-    }
-    if (store.isActive()) {
-      clearSent(c,captured,sent);
-      if (captured.newTopic) store.setDraft(c,{...store.draft(c),newTopic:false,...(here?{topic}:{})});
     }
     setBusy(b=>({...b,[c]:"Submitting…"}));setNotice(null);typing.stop();
     const preview = (entry: JournalEntry, to: Target) => {
@@ -642,7 +661,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         kind:followup?.kind || (to.kind === "answer" ? "answer" : to.kind === "agent" || (to.kind === "device" && to.ask) ? "question" : "message"),
         body,at:entry.createdAt,reply_to:captured.replyTo,quote:captured.replyTo,
         attachments:sent.map(f=>({name:f.name,size:f.size,openable:false})),files:sent.map(f=>({name:f.name,size:f.size,openable:false}))},
-        undefined);
+        undefined, recovery);
     };
     const submit = async (entry: JournalEntry): Promise<void> => {
       let result: T.Sent & {note?:string};
@@ -652,7 +671,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         result = await host.api<T.Sent & {note?:string}>(entry.endpoint,entry.request);
       } catch(e) {
         const why=errorText(e);
-        try {recordFailure(localStorage,workspace,entry.id,why);} catch(_) { /* original exact request stays retained */ }
+        try {recordFailure(savedStorage(),workspace,entry.id,why);} catch(_) { /* original exact request stays retained */ }
         // The native write may have committed before its response was lost.
         // Retire only our local preview; the exact journal offers explicit retry.
         store.sends.remove(entry.id);
@@ -661,7 +680,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       }
       // The successful native result proves admission. Presentation/storage
       // failures after this point must never relabel the request as failed.
-      try {acknowledge(localStorage,workspace,entry.id);} catch(e) {
+      try {acknowledge(savedStorage(),workspace,entry.id);} catch(e) {
         store.toast("Saved by AgentNet, but the recovery record could not be cleared: "+errorText(e),"error");
       }
       try {
@@ -687,16 +706,16 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   function keepStaged(c: string, key: string, id: string) {
     const d = store.get().drafts[c];
-    if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (f.key === key ? { ...f, staged: id } : f)) });
+    if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (f.key === key ? { ...f, staged: id } : f)) },false,true);
   }
   function forgetStaged(c: string, list: StagedFile[]) {
     if (!store.isActive()) return;
     const d = store.get().drafts[c], keys = new Set(list.map((f) => f.key));
-    if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) });
+    if (d?.files?.some(f=>keys.has(f.key)&&f.staged!==undefined)) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) },false,true);
   }
   // clearSent removes from a conversation's draft exactly what was sent:
   // text typed meanwhile, or files added meanwhile, stay.
-  function clearSent(c: string, d: Draft, list: StagedFile[]) {
+  function clearSent(c: string, d: Draft, list: StagedFile[], retained?: {id:string;original:ReturnType<typeof store.captureOriginalDraft>}) {
     const cur = store.get().drafts[c] ?? EMPTY, keys = new Set(list.map((f) => f.key));
     const next: Draft = { ...cur, files: (cur.files || []).filter((f) => !keys.has(f.key)) };
     if (cur.text === d.text) {
@@ -704,6 +723,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (cur.agent === d.agent) next.agent = undefined;
     }
     if (cur.replyTo === d.replyTo) next.replyTo = undefined;
+    if(retained)return store.clearSendDraft(c,retained.id,retained.original,next);
     store.setDraft(c, next);
 
   }
@@ -789,8 +809,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <p className="font-semibold">{closed.title}</p>
         {closed.detail && <p className="text-[13px] text-text-2">{closed.detail}</p>}
       </div>
-      {!dm?.frozen && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />}
-    </div>{!dm?.frozen && scheduleDialogs}</>
+      {!dm?.frozen && !savedReadOnly() && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />}
+    </div>{!dm?.frozen && !savedReadOnly() && scheduleDialogs}</>
   );
 
   return (

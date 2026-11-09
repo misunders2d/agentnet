@@ -22,6 +22,8 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
   await p.getByRole('textbox',{name:'Your answer'}).fill('Bernard is our operations colleague.');
   await p.getByRole('button',{name:'Send answer',exact:true}).click();
   await p.getByRole('dialog').waitFor({state:'hidden'});
+  // Since 5c7f471a a sent answer holds the card's other actions until the server's record changes, and this mock's never does. A fresh page starts without the pending slot.
+  await p.goto('about:blank');await p.goto(process.argv[2]+'#msg='+'1'.repeat(32));await card.getByText('Professional memory unavailable; provide Bernard’s surname.',{exact:true}).waitFor();
   await card.getByRole('button',{name:'Mark as handled',exact:true}).click();
   const dialog=p.getByRole('dialog');await dialog.getByRole('button',{name:'Mark as handled',exact:true}).click();
   await dialog.waitFor({state:'hidden'});

@@ -343,7 +343,7 @@ func TestRecipientLifecycleRevokedOwnReaderDoesNotRegenerateCopies(t *testing.T)
 		t.Fatal(err)
 	}
 	for pass := 0; pass < 2; pass++ {
-		a.historyStep(tctx(t))
+		a.stepByHand(tctx(t))
 		for _, produce := range []func() (bool, error){a.syncDeviceHistory, a.syncRoots, a.syncReadMarks, a.syncTopicTitles, a.syncModelReports} {
 			if _, err = produce(); err != nil {
 				t.Fatal(err)
@@ -580,7 +580,7 @@ func TestRecipientLifecycleFailedDirectoryRetriesOnExistingWake(t *testing.T) {
 	if a.convWork.bits.Load()&convRecipients == 0 {
 		t.Fatal("failed storage read lost due discovery work")
 	}
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	var state string
 	if err = a.store.db.QueryRow(`SELECT state FROM outbox WHERE id='pending'`).Scan(&state); err != nil || state != stateConvWaiting {
 		t.Fatalf("failed lookup ended work: state=%s err=%v", state, err)
@@ -596,7 +596,7 @@ func TestRecipientLifecycleFailedDirectoryRetriesOnExistingWake(t *testing.T) {
 	// Existing signed ping/event wake takes the retained work; it adds no bit.
 	a.kickNow()
 	<-wakes
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	if a.convWork.bits.Load()&convRecipients != 0 {
 		t.Fatal("successful retry remained due")
 	}
@@ -647,7 +647,7 @@ func TestRecipientLifecycleDefinitiveDirectoryFailureIsGenerationBound(t *testin
 			})
 			for i := 0; i < 2; i++ {
 				a.convWork.due(convRecipients)
-				a.convSync(tctx(t))
+				a.convSyncByHand(tctx(t))
 				if a.convWork.bits.Load()&convRecipients != 0 {
 					t.Fatal("definitive invalid response scheduled ping retries")
 				}
@@ -658,7 +658,7 @@ func TestRecipientLifecycleDefinitiveDirectoryFailureIsGenerationBound(t *testin
 			members.DiscoveryGeneration++
 			publish()
 			a.convWork.due(convRecipients)
-			a.convSync(tctx(t))
+			a.convSyncByHand(tctx(t))
 			if attempts != 2 {
 				t.Fatal("directory change did not invalidate definitive failure memo")
 			}
@@ -708,13 +708,13 @@ func TestRecipientLifecycleFailedFirstPageRetriesAfterRound(t *testing.T) {
 		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 	})
 	a.convWork.due(convRecipients)
-	a.convSync(tctx(t)) // first page, failed first target
-	a.convSync(tctx(t)) // continuation consumes prior due bit
+	a.convSyncByHand(tctx(t)) // first page, failed first target
+	a.convSyncByHand(tctx(t)) // continuation consumes prior due bit
 	if a.convWork.bits.Load()&convRecipients == 0 {
 		t.Fatal("later successful page lost first-page retry")
 	}
 	a.kickNow()
-	a.convSync(tctx(t)) // existing ping/event wake, no added work bit
+	a.convSyncByHand(tctx(t)) // existing ping/event wake, no added work bit
 	if attempts["probe/device000"] != 2 {
 		t.Fatalf("failed key attempts=%d", attempts["probe/device000"])
 	}

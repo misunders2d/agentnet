@@ -21,14 +21,20 @@ import { capital, deviceWords } from "./Approvals.words";
 export function TrustSheet({ open, onOpenChange, thread }: { open: boolean; onOpenChange: (o: boolean) => void; thread: T.Thread }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
-  const [same, setSame] = useState(false);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { if (open) setSame(false); }, [open]);
   const expect = thread.key.pending || ""; // the code shown is the only one trusted
+  const target = JSON.stringify([open, store.host.workspace.id, store.host.workspace.handle, thread.peer, expect]);
+  const [comparison, setComparison] = useState({ target, peer: thread.peer, key: expect, checked: false });
+  const [busy, setBusy] = useState(false);
+  // Invalidate before committing a changed code/peer, including A→B→A and
+  // close/reopen. An effect would leave the old consent enabled for a render.
+  if (comparison.target !== target) setComparison({ target, peer: thread.peer, key: expect, checked: false });
+  const same = comparison.target === target && comparison.checked;
   const who = deviceWords(thread.peer, o);
   const trust = async () => {
+    if (!same || !expect || busy) return;
+    const { peer, key } = comparison;
     setBusy(true);
-    const ok = await store.run((a) => a.act({ do: "trust", id: thread.peer, key: expect }), "Trusted. You can write again, and what it sent meanwhile is checked again.");
+    const ok = await store.run((a) => a.act({ do: "trust", id: peer, key }), "Trusted. You can write again, and what it sent meanwhile is checked again.");
     setBusy(false);
     if (ok !== undefined) onOpenChange(false);
   };
@@ -49,7 +55,7 @@ export function TrustSheet({ open, onOpenChange, thread }: { open: boolean; onOp
         <Code label="New code" value={expect} />
       </dl>
       <label className="mt-4 flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl stroke bg-surface px-3 py-2 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink">
-        <input type="checkbox" className="sr-only" checked={same} onChange={(e) => setSame(e.target.checked)} />
+        <input type="checkbox" className="sr-only" checked={same} onChange={(e) => setComparison({ target, peer: thread.peer, key: expect, checked: e.target.checked })} />
         <span aria-hidden="true" className={"grid size-[22px] shrink-0 place-items-center rounded-md border-[1.5px] border-outline " + (same ? "bg-act text-act-ink" : "bg-surface")}>{same && <IconCheck size={15} stroke={3} />}</span>
         <span className="text-[15px] font-semibold">The new code matches what they told me</span>
       </label>

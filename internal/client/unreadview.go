@@ -27,36 +27,19 @@ func (a *Agent) UnreadConversationCandidates() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// UnreadDeviceRefs reuses the canonical thread/placement/read projection,
-// without building cards or hydrating titles for unrelated read topics.
+// UnreadDeviceRefs reuses the canonical thread/placement/read projection from
+// each peer's kept summaries, and reads again only peers a write touched.
 func (a *Agent) UnreadDeviceRefs() ([]DeviceUnreadRef, error) {
-	peers, err := a.store.conversationPeers()
+	cache := &a.topicCache
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	peers, entries, err := a.keptPeerTopics(cache.off.Load())
 	if err != nil {
 		return nil, err
 	}
 	var out []DeviceUnreadRef
 	for _, peer := range peers {
-		start := len(out)
-		topics, err := a.peerTopics(peer, storeNow().Unix(), &out)
-		if err != nil {
-			return nil, err
-		}
-		var selected []*ThreadSummary
-		for i := range topics {
-			if topics[i].Unread > 0 {
-				selected = append(selected, &topics[i])
-			}
-		}
-		if err := a.topicText(peer, selected); err != nil {
-			return nil, err
-		}
-		titles := make(map[string]string, len(selected))
-		for _, topic := range selected {
-			titles[topic.ID] = topic.Title
-		}
-		for i := start; i < len(out); i++ {
-			out[i].TopicTitle = titles[out[i].Thread]
-		}
+		out = append(out, entries[peer].unread...)
 	}
 	return out, nil
 }

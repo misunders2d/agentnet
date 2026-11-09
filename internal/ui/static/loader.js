@@ -73,6 +73,39 @@
     fit();
   };
   if (window.visualViewport) fitViewport(window.visualViewport);
+
+  // ---- one active tab for this page's saved state
+  //
+  // Drafts and send recovery live in this origin's localStorage, which has no
+  // compare-and-set between tabs or windows. As in the browser device
+  // (device.mjs, which holds its own lock before loading this file) and
+  // Telegram Web, one page is active; another waits, writing nothing, until it
+  // closes. Every host takes it, the desktop and Android shells included. A
+  // plain browser without tab locks (missing, or the request refused) is
+  // refused, as the browser device is. A native shell without them opens
+  // read-only (saved-storage.ts): refusing it would take away its update and
+  // Saved messages, and its own single-window guard cannot be relied on, so it
+  // reads saved drafts and send recovery but writes neither: no message box,
+  // no retry or discard of an unsent message (Cancel holds it).
+  if (!browser) {
+    const native = typeof window.__agentnetNativeAppJSON === "function" || window.__agentnetPlatform === "android";
+    const say = (text) => { const p = document.createElement("p"); p.setAttribute("role", "status");
+      p.style.cssText = "margin:2rem auto;max-width:32rem;padding:0 1rem;font:16px/1.5 system-ui,sans-serif"; p.textContent = text; document.body.prepend(p); return p; };
+    let granted = false, note = null, refused = !navigator.locks;
+    if (!refused) {
+      const held = new Promise((resolve, reject) => {
+        try { navigator.locks.request("agentnet-local-ui", () => { granted = true; resolve(); return new Promise(() => {}); }).catch(reject); } catch (e) { reject(e); }
+      });
+      const later = setTimeout(() => { if (!granted) note = say("AgentNet is open in another tab or window. Use that one, or close it to continue here: this one waits and changes nothing."); }, 300);
+      try { await held; } catch { refused = true; }
+      clearTimeout(later); note?.remove();
+    }
+    if (refused) {
+      window.__agentnetSingleWindow = native ? "readonly" : "none";
+      if (!native) { say("This browser cannot run AgentNet here: it lacks tab locks, so two tabs could overwrite each other's drafts. Try an up-to-date browser."); return; }
+    } else window.__agentnetSingleWindow = "lock";
+  }
+
   // The catalog is asked for here, alongside the host's own modules, and
   // after the viewport fitting: nothing that can fail comes before that.
   const catalogAsked = Date.now();
@@ -82,11 +115,20 @@
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
   const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
   const { parseLink, linkTo, matchingWorkspace, checkTarget } = await import('/assets/conversation-links.mjs');
+  // Leaving the page ends the API requests it still waits on. WebKit reports
+  // a request the navigation cuts off as a page error ("cannot load ... due
+  // to access control checks"); ended first, it is an ordinary refused
+  // request, which every caller already handles. A page restored from the
+  // back/forward cache asks again with a fresh signal.
+  let leaving = new AbortController();
+  addEventListener("pagehide", () => leaving.abort());
+  addEventListener("pageshow", (e) => { if (e.persisted) leaving = new AbortController(); });
+  const pageFetch = (url, init = {}) => fetch(url, init.signal ? init : { ...init, signal: leaving.signal });
   const json = async (path, body) => {
     if (!path.startsWith("/api/")) throw new Error("Expected an AgentNet API path");
     if (browser) return browser.api(path, body);
-    const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    const r = await pageFetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw Object.assign(new Error((await r.text()).trim() || r.statusText), { status: r.status }); // as a workspace's host does: an answer is not a lost request
     return r.json();
   };
   const nativeAppJSON = typeof window.__agentnetNativeAppJSON === "function" ? window.__agentnetNativeAppJSON : null;
@@ -156,6 +198,8 @@
     openLink: (value) => openPortable(value),
     ...(window.__agentnetPlatform === "android" ? { platform: "android", android: window.__agentnetAndroid, onBack: window.__agentnetOnBack } : {}),
     ...(typeof window.__agentnetNativeClipboardImage === "function" ? { clipboardImage: () => window.__agentnetNativeClipboardImage() } : {}),
+    // A native window without tab locks writes no saved drafts or sends (above; saved-storage.ts).
+    ...(window.__agentnetSingleWindow === "readonly" ? { savedReadOnly: true } : {}),
     // Computer-wide app actions stay on this loopback origin; switching a
     // workspace never sends an updater request to a remote membership.
     appControlsAvailable: !!nativeAppJSON,
@@ -224,7 +268,7 @@
   try {
     const ws = await import("/assets/workspaces.mjs");
     if (memberships) shell = memberships.shell;
-    else if (!browser) { shell = new ws.WorkspaceShell(); await shell.load(); }
+    else if (!browser) { shell = new ws.WorkspaceShell({ fetch: pageFetch }); await shell.load(); }
   } catch (e) { shell = null; }
   if (shell && !shell.active) shell = null; // nothing enrolled: the single transport
   const entryOf = (id) => shell && shell.members.get(id);
@@ -478,7 +522,7 @@
       routeNotice.replaceChildren();routeNotice.hidden=!words;
       if(words){routeNotice.append(text('span',words));if(action)routeNotice.append(button(action,()=>go(HOME,fragment)));routeNotice.append(button('Dismiss',()=>notice('')));}
     };
-    const clear = () => history.replaceState(null, "", location.pathname + location.search);
+    const clear = () => history.replaceState(history.state, "", location.pathname + location.search);
     let linkSequence=0;
     openPortable = async (value) => {
       const sequence=++linkSequence, previous=shell?.active;

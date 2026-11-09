@@ -623,8 +623,18 @@ func (a *Agent) Participations(conv string) ([]ParticipationInfo, error) {
 		return nil, err
 	}
 	out := make([]ParticipationInfo, 0, len(pids))
+	if len(pids) == 0 {
+		return out, nil
+	}
+	// One read of the members for the whole list: every participation here
+	// resolves against the same state, and a chat with many records does not
+	// parse its rosters once per record.
+	m, err := a.dmMembers(conv)
+	if err != nil {
+		return nil, err
+	}
 	for _, pid := range pids {
-		info, err := a.participation(conv, pid)
+		info, err := participationIn(a.store.db, conv, pid, m, a.Address)
 		if err != nil {
 			return nil, err
 		}
@@ -978,8 +988,13 @@ func (a *Agent) participationScope(ctx context.Context, info ParticipationInfo) 
 			return s, a.recordAndSend(ctx, s)
 		}
 	}
-	return protocol.ParticipationEvent{}, errors.New("participation: its public scope is not held here yet")
+	return protocol.ParticipationEvent{}, ErrParticipationScopePending
 }
+
+// ErrParticipationScopePending: the signed public scope another device authors
+// has not reached this one yet. Nothing is invented in its place; a queued ask
+// waits for it (AskAgentInTopicQueued) and the direct sender refuses as before.
+var ErrParticipationScopePending = errors.New("participation: its public scope is not held here yet")
 
 // AcceptParticipation accepts an invite for the agent on this installation,
 // exactly as invited; DeclineParticipation declines it. Only the host's
@@ -1254,6 +1269,29 @@ func (a *Agent) agentEnabled(agentID string) (bool, error) {
 // what it is. An invite not accepted waits for the click or the next
 // daemon start; an accept stored whose sending failed is sent again by
 // the next daemon start's sweep, or now by dm accept-agent PID.
+// consentAway is trySelfConsent for a message just admitted. Its accept is a
+// send: spool lock, every reader, the network. On the stream's reader that would
+// hold every later message, so it runs beside the stream, for this run.
+func (a *Agent) consentAway(ctx context.Context, pid string) {
+	if run := a.awayFromReader(ctx); run != nil {
+		a.readerAway.Go(func() { a.trySelfConsent(run, pid) })
+		return
+	}
+	a.trySelfConsent(withoutReaderBudget(ctx), pid)
+}
+
+// awayFromReader is the context for work leaving the stream's reader, or nil
+// when ctx is not on it or no daemon runs here to do the work.
+func (a *Agent) awayFromReader(ctx context.Context) context.Context {
+	if _, on := readerBudgetEnd(ctx); !on {
+		return nil
+	}
+	if run := a.readerAwayCtx.Load(); run != nil {
+		return *run
+	}
+	return nil
+}
+
 func (a *Agent) trySelfConsent(ctx context.Context, pid string) {
 	accepted, err := a.selfConsent(ctx, pid)
 	if err == nil && !accepted {
@@ -1616,17 +1654,28 @@ func (a *Agent) AskAgentInTopic(ctx context.Context, pid, kind, body, topic stri
 	if kind != envelope.KindQuestion && kind != envelope.KindTask {
 		return ConvSent{}, errors.New("an agent is asked a question or given a task")
 	}
+	out, err := a.askOutgoing(info, kind, body, topic, receiver, files)
+	if err != nil {
+		return ConvSent{}, err
+	}
+	return a.SendConv(ctx, info.Conv, out)
+}
+
+// askOutgoing is the one request an ask sends, direct or queued: the exact
+// current host and agent of a claimable participation, with this device's
+// current group admission. A queued ask rebuilds it at each attempt.
+func (a *Agent) askOutgoing(info ParticipationInfo, kind, body, topic string, receiver *ReplyReceiver, files []OutgoingFile) (ConvOutgoing, error) {
 	target := &envelope.Target{Address: info.Host.Address, Fingerprint: info.Host.Fingerprint, AgentID: info.AgentID}
 	if m, e := a.dmMembers(info.Conv); e != nil {
-		return ConvSent{}, e
+		return ConvOutgoing{}, e
 	} else if m.group != nil {
 		adm, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
 		if e != nil {
-			return ConvSent{}, e
+			return ConvOutgoing{}, e
 		}
 		target.GroupAdmission = adm.Hash()
 	}
-	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, Topic: topic, Files: files, PID: pid, selfJob: info.HostHere, ReplyReceiver: receiver, Target: target})
+	return ConvOutgoing{Kind: kind, Body: body, Topic: topic, Files: files, PID: info.PID, selfJob: info.HostHere, ReplyReceiver: receiver, Target: target}, nil
 }
 
 // checkParticipationEvent checks an event received in a DM message from

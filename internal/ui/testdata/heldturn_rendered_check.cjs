@@ -64,6 +64,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
     // A real supported local key decision belongs in Review; merely opening
     // its comparison sheet never trusts the key or runs received content.
     const trustCard=p.locator('li').filter({hasText:'Exact synthetic changed key requires comparison'}).last();
+    await p.getByRole('status').filter({hasText:'Dismissed here'}).waitFor({state:'hidden',timeout:15000}); // that notice sits over this button at this width
     await trustCard.getByRole('button',{name:'Check and trust…',exact:true}).click();
     const trust=p.getByRole('dialog').filter({hasText:'New code'});await trust.waitFor();
     assert.equal(await trust.getByRole('button',{name:'Trust the new identity',exact:true}).isDisabled(),true);

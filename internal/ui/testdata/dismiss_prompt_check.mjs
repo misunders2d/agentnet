@@ -8,6 +8,10 @@ import model from './comic_model.mjs';
 import {pendingSends} from '../static/optimistic.mjs';
 import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
+import {savedSendDrafts,readPending} from '../web/src/send-journal.mjs';
+import {savedReadOnly,readOnlyTitle} from '../web/src/saved-storage.ts';
+// store.ts now saves drafts through these (B5/B6); the sandbox gets the real modules, its own storage and a window stub.
+const savedPrelude="var savedStorage=()=>localStorage;if(typeof window==='undefined')globalThis.window={addEventListener(){},removeEventListener(){}};\n";
 
 const schedule=stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts',import.meta.url),'utf8')).replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8')).replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
@@ -30,7 +34,7 @@ function fixture(kind='dm') {
   if(path==='/api/act'){assert.equal(body.do,'resolve');assert.equal(body.id,id);actCount++;await actHold.promise;message={...message,state:'resolved',actions:[]};seq++;if(loseResponse)throw Error('Response lost after commit');return {note:'Closed. No reply was sent.'};}
   if(path==='/api/typing')return {entries:[]};if(path.startsWith('/api/agents'))return {agents:[]};return {};
  }};
- const Store=runInNewContext(schedule+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>false},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout:(fn,ms)=>{const id=++timer;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
+ const Store=runInNewContext(savedPrelude+schedule+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,savedSendDrafts,readPending,savedReadOnly,readOnlyTitle,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>false},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout:(fn,ms)=>{const id=++timer;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
  const store=new Store(host);
  return {store,start:async()=>{await store.start();await store.open({kind,id:conv});await drain();},act:()=>store.run(a=>a.act({do:'resolve',id})),release:()=>actHold.resolve(),fail:()=>actHold.reject(Error('Owned dismissal failure')),count:()=>kind==='dm'?store.get().overview.needs_you.filter(x=>x.id===id).length:store.get().overview.review.filter(x=>x.id===id).length,calls:()=>actCount,reads:()=>readCount,
   holdOverview:()=>overviewHold=barrier(),holdView:()=>viewHold=barrier(),

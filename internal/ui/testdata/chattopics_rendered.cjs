@@ -302,7 +302,7 @@ const server = http.createServer((req, res) => {
           const original=await page.evaluate(()=>JSON.stringify(fixture.thread.messages));
           const mainRow=page.locator('[data-mid="'+ 'a'.repeat(32)+'"]');
           if(width>600){await mainRow.hover();await mainRow.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Select',exact:true}).click();}
-          else{const actions=mainRow.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');await page.getByRole('button',{name:'Select',exact:true}).click();}
+          else{const actions=mainRow.getByRole('button',{name:/^(Message actions|More actions)$/});await actions.focus();await actions.press('Enter');await page.getByRole('button',{name:'Select',exact:true}).click();}
           await page.getByText('1 message selected',{exact:true}).waitFor();
           await all().click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/^Topic 1(?:\b)/}).click();
           await page.locator('[data-mid="'+ '1'.repeat(32)+'"]').click();await page.getByText('2 messages selected',{exact:true}).waitFor();
@@ -346,7 +346,7 @@ const server = http.createServer((req, res) => {
           await scoped.getByRole('button',{name:width>600?'Close':'Back to the conversation',exact:true}).click();await scoped.waitFor({state:'hidden'});
           const row=page.locator('[data-mid="'+ '1'.repeat(32)+'"]');
           if(width>600){await row.hover();await page.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Select',exact:true}).click();}
-          else{const actions=page.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
+          else{const actions=page.getByRole('button',{name:/^(Message actions|More actions)$/});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
           await page.getByRole('button',{name:'Move to topic',exact:true}).click();
           let sheet=page.getByRole('dialog',{name:'Move selected messages',exact:true});
           await sheet.getByRole('combobox',{name:'Destination topic',exact:true}).selectOption('2'.repeat(32));
@@ -371,7 +371,7 @@ const server = http.createServer((req, res) => {
           const originalRows=await page.evaluate(()=>fixture.directMessages.map(({placement,...m})=>m));
           const selectedRow=page.locator('[data-mid="'+ '1'.repeat(32)+'"]');
           if(width>600){await selectedRow.hover();await page.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Select',exact:true}).click();}
-          else{const actions=selectedRow.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
+          else{const actions=selectedRow.getByRole('button',{name:/^(Message actions|More actions)$/});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
           await page.getByRole('button',{name:'Move to topic',exact:true}).click();
           sheet=page.getByRole('dialog',{name:'Move selected messages',exact:true});
           await sheet.getByRole('combobox',{name:'Destination topic',exact:true}).selectOption('new');
@@ -399,7 +399,7 @@ const server = http.createServer((req, res) => {
         if(process.env.P11_ORGANIZE_ONLY){
           const mainRow=page.locator('[data-mid="'+ 'a'.repeat(32)+'"]');
           if(width>600){await mainRow.hover();await page.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Select',exact:true}).click();}
-          else{const actions=page.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
+          else{const actions=page.getByRole('button',{name:/^(Message actions|More actions)$/});await actions.focus();await actions.click();await page.getByRole('button',{name:'Select',exact:true}).click();}
           await page.getByText('1 message selected',{exact:true}).waitFor();
           await all().click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/^Topic 1(?:\b)/}).click();
           await page.locator('[data-mid="'+ '1'.repeat(32)+'"]').click();
@@ -480,7 +480,7 @@ const server = http.createServer((req, res) => {
           assert.equal(await page.locator('[data-mid="'+ 'b'.repeat(32)+'"]').getAttribute('data-from'),'me',tag+': selected outgoing request keeps its author and direction');
           assert.equal(await composer.inputValue(),'Draft survives pending request navigation',tag+': draft remains in the bound conversation');
           await shot('pending-focused');
-          assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&r.path!='/api/refresh'&&!(r.path==='/api/act'&&r.body.do==='read')))).length,0,tag+': navigation sends no grants/retries/cancel/topic decisions');
+          assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&r.path!='/api/refresh'&&r.path!='/api/topic/transfer/location'&&!(r.path==='/api/act'&&r.body.do==='read')))).length,0,tag+': navigation sends no grants/retries/cancel/topic decisions');
           await page.evaluate(()=>resolvePending());
           await page.waitForTimeout(100);
           await current().click();
@@ -498,7 +498,7 @@ const server = http.createServer((req, res) => {
             await page.getByText('Quick main flow message',{exact:false}).first().waitFor();
             if(skin==='comic'){
               if(width>600){await page.getByText('Quick main flow message',{exact:false}).first().hover();await page.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Make a topic',exact:true}).click();}
-              else{const actions=page.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.click();await page.getByRole('button',{name:'Make a topic',exact:true}).click();}
+              else{const actions=page.getByRole('button',{name:/^(Message actions|More actions)$/});await actions.focus();await actions.click();await page.getByRole('button',{name:'Make a topic',exact:true}).click();}
             }
             await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/topic/create'));
             await shot('promoted-flow');

@@ -7,7 +7,10 @@ import "github.com/misunders2d/agentnet/internal/identity"
 const syncSubs = `('history-archive','history','device-history','read-sync','root-sync','topic-sync','topic-state-sync','reminder-sync','direct-topic-sync','model-sync','invitation-sync')`
 const syncStateSubs = `('read-sync','root-sync','topic-sync','topic-state-sync','reminder-sync','direct-topic-sync','model-sync','invitation-sync')`
 
-const syncWindowQuery = `SELECT (SELECT coalesce(sum(CASE WHEN sub='history-archive' THEN ? ELSE 1 END),0) FROM outbox WHERE state IN ('queued','waiting','custody','archive_uploading') AND recipient=? AND recipient_fp=? AND sub IN ` + syncSubs + `) + (SELECT count(*) FROM outbox o WHERE state='archive_staged' AND recipient=? AND recipient_fp=? AND NOT EXISTS(SELECT 1 FROM history_archive_entries e WHERE e.child=o.id))`
+// An archive in flight counts the records it carries (at most one page): paced
+// pages are small (MEL-748), and counting each archive as a whole page let one
+// four-row archive close the window until its round trip ended.
+const syncWindowQuery = `SELECT (SELECT coalesce(sum(CASE WHEN o.sub='history-archive' THEN min(max((SELECT count(*) FROM history_archive_entries e WHERE e.manifest=o.id),1),?) ELSE 1 END),0) FROM outbox o WHERE o.state IN ('queued','waiting','custody','archive_uploading') AND o.recipient=? AND o.recipient_fp=? AND o.sub IN ` + syncSubs + `) + (SELECT count(*) FROM outbox o WHERE state='archive_staged' AND recipient=? AND recipient_fp=? AND NOT EXISTS(SELECT 1 FROM history_archive_entries e WHERE e.child=o.id))`
 const syncStateWindowQuery = `SELECT count(*) FROM outbox WHERE state IN ('queued','waiting','custody') AND recipient=? AND recipient_fp=? AND sub IN ` + syncStateSubs
 
 // Cold production leaves a separate page of capacity for small state updates.
@@ -21,6 +24,19 @@ func syncWindowFull(q dbq, dev identity.Public, prepared ...[]outCopy) (bool, er
 // even if dependency expansion or an older producer filled the cold window.
 func syncStateWindowFull(q dbq, dev identity.Public, prepared ...[]outCopy) (bool, error) {
 	return syncPendingFull(q, dev, true, prepared...)
+}
+
+// syncWindowRoom is how many more cold copies this device's window takes now.
+// A paced page never overshoots it: the bound does not depend on a page's size.
+func syncWindowRoom(q dbq, dev identity.Public) (int, error) {
+	if revoked, err := revokedDeviceKnown(q, dev.Address, dev.Fingerprint()); err != nil || revoked {
+		return 0, err
+	}
+	var n int
+	if err := q.QueryRow(syncWindowQuery, historyPage, dev.Address, dev.Fingerprint(), dev.Address, dev.Fingerprint()).Scan(&n); err != nil {
+		return 0, err
+	}
+	return max(historyPage-n, 0), nil
 }
 
 func syncPendingFull(q dbq, dev identity.Public, stateOnly bool, prepared ...[]outCopy) (bool, error) {

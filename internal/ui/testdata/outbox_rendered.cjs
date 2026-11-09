@@ -60,7 +60,7 @@ async function bootFixture(seed) {
       const u = new URL(p, location.origin), conv=u.searchParams.get('id');
       if(body!==undefined){
         if(p==='/api/remind/done'){
-          if(Object.keys(body).length!==1||!fixture.overview.reminders.some(r=>r.message===body.id&&r.overdue))throw Error('Done must name one current overdue reminder');
+          if(Object.keys(body).some(k=>k!=='id'&&k!=='expected')||!fixture.overview.reminders.some(r=>r.message===body.id&&r.overdue))throw Error('Done must name one current overdue reminder');
           fixture.overview.reminders=fixture.overview.reminders.filter(r=>r.message!==body.id);
           return new Promise(resolve=>{
             // The ordinary daemon push can arrive before its action response.
@@ -142,7 +142,7 @@ const settle=async page=>{
       await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
       await page.goto(origin);await page.waitForFunction(()=>window.ready);
       const nav=page.getByRole('navigation',{name:'Main',exact:true});
-      const posts=()=>page.evaluate(()=>fixture.requests.filter(r=>r.body!==undefined&&r.path!=='/api/refresh'));
+      const posts=()=>page.evaluate(()=>fixture.requests.filter(r=>r.body!==undefined&&r.path!=='/api/refresh'&&r.path!=='/api/topic/transfer/location'));
       const fit=async scope=>{
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'document fits viewport');
         for(const row of await scope.all()){const b=await row.boundingBox();assert(b&&b.x>=-1&&b.x+b.width<=width+1,'Outbox row fits viewport '+JSON.stringify(b));}
@@ -250,7 +250,7 @@ const settle=async page=>{
         await page.evaluate(()=>fixture.finishReminder());await settle(page);
       }
       const completed=(await posts()).filter(r=>r.path==='/api/remind/done');
-      assert.deepEqual(completed.map(r=>r.body),[0,1,2].map(n=>({id:id(701+n)})),'Done uses each exact reminder ID once');
+      assert.deepEqual(completed.map(r=>r.body.id),[0,1,2].map(n=>id(701+n)),'Done uses each exact reminder ID once');
       assert.equal(await page.evaluate(()=>fixture.reminderPushes),3);assert.equal(await personal.getByRole('listitem').count(),17);
       assert.equal((await posts()).filter(r=>!['/api/schedule/edit','/api/remind/done'].includes(r.path)).length,0,'Done never dispatches messages or work');
       await shot('reminders-cleared');
@@ -277,7 +277,7 @@ const settle=async page=>{
       const state=await page.evaluate(async()=>{
         await fixture.unmount();const d=fixture.bag.comicDrafts.drafts;
         const refresh=fixture.requests.filter(r=>r.path==='/api/refresh').map(r=>r.body.id);
-        return {human:{text:d[fixture.ids.human].text,topic:d[fixture.ids.human].topic,agent:d[fixture.ids.human].agent},groupTopic:d[fixture.ids.group].topic,piText:d[fixture.ids.pi].text,claudeText:d[fixture.ids.claude].text,humanFile:d[fixture.ids.group].files[0].file===fixture.originals.humanFile,agentFile:d[fixture.ids.claude].files[0].file===fixture.originals.agentFile,stages:fixture.stages,fileReads:fixture.fileReads,sendPosts:fixture.requests.filter(r=>r.body!==undefined&&!['/api/schedule/edit','/api/remind/done','/api/refresh'].includes(r.path)).length,refresh};
+        return {human:{text:d[fixture.ids.human].text,topic:d[fixture.ids.human].topic,agent:d[fixture.ids.human].agent},groupTopic:d[fixture.ids.group].topic,piText:d[fixture.ids.pi].text,claudeText:d[fixture.ids.claude].text,humanFile:d[fixture.ids.group].files[0].file===fixture.originals.humanFile,agentFile:d[fixture.ids.claude].files[0].file===fixture.originals.agentFile,stages:fixture.stages,fileReads:fixture.fileReads,sendPosts:fixture.requests.filter(r=>r.body!==undefined&&r.path!=='/api/topic/transfer/location'&&!['/api/schedule/edit','/api/remind/done','/api/refresh'].includes(r.path)).length,refresh};
       });
       assert.deepEqual(state,{human:{text:'Unsent order draft for Pi',topic:ids.topic,agent:ids.pid},groupTopic:ids.groupTopic,piText:'Unsent Pi research draft',claudeText:'',humanFile:true,agentFile:true,stages:0,fileReads:0,sendPosts:0,refresh:[ids.human,ids.group,ids.pi,ids.claude]});
       assert.deepEqual(errors,[]);results.push({width,scheduled:20,history:3,reminders:20,remainingReminders:17,dueBadgeCleared:true,drafts:4,capturedStaleEdit:true,exactFiles:true});await context.close();current=null;

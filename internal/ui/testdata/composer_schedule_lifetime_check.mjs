@@ -9,6 +9,8 @@ const {captureSchedule,submitSchedule}=await import('../web/src/features/Compose
 const {scheduleSaves}=await import('../web/src/schedule-saves.ts');
 const saved=new Map();let denied=false;
 globalThis.localStorage={getItem:k=>saved.get(k)||null,setItem:(k,v)=>{if(denied)throw Error('denied');saved.set(k,v);},removeItem:k=>{if(denied)throw Error('denied');saved.delete(k);}};
+// Store.start listens for other windows' draft writes (B6); this check has one window.
+globalThis.window??={addEventListener(){},removeEventListener(){}};
 globalThis.document={visibilityState:'hidden',hasFocus:()=>false,addEventListener(){},removeEventListener(){}};
 const conv='a'.repeat(64),other='b'.repeat(64),file=new File(['original bytes'],'exact.txt');
 const original={text:'original',topic:'topic',replyTo:'reply',files:[{key:'one',name:file.name,size:file.size,type:'',file}]};

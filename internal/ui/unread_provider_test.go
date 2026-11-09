@@ -32,6 +32,7 @@ func TestLiveUnreadProvider(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		sent = storedSend(t, live, conv, sent)
 		ids[topic] = append(ids[topic], sent.ID)
 	}
 	for _, set := range ids {
@@ -51,6 +52,7 @@ func TestLiveUnreadProvider(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		sent = storedSend(t, live, group, sent)
 		muted = append(muted, sent.ID)
 	}
 	if err := alice.MarkUnread(muted[0], muted); err != nil {
@@ -158,6 +160,7 @@ func TestLiveUnreadProvider(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		sent = storedSend(t, live, conv, sent)
 		extra = append(extra, sent.ID)
 	}
 	if err := alice.MarkUnread(extra[0], extra); err != nil {

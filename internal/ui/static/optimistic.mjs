@@ -30,7 +30,7 @@ export function groupedSends(messages) {
   }
   return out;
 }
-export function pendingSends(host, changed = () => {}) {
+export function pendingSends(host, changed = () => {}, restoreDraft, captureQueuedDraft, releaseDraft) {
   const state = host.workspaces?.state?.(host.workspace.id);
   // Package-local copies share previews through the public membership state.
   let shared = state ? state[ledgerKey] : ledgers.get(host);
@@ -39,19 +39,89 @@ export function pendingSends(host, changed = () => {}) {
     if (state) state[ledgerKey] = shared; else ledgers.set(host, shared);
   }
   shared.changed = changed; // the currently mounted renderer owns notifications
+  shared.restoreDraft = restoreDraft;
+  shared.captureQueuedDraft = captureQueuedDraft;
+  shared.releaseDraft = releaseDraft;
   const ledger = shared.ledger, notify = () => shared.changed?.();
+  // A pushed queued_send retires the preview, not its original owned draft.
+  // Keep recovery until cancellation is confirmed or actual storage wins.
+  const drafts = shared.drafts ||= new Map();
+  // The person's Retry or Discard on a message the host keeps: shown at once,
+  // undone if the host refuses, cleared when its own state shows the change.
+  const actions = shared.actions ||= new Map();
+  const act = async (kind, m, key) => {
+    // After process restart the host still owns this pending row, but the
+    // renderer's original capture is gone. Capture only eligible local text,
+    // before the async cancel; the usual revision/scope/store fences apply.
+    // A row held here is stopped even before the host's refreshed row arrives.
+    const prior = actions.get(m.id), stopped = m.queued_send.state === 'needs_review' || prior?.kind === 'hold' && prior.detail !== undefined;
+    if (prior?.kind === 'hold' && prior.detail === undefined) return; // one hold at a time; its receipt decides
+    // A read-only window (host.savedReadOnly: no one-window lock in a native shell) saves no
+    // draft: it sends nothing again and discards no original it could not put
+    // back. Cancel holds instead, as for an original whose files are gone.
+    const readOnly = host.savedReadOnly === true;
+    if (readOnly && (kind === 'retry' || stopped)) throw new Error('This message can’t be retried or discarded in this window: drafts are read-only here. It stays as it is.');
+    if (kind === 'discard' && !stopped && !readOnly) {
+      const prior = drafts.get(m.id)?.value;
+      const value = shared.captureQueuedDraft?.(key, m, prior);
+      if (value && value !== prior) drafts.set(m.id, {key, value});
+    }
+    // An original whose files this page can no longer put back (a restart ended
+    // its File objects) is held, not cancelled: sending stops and the host keeps
+    // the message with its files; nothing returns to the draft.
+    const draft = drafts.get(m.id), hold = kind === 'discard' && !stopped && (readOnly || draft?.key === key && !!draft.value?.hold);
+    const action = {kind: hold ? 'hold' : kind, rev: m.queued_send.rev, key};
+    actions.set(m.id, action);
+    notify();
+    let result;
+    try { result = await host.api('/api/schedule/' + (kind === 'retry' ? 'retry_send' : hold ? 'hold_send' : 'discard_send'), {id: m.id}); }
+    catch (e) { if (actions.get(m.id) === action) actions.delete(m.id); notify(); throw e; }
+    if (hold) {
+      // Only the exact held receipt keeps it shown stopped; anything else shows the host's own state.
+      // A receipt for an action already retired by newer host state changes nothing.
+      if (actions.get(m.id) !== action) { notify(); return result; }
+      if (!(result?.id === m.id && result.state === 'needs_review')) actions.delete(m.id);
+      else action.detail = typeof result.detail === 'string' ? result.detail : ''; // the host's own words, until its row arrives
+      notify();
+      return result;
+    }
+    // The exact cancelled-ID receipt comes from the host's atomic cancel/store
+    // race. A note, lost answer or a stored/custody projection proves no cancel.
+    if (kind === 'discard' && result?.id === m.id && result.state === 'cancelled') {
+      const discarded = stopped;
+      if (discarded || draft?.key === key && drafts.get(m.id) === draft && shared.restoreDraft?.(key, draft.value)) {
+        drafts.delete(m.id); shared.releaseDraft?.(m.id, key);
+      }
+    }
+    return result;
+  };
+  const queuedRow = (m, key) => {
+    const action = actions.get(m.id), holding = action?.kind === 'hold' && action.detail === undefined;
+    const stopped = (m.queued_send.state === 'needs_review' || action?.kind === 'hold' && !holding) && action?.kind !== 'retry';
+    const waiting = !stopped && !action && m.queued_send.state === 'pending' && m.detail;
+    // A read-only window (see act) offers no Retry or Discard on a stopped message and says so.
+    const readOnly = host.savedReadOnly === true, kept = readOnly && stopped;
+    return {...m, _local: true, _failed: stopped, delivery: stopped ? 'failed' : 'queued', state_text: holding ? 'Stopping…' : kept ? 'Stopped and kept. Drafts are read-only in this window, so it can’t be retried or discarded here.' : stopped ? (action?.kind === 'hold' && m.queued_send.state !== 'needs_review' ? action.detail || 'Stopped.' : m.detail || 'Not sent.') : waiting || 'Sending…',
+      _retry: kept ? undefined : () => act('retry', m, key), _discard: holding || kept ? undefined : () => act('discard', m, key), _diagnostic: m.queued_send.diagnostic,
+      can: [], actions: [], copies: [], reactions: []};
+  };
+  const when = m => { const t = Date.parse(m.at); return Number.isNaN(t) ? Infinity : t; };
   const rows = key => [...ledger.values()].filter(x => x.key === key);
   return {
-    begin(key, message, retry) {
+    begin(key, message, retry, draft) {
       const m = { ...message, _local: true, _retry: retry, state: 'queued', delivery: 'queued', state_text: 'Sending…', can: [], actions: [], copies: [], reactions: [] };
       const previous = rows(key).at(-1);
       let saved; const stored = new Promise(resolve => { saved = resolve; });
+      if (draft) drafts.set(m.id, {key, value: draft});
       ledger.set(m.id, {key, m, ready: previous?.stored || Promise.resolve(), stored, saved}); notify(); return m.id;
     },
     has: id => ledger.has(id),
     move(id, key) { const x = ledger.get(id); if (x) { x.key = key; notify(); } },
     ready: id => ledger.get(id)?.ready || Promise.resolve(),
     finish(id, result) {
+      if (result && ['custody', 'delivered'].includes(result.state) && (result.id === id || result.lid === id)) {
+        const draft = drafts.get(id); if (draft) shared.releaseDraft?.(id, draft.key); drafts.delete(id);
+      }
       const x = ledger.get(id); if (!x) return;
       x.saved(); x.done = true;
       const state = result?.state || 'queued';
@@ -59,22 +129,38 @@ export function pendingSends(host, changed = () => {}) {
         state_text: ['custody','delivered'].includes(state) ? (state === 'custody' ? 'On your server' : 'Delivered') : result?.detail || 'Sending…' };
       notify();
     },
-    fail(id, reason) {
+    fail(id, reason, unsure) {
       const x = ledger.get(id); if (!x) return false;
       x.saved();
-      x.m = { ...x.m, state: 'failed', delivery: 'failed', state_text: 'Not sent: ' + reason, _failed: true };
+      x.m = { ...x.m, state: 'failed', delivery: 'failed', state_text: (unsure ? 'Not confirmed: ' : 'Not sent: ') + reason, _failed: true,
+        _discard: () => { ledger.get(id)?.saved(); ledger.delete(id); drafts.delete(id); shared.releaseDraft?.(id, x.key); notify(); } };
       notify(); return true;
     },
     remove(id) { ledger.get(id)?.saved(); ledger.delete(id); notify(); },
+    rememberDraft(id, key, value) { if (!drafts.has(id)) drafts.set(id, {key, value}); },
     // unsent: a send begun here and not yet stored, or failed and kept with
     // its Retry. Its draft was cleared as it began: a reload would lose it.
     unsent: () => [...ledger.values()].some(x => !x.done),
     dispose() { if (shared.changed === changed) shared.changed = null; },
     merge(key, messages = []) {
-      const actual = messages.some(m => m._local) ? messages.filter(m => !m._local) : messages;
+      const actual = messages.some(m => m._local && !m.queued_send) ? messages.filter(m => !m._local || m.queued_send) : messages;
+      for (const [id, draft] of drafts) if (draft.key === key && actual.some(m => m.dir === 'out' && !m.queued_send && (m.id === id || m.lid === id))) { drafts.delete(id); shared.releaseDraft?.(id, key); }
       for (const [id, x] of ledger) if (x.key === key && actual.some(m => m.dir === 'out' && (m.id === x.m.id || (m.lid && m.lid === x.m.lid)))) { x.saved(); ledger.delete(id); }
+      for (const [id, action] of actions) {
+        if (action.key !== key) continue;
+        const row = actual.find(m => m.id === id && m.queued_send);
+        if (!row || action.kind === 'retry' && row.queued_send.rev !== action.rev ||
+          action.kind === 'hold' && (row.queued_send.state === 'needs_review' || row.queued_send.rev !== action.rev)) actions.delete(id);
+      }
+      const shown = actual.some(m => m.queued_send) ? actual.filter(m => !m.queued_send || actions.get(m.id)?.kind !== 'discard').map(m => m.queued_send ? queuedRow(m, key) : m) : actual;
       const pending = rows(key);
-      return pending.length ? [...actual, ...pending.map(x => x.m)] : actual;
+      if (!pending.length) return shown;
+      // A yet-unsent message keeps the place it took, and a failed one keeps it
+      // too: later arrivals go below it (TDLib 4c6377aa, MessagesManager.cpp:
+      // get_next_yet_unsent_message_id, fail_send_message).
+      const out = [...shown];
+      for (const {m} of pending) { let i = out.length; while (i > 0 && when(out[i - 1]) > when(m)) i--; out.splice(i, 0, m); }
+      return out;
     },
   };
 }

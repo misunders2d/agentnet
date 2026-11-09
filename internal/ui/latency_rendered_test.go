@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -54,11 +55,22 @@ func TestUIResponsivenessRendered(t *testing.T) {
 	var reportMu sync.Mutex
 	reports := map[string][]byte{}
 	mux.HandleFunc("POST /latency-report", func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		// Browser reports reach about 1.8 MB (teams, actions); a cut report must fail, never parse as partial success.
+		const reportCap = 8 << 20
+		b, err := io.ReadAll(io.LimitReader(r.Body, reportCap+1))
+		status := 204
+		if err != nil || len(b) > reportCap {
+			why := "report exceeded " + strconv.Itoa(reportCap) + " bytes"
+			if err != nil {
+				why = "report read failed: " + err.Error()
+			}
+			b, _ = json.Marshal(map[string]any{"ok": false, "error": "collector: " + why})
+			status = http.StatusRequestEntityTooLarge
+		}
 		reportMu.Lock()
 		reports[r.URL.Query().Get("run")] = b
 		reportMu.Unlock()
-		w.WriteHeader(204)
+		w.WriteHeader(status)
 	})
 	mux.HandleFunc("GET /latency-result", func(w http.ResponseWriter, r *http.Request) {
 		reportMu.Lock()
@@ -113,11 +125,38 @@ func TestUIResponsivenessRendered(t *testing.T) {
 			evidence = filepath.Join(t.TempDir(), "latency.png")
 		}
 		cmd.Env = append(os.Environ(), "LATENCY_URL="+ts.URL+"/latency?run=chromium", "LATENCY_TOKEN="+testToken, "LATENCY_EVIDENCE="+evidence)
-		out, err := cmd.CombinedOutput()
+		var out []byte
+		var err error
+		if os.Getenv("AGENTNET_RUNTIME_CRAWL") == "1" {
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			err = cmd.Run()
+		} else {
+			out, err = cmd.CombinedOutput()
+		}
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		t.Log(string(out))
+		if os.Getenv("AGENTNET_RUNTIME_CRAWL") == "1" {
+			return
+		}
+		// Diagnostic-only switch: a normal-only run never counts as the complete test.
+		if os.Getenv("AGENTNET_LATENCY_HELD") == "off" {
+			t.Skip("DIAGNOSTIC normal-only (AGENTNET_LATENCY_HELD=off): held-write pass NOT RUN; this is not a pass of TestUIResponsivenessRendered")
+		}
+		// Again with every write held, for controls that write: each must change
+		// on screen before the server answers, not only when it answers quickly.
+		slow := exec.CommandContext(t.Context(), "node", "testdata/latency_rendered_check.cjs")
+		suites := os.Getenv("AGENTNET_LATENCY_WRITE_SUITES")
+		if suites == "" {
+			suites = "actions,outbox"
+		}
+		slow.Env = append(os.Environ(), "LATENCY_URL="+ts.URL+"/latency?run=chromium-slow-writes", "LATENCY_TOKEN="+testToken, "AGENTNET_LATENCY_WRITE_DELAY=1100", "AGENTNET_LATENCY_SUITES="+suites)
+		if out, err := slow.CombinedOutput(); err != nil {
+			t.Fatalf("with writes held: %v\n%s", err, out)
+		} else if os.Getenv("AGENTNET_LATENCY_LOG_SLOW") == "1" {
+			t.Log(string(out))
+		}
 	}
 	if shell := os.Getenv("AGENTNET_NATIVE_SHELL"); shell != "" {
 		suffix := ""
@@ -150,5 +189,19 @@ func TestUIResponsivenessRendered(t *testing.T) {
 				t.Log(string(out))
 			})
 		}
+	}
+}
+
+// Source check only (the fixture runs only in a browser): the fixture asserts
+// its local-feedback failures in held-write passes too. The runner's verdict
+// on such reports is exercised by TestLatencyMediaProbeGuards.
+func TestRenderedFeedbackFailuresNeverPass(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/latency_fixture.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := "assert(reports.feedbackFailures.length===0,"
+	if strings.Count(string(fixture), gate) != 1 || strings.Contains(string(fixture), "if(!writeDelay)"+gate) {
+		t.Fatal("fixture must assert feedback failures once, in held-write passes too")
 	}
 }

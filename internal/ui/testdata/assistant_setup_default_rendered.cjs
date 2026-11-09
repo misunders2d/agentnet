@@ -76,7 +76,9 @@ const server = http.createServer((req, res) => {
       page.on('pageerror', (e) => errors.push(e.stack));
       const requests = (route) => page.evaluate((route) => fixture.requests.filter((r) => r.path === route && r.body).map((r) => r.body), route);
       const fit = async () => assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'horizontal overflow');
-      const shot = async (name) => { await fit(); const f = path.join(evidence, 'default-agent-' + name + '-' + width + '.png'); await page.screenshot({ path: f, fullPage: true }); shots.push(f); };
+      // Navigation now immediately paints its destination with a short entrance nudge.
+      // Assert the stable screen, rather than a transient transform frame.
+      const shot = async (name) => { await page.waitForTimeout(300); await fit(); const f = path.join(evidence, 'default-agent-' + name + '-' + width + '.png'); await page.screenshot({ path: f, fullPage: true }); shots.push(f); };
       await page.goto(origin); await page.waitForFunction(() => window.ready);
       await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Agents', exact: true }).click();
 

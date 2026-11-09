@@ -7,6 +7,10 @@ import {api,errorText} from '../web/src/api.ts';
 import {pendingSends} from '../static/optimistic.mjs';
 import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
+import {savedSendDrafts,readPending} from '../web/src/send-journal.mjs';
+import {savedReadOnly,readOnlyTitle} from '../web/src/saved-storage.ts';
+// store.ts now saves drafts through these (B5/B6); the sandbox gets the real modules, its own storage and a window stub.
+const savedPrelude="var savedStorage=()=>localStorage;if(typeof window==='undefined')globalThis.window={addEventListener(){},removeEventListener(){}};\n";
 import model from './comic_model.mjs';
 const require=createRequire(import.meta.url),esbuild=require('../web/node_modules/esbuild');
 const tick=()=>new Promise(r=>setImmediate(r)),drain=async()=>{for(let i=0;i<6;i++)await tick();};
@@ -216,7 +220,7 @@ const scheduleSource=stripTypeScriptTypes(source('schedule-saves.ts').replace(/^
 const values=new Map(),listeners=new Set(),requests=[],conv='c'.repeat(64),topic='b'.repeat(32),mid='a'.repeat(32),lid='e'.repeat(32),fp='11111111-11111111-11111111-11111111';let loadGate=null,commitReads=false;
 const dm={id:conv,messages:[{id:mid,lid,dir:'out',topic,send_group_author:fp,kind:'message',body:'selected',unread:true,attention:{rev:4,writer:fp}}],topics:[{id:topic}],agents:[]};
 const host={platform:'daemon',workspace:{id:'test',handle:'h'},listen:fn=>{listeners.add(fn);return()=>listeners.delete(fn);},async api(path,body){requests.push({path,body});if(path.startsWith('/api/overview'))return {seq:requests.length,version:'test',me:{fingerprint:fp},dms:[],threads:[]};if(path.startsWith('/api/agents'))return{agents:[]};if(path.startsWith('/api/dm?')){if(loadGate)await loadGate.promise;return structuredClone(dm);}if(path.startsWith('/api/thread?'))return{id:'thread',peer:'peer/host',key:{pinned:fp},messages:[{id:mid,dir:'in',kind:'message',body:'device',unread:true}]};if(path.startsWith('/api/typing'))return{};if(path==='/api/act'&&body.do==='read'){if(commitReads){for(const m of dm.messages)if(body.ids.includes(m.id))delete m.unread;dm.seq++;}return{note:'Recorded exact read'};}throw Error('Unexpected '+path);}};
-const {Store,topicChangeKey}=runInNewContext(scheduleSource+'\n'+storeSource+'\n({Store,topicChangeKey})',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},window:{},localStorage:{getItem:k=>values.get(k)||null,setItem:(k,v)=>values.set(k,v)},setTimeout:(f,ms)=>{const t=setTimeout(f,ms);t.unref();return t;},clearTimeout});
+const {Store,topicChangeKey}=runInNewContext(savedPrelude+scheduleSource+'\n'+storeSource+'\n({Store,topicChangeKey})',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,savedSendDrafts,readPending,savedReadOnly,readOnlyTitle,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true},window:{addEventListener(){},removeEventListener(){}},localStorage:{getItem:k=>values.get(k)||null,setItem:(k,v)=>values.set(k,v)},setTimeout:(f,ms)=>{const t=setTimeout(f,ms);t.unref();return t;},clearTimeout});
 // A typed verification wait retains the exact last view and draft without
 // claiming new membership or polling. Only a fresh successful view clears it.
 {

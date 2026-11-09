@@ -26,30 +26,47 @@ run_partition() {
 		/^Test/ {
 			part=i++%n
 			if (client && n==18) {
-				if ($0=="TestDMLiveAgentContext") part=17
-				if ($0=="TestOwnPersonTasksDirectAndGroup") part=4
-				if ($0=="TestRoomReciprocalRootQuestions") part=1
-				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=2
+				if ($0=="TestHumanMultipleGuestsSelfLeaveAndCapturedQueueFence") part=2
+				if ($0=="TestP6SecurityStaleMembershipCarrier") part=15
+				if ($0=="TestProofQueueOneEventAndRestart") part=12
+				if ($0=="TestGroupMixedReaderDoesNotBlockSelectedExecutors") part=4
+				if ($0=="TestP6FixLocalAndNestedHarnessUseRealCLI") part=14
+				if ($0=="TestLocalHelperOutlivesItsCoordinatorsRun") part=2
+				if ($0=="TestDMLiveAgentContext") part=16
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=8
+				if ($0=="TestRoomReciprocalRootQuestions") part=10
+				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=9
 				if ($0=="TestRoomBusyAncestorCallback") part=5
 				if ($0=="TestHistoryArchiveImportedTailRemainsBounded") part=12
+				if ($0=="TestTopicTransferThousandRowsUsesBoundedApply") part=11
+				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=16
+				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=0
+				if ($0=="TestP6FixAnswerAudienceAndStoredReply") part=3
+				if ($0=="TestNamedAgentExecutedRequestAuthorship") part=6
+				if ($0=="TestAgentRoomAskPostsAsAgentInSessionTopic") part=11
+				if ($0=="TestFailedLocalHelperWakesItsCoordinator") part=6
+				if ($0=="TestAgyNamedGroupResponder") part=0
 				if ($0=="TestGroupHistoryWitnessRetiredTaskDevice") part=7
-				if ($0=="TestTopicGuestInvitesOwnAgent") part=3
-				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=8
-				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=15
-				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=16
+				if ($0=="TestTopicGuestInvitesOwnAgent") part=9
+				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=7
+				if ($0=="TestGroupParticipationFilesLateLinkedRequestAndNamedOutput") part=14
+				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=14
 				if ($0=="TestGoogleReviewIntentRetry") part=0
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=13
 				if ($0=="TestGroupParticipationHistoryDismissedLinkedRestartReorder") part=12
 				if ($0=="TestProposalRefusesAgentHostAndRemovedPhone") part=11
 				if ($0=="TestReceiverRemoteGroupNamedNativeMemberVisitor") part=13
-				if ($0=="TestGroupGuestCapturedMessageControls") part=9
-				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=6
-				if ($0=="TestAgentRoomAskVisitsAnotherPersonsAgent") part=9
+				if ($0=="TestGroupGuestCapturedMessageControls") part=1
+				if ($0=="TestGroupParticipationHistoryAfterHostReadmission") part=11
+				if ($0=="TestAgentRoomAskVisitsAnotherPersonsAgent") part=8
 				if ($0=="TestSharedTopicExactGuestLiveAndHistorical") part=17
 				if ($0=="TestConversationResourcesMemberAgentContext") part=3
-				if ($0=="TestSelfConsentLinkedDevices") part=4
+				if ($0=="TestSelfConsentLinkedDevices") part=16
 				if ($0=="TestGroupSendAsksRostersTogether") part=10
 				if ($0=="TestGroupInvitationAsksEachCheckOnce") part=17
+				if ($0=="TestOwnGroupRequestDecisionNamesSharedRequest") part=5
+				if ($0=="TestNativeCursorReceivesVerifiedEditAndDeletion") part=2
+				if ($0=="TestHistoryContributionSelectedFilesAndGuestAuthority") part=4
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
@@ -85,6 +102,9 @@ run_partition() {
 				if ($0=="TestBrowserEngineBacklogCatchUp") part=2
 				if ($0=="TestTwoOrdinaryPeopleLinkedStateJourney") part=2
 				if ($0=="TestBrowserAssistantReactionsMatchGo") part=2
+				if ($0=="TestLiveUnreadProvider") part=0
+				if ($0=="TestLiveUnreadHistoryScale") part=0
+				if ($0=="TestLiveIdentity") part=0
 			}
 			if (part==k) print
 		}')
@@ -93,7 +113,10 @@ run_partition() {
 		return
 	fi
 	echo "shard $label of $n: $(echo "$tests" | wc -l) tests"
-	go test -race -json -count=1 -timeout 600s -run "^($(echo "$tests" | paste -sd'|'))\$" "$package"
+	# Client partitions start new stores from a copy of the fresh schema, and say how many
+	# (internal/client/freshschema_test.go). Every other run of that package runs every step.
+	AGENTNET_TEST_SCHEMA_IMAGE=$([[ $package = ./internal/client ]] && echo 1) \
+		go test -race -json -count=1 -timeout 600s -run "^($(echo "$tests" | paste -sd'|'))\$" "$package"
 }
 
 if [ "$shard" = others ]; then

@@ -80,7 +80,7 @@ async function desktop(browser) {
   await snap('invite');
   await noAddresses(p, name, 'invite');
   const sent = p.waitForRequest((r) => r.url().includes('/api/dm/agent/invite'), T);
-  await sheet.getByRole('button', { name: /^Bring Bob’s agent in/ }).click();
+  await sheet.getByRole('button', { name: /^Bring .* in/ }).click(); // an agent goes by its concrete name since 9133893b
   const body = JSON.parse((await sent).postData() || '{}');
   assert.deepEqual([...(body.tasks_from || [])].sort(), bobKeys, name + ': tasks_from is Bob’s member keys');
   assert.equal((body.share || []).length, 3, name + ': the messages since the date are shared');
@@ -90,10 +90,10 @@ async function desktop(browser) {
   await p.getByRole('menuitem', { name: 'Leave group…' }).click();
   const leave = p.getByRole('dialog', { name: /^Leave “Dock crew east”\?/ });
   await leave.getByRole('button', { name: 'Leave group' }).click();
-  await leave.getByRole('alert').waitFor(T);
-  await snap('leave-refused');
-  await leave.getByRole('button', { name: 'Cancel' }).click();
+  // Since 4645ead6 leaving navigates at once, and a refusal comes back as a kept change.
   await leave.waitFor({ state: 'hidden', ...T });
+  await p.getByRole('region', { name: 'Group changes', exact: true }).getByText(/admin/i).first().waitFor(T);
+  await snap('leave-refused');
 
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();

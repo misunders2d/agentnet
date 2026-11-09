@@ -56,7 +56,7 @@ func TestHistoryArchiveGroupStructuralJourney(t *testing.T) {
 		return a.archivesFor(tctx(t), phone.Self())
 	})
 	for page := 0; page < 10; page++ {
-		more, e := a.historyCatchupPage(tctx(t), phone.Self())
+		more, e := a.pageByHand(tctx(t), phone.Self())
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -172,10 +172,10 @@ func TestHistoryArchiveGroupStructuralJourney(t *testing.T) {
 		if err = a.reconcileHistory(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
-		a.historyStep(tctx(t))
+		a.stepByHand(tctx(t))
 		if _, err = a.syncRoots(); err != nil {
 			t.Fatal(err)
 		}

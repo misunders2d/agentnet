@@ -68,7 +68,7 @@ function dmMatches(entry, thread, me) {
     (ask ? m.target && m.target.address === agents[0].host?.address &&
       m.target.fingerprint === agents[0].host?.fingerprint &&
       text(m.target.agent_id) === text(agents[0].agent_id) : !m.target));
-  return matches.length === 1;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function threadMatches(entry, thread, me) {
@@ -85,19 +85,25 @@ function threadMatches(entry, thread, me) {
     body = r.body;
   } else if (!["message", "question", "task"].includes(kind)) return false;
   if (typeof to !== "string" || !to || thread.peer !== to) return false;
-  return messages.filter(m => m.id === entry.id && human(m, me, false) &&
+  const found = messages.filter(m => m.id === entry.id && human(m, me, false) &&
     m.to === to && m.kind === kind && m.body === body &&
     text(m.reply_to) === reply && text(m.quote) === text(r.quote) &&
     (empty(r.agent_id) ? !m.target : m.target?.address === to && m.target.agent_id === r.agent_id) &&
-    (entry.endpoint !== "/api/act" || kind !== "result" || m.status === "done")).length === 1;
+    (entry.endpoint !== "/api/act" || kind !== "result" || m.status === "done"));
+  return found.length === 1 ? found[0] : undefined;
 }
 
 /** Read-only reconciliation. Errors and incomplete/changed views retain intent. */
 export async function isSendPersisted(host, entry) {
-  if (!valid(entry)) return false;
+  return !!(await persistedSend(host, entry));
+}
+
+// The stored copy of the saved request, or undefined (no proof).
+async function persistedSend(host, entry) {
+  if (!valid(entry)) return undefined;
   try {
     const overview = await host.api("/api/overview"), me = overview?.me;
-    if (!me || typeof me.address !== "string" || !me.address || typeof me.fingerprint !== "string" || !me.fingerprint) return false;
+    if (!me || typeof me.address !== "string" || !me.address || typeof me.fingerprint !== "string" || !me.fingerprint) return undefined;
     if (entry.endpoint === "/api/send" || entry.endpoint === "/api/act") {
       // Thread accepts any stored physical ID, including older/archived threads.
       const thread = await host.api("/api/thread?id=" + encodeURIComponent(entry.id));
@@ -109,8 +115,56 @@ export async function isSendPersisted(host, entry) {
     for (const id of ids) {
       let thread;
       try { thread = await host.api("/api/dm?id=" + encodeURIComponent(id)); } catch { continue; }
-      if (thread?.id === id && dmMatches(entry, thread, me)) return true;
+      const m = thread?.id === id ? dmMatches(entry, thread, me) : undefined;
+      if (m) return m;
     }
   } catch { /* Lookup failure cannot acknowledge the saved request. */ }
-  return false;
+  return undefined;
+}
+
+const stopped = m => m?.queued_send?.state === "needs_review";
+const waiting = m => ["pending", "dispatching"].includes(m?.queued_send?.state);
+
+/**
+ * The person's explicit "Retry saved send" of one journal entry. A message this
+ * device already holds as stopped is never sent from here: its own chat row
+ * (Retry/Discard) decides. An unknown or failed lookup keeps the saved intent.
+ * Returns what is proven: "held", "pending", "sent" or "discarded".
+ */
+export async function replaySavedSend(host, entry) {
+  if (entry?.endpoint === "/api/dm/send") {
+    // Its ID is this device's own; a stopped row under it is that message, whatever its files.
+    let thread;
+    try { thread = await host.api("/api/dm?id=" + encodeURIComponent(entry.conversation)); }
+    catch { throw new Error("This message's chat could not be checked, so nothing was sent. It stays saved here; try again."); }
+    if (thread?.id !== entry.conversation || !Array.isArray(thread.messages))
+      throw new Error("This message's chat could not be checked, so nothing was sent. It stays saved here; try again.");
+    // Any row under this ID is this message (the host refuses other words under it):
+    // what it shows decides, and nothing is requested again.
+    const own = thread.messages.find(m => m.dir === "out" && (m.lid || m.id) === entry.id);
+    if (own) return stopped(own) ? "held" : waiting(own) ? "pending" : own.queued_send?.state === "cancelled" ? "discarded" : "sent";
+  }
+  const state = m => stopped(m) ? "held" : waiting(m) ? "pending" : "sent";
+  const found = await persistedSend(host, entry);
+  if (found) return state(found);
+  let answer;
+  try { answer = await host.api(entry.endpoint, entry.request); }
+  catch (e) {
+    // The host's own answer that the person discarded this exact message.
+    if (e?.status >= 400 && e.status < 500 && /discarded this message/i.test(String(e.message))) return "discarded";
+    const again = await persistedSend(host, entry);
+    if (again) return state(again);
+    throw e;
+  }
+  // The host's answer: a message it holds stopped (one held here, or refused) answers
+  // "failed" with its words; that is not a send.
+  return answer?.state === "failed" ? "held" : "pending";
+}
+
+/** Words for what replaySavedSend proved; never more than that. */
+export function savedSendReceipt(state) {
+  return state === "held" ? "This message is stopped in its chat and was not sent. Use Retry or Discard there."
+    : state === "discarded" ? "You discarded this message, so it was not sent."
+    : state === "sent" ? "This message is already in its chat. It was not sent again."
+    : "Saved send is in the outbox.";
 }

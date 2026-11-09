@@ -8,6 +8,10 @@ import model from './comic_model.mjs';
 import {pendingSends} from '../static/optimistic.mjs';
 import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
+import {savedSendDrafts,readPending} from '../web/src/send-journal.mjs';
+import {savedReadOnly,readOnlyTitle} from '../web/src/saved-storage.ts';
+// store.ts now saves drafts through these (B5/B6); the sandbox gets the real modules, its own storage and a window stub.
+const savedPrelude="var savedStorage=()=>localStorage;if(typeof window==='undefined')globalThis.window={addEventListener(){},removeEventListener(){}};\n";
 const scheduleSource=stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts',import.meta.url),'utf8')).replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8')).replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
 const tick=()=>new Promise(r=>setImmediate(r));
@@ -39,7 +43,7 @@ function fixture(kind='dm') {
   }
   if(path.startsWith('/api/agents'))return {agents:[]};return {};
  }};
- const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'}});
+ const Store=runInNewContext(savedPrelude+scheduleSource+'\n'+source+'\nStore',{...env,api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,savedSendDrafts,readPending,savedReadOnly,readOnlyTitle,brand:{storage:'test'}});
  const store=new Store(host);
  let queued=false;store.subscribe(()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;const o=store.get().open;if(!o)return;const draft=store.draft(o.id),visit=store.readVisit(o,o.kind==='dm'?draft.topic||'':'',o.kind==='dm'&&!!draft.newTopic);if(visit)store.reportVisible(visit,(store.get().views[o.id]?.messages||[]).filter(m=>m.id==='seen'));});}});
  return {store,calls,rows,env,view,overview,now:()=>now,

@@ -59,7 +59,7 @@ func TestHistoryCatchupPreservesPIDTopicAndFileSource(t *testing.T) {
 		t.Fatal("different topic accepted as same exact source")
 	}
 	for pages := 0; ; pages++ {
-		more, e := a.historyCatchupPage(tctx(t), phone.Self())
+		more, e := a.pageByHand(tctx(t), phone.Self())
 		if e != nil || pages > 20 {
 			t.Fatalf("catch-up: %d %v", pages, e)
 		}

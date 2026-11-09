@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+val fixtureRun = providers.gradleProperty("agentnetFixtureRun").orNull?.also {
+    require(it.matches(Regex("[a-z][a-z0-9]{0,31}"))) { "agentnetFixtureRun must be a lowercase package-safe run name." }
+}
 // Published preview updates must use their original local key; never commit it.
 val previewKeystore = providers.gradleProperty("agentnetPreviewKeystore")
     .orElse(providers.environmentVariable("AGENTNET_PREVIEW_KEYSTORE"))
@@ -34,7 +37,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     signingConfigs.getByName("debug") {
-        if (previewKeystore.isPresent) {
+        if (fixtureRun == null && previewKeystore.isPresent) {
             storeFile = file(previewKeystore.get()).also {
                 check(it.isFile) { "The existing preview signing key is missing." }
             }
@@ -45,9 +48,9 @@ android {
     }
     buildTypes {
         debug {
-            applicationIdSuffix = ".preview"
-            buildConfigField("boolean", "SELF_UPDATE", "true")
-            resValue("string", "app_name", "AgentNet Native Preview")
+            applicationIdSuffix = fixtureRun?.let { ".fixture.$it" } ?: ".preview"
+            buildConfigField("boolean", "SELF_UPDATE", if (fixtureRun == null) "true" else "false")
+            resValue("string", "app_name", if (fixtureRun == null) "AgentNet Native Preview" else "AgentNet Release Fixture")
         }
         release { isMinifyEnabled = false }
         create("previewRelease") {

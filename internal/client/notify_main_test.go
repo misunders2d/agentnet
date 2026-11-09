@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/sqlitedb/schematest"
 )
 
 // Tests never show real desktop notifications or open terminals; the
@@ -51,5 +53,7 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("AGENTNET_NOTIFY", "off")
 	terminalLauncher = ""
-	os.Exit(m.Run())
+	code := m.Run()
+	fmt.Fprintf(os.Stderr, "schema image: %d fixture stores started from a copy, not schema proof\n", schematest.Copies())
+	os.Exit(code)
 }

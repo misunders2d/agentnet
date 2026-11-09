@@ -38,7 +38,7 @@ func TestPresenceOnlyMembersKeepHistoryDeferral(t *testing.T) {
 	if bits := a.convWork.bits.Load(); bits&convRetry != 0 || bits&convRetryHeld == 0 {
 		t.Fatalf("presence-only list: work %b, want the held look without a history sweep", bits)
 	}
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	if !deferred() {
 		t.Fatal("presence-only list swept deferred own-device history again")
 	}
@@ -51,7 +51,7 @@ func TestPresenceOnlyMembersKeepHistoryDeferral(t *testing.T) {
 	if bits := a.convWork.bits.Load(); bits&convRetry == 0 {
 		t.Fatalf("changed list: work %b, want the full look again", bits)
 	}
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	if deferred() {
 		t.Fatal("changed list kept the old history deferral")
 	}

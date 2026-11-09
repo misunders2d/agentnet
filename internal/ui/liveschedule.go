@@ -79,6 +79,24 @@ func (l *Live) ScheduleAudience(conv, topic string) (client.ScheduledAudience, e
 	return row, scheduleRefusal(err)
 }
 func (l *Live) ChangeSchedule(ctx context.Context, what string, d ScheduleDraft) (client.ScheduledSend, error) {
+	switch what { // an accepted message in its chat, not a schedule: its id alone names it
+	case "retry_send", "discard_send", "hold_send":
+		if !protocol.ValidID(d.ID) {
+			return client.ScheduledSend{}, Refuse("Choose the exact message.")
+		}
+		act := l.a.RetryQueuedSend
+		switch what {
+		case "discard_send":
+			act = l.a.DiscardQueuedSend
+		case "hold_send":
+			act = l.a.HoldQueuedSend
+		}
+		row, err := act(d.ID)
+		if err != nil {
+			return row, Refuse(sentence(err))
+		}
+		return row, nil
+	}
 	files, cleanup, err := l.takeStaged(d.Files)
 	if err != nil {
 		return client.ScheduledSend{}, err
@@ -170,7 +188,7 @@ func (s *Server) changeSchedule(w http.ResponseWriter, r *http.Request) {
 		if !readJSON(w, r, &d) {
 			return
 		}
-	case "cancel", "send_now":
+	case "cancel", "send_now", "retry_send", "discard_send", "hold_send":
 		var a ScheduleAction
 		if !readJSON(w, r, &a) {
 			return

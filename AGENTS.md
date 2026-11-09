@@ -183,7 +183,10 @@ program, `agentnet`, that is both the laptop client and the Hub.
   and representative workload counts do not establish complete control coverage.
   Measure input-to-visible-feedback and input-to-confirmed-result separately,
   with normal and 10x history, cold/warm views and concurrent synchronization.
-  Record the measured conditions and enforce the under-1000-ms local-feedback bound.
+  Record the measured conditions and enforce the under-1100-ms local-feedback
+  bound (owner, 2026-11-08: "if it's slightly above 1 s - that's also
+  acceptable"; the latency fixture, its verdict and the coverage gate use
+  <1100 ms).
   Slow, failing, skipped or untested required
   interactions block publication. Earlier accepted latency/physical-device
   limits do not waive this next-release gate. Preserve truthful pending,

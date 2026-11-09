@@ -99,6 +99,8 @@ function Listed({ k, land, children }: { k: string; land: (key: string) => void;
 }
 
 export function OksView() {
+  // Kept here: a refused dismiss brings the list back with its retry showing.
+  const [reportsOpen, setReportsOpen] = useState<boolean>();
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const loadError = useStore(store, (s) => s.loadError);
@@ -202,7 +204,7 @@ export function OksView() {
           </ul>
         </section>
       )}
-      {notices.length > 0 && <Reports notices={notices} o={o} />}
+      {notices.length > 0 && <Reports notices={notices} o={o} open={reportsOpen} onOpenChange={setReportsOpen} />}
       <HeldBack o={o} />
     </div>
   );

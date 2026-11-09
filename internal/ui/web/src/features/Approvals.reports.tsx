@@ -62,11 +62,12 @@ export function decidersWords(report: T.Report | undefined, host: string, o: T.O
   return list + (names.length === 1 ? " decides" : " decide") + " these from their devices.";
 }
 
-export function Reports({ notices, o }: { notices: T.ReviewItem[]; o: T.Overview }) {
+export function Reports({ notices, o, open, onOpenChange }: { notices: T.ReviewItem[]; o: T.Overview; open?: boolean; onOpenChange?: (open: boolean) => void }) {
   const hosts = [...new Set(notices.map((n) => n.peer))];
   const native = notices.some(n => n.report?.items?.some(x => x.native));
+  const [own, setOwn] = useState(native);
   return (
-    <Collapsible.Root defaultOpen={native} className="mx-4 mt-6 rounded-2xl border-[1.5px] border-ink/15 bg-sunken">
+    <Collapsible.Root open={open ?? own} onOpenChange={next => { setOwn(next); onOpenChange?.(next); }} className="mx-4 mt-6 rounded-2xl border-[1.5px] border-ink/15 bg-sunken">
       <Collapsible.Trigger className="group flex min-h-14 w-full items-center gap-3 rounded-2xl px-4 text-left">
         <IconDevices size={20} className="shrink-0 text-text-2" aria-hidden="true" />
         <span className="flex-1 font-bold">{native ? "Requests from your agents" : "Reports from other computers"}</span>

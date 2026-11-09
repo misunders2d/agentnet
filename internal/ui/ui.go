@@ -492,6 +492,8 @@ type DMMessage struct {
 	Replica           bool                          `json:"replica,omitempty"`
 	PID               string                        `json:"pid,omitempty"` // the agent participation it is for, from or about
 	Attachments       []FileView                    `json:"attachments,omitempty"`
+	// QueuedSend: accepted here and not yet stored for sending. Not a delivery state.
+	QueuedSend *QueuedSendView `json:"queued_send,omitempty"`
 
 	// VerifiedAgent: an agent's turn as sent, by its participation's exact
 	// host key (client.ConvMessage.VerifiedAgent). UIs should label an
@@ -848,6 +850,16 @@ type DMDraft struct {
 	ReplyTo       string                  `json:"reply_to,omitempty"`
 	Files         []string                `json:"files,omitempty"`
 	Quote         string                  `json:"quote,omitempty"`
+}
+
+// QueuedSendView is where one accepted message stands: pending or dispatching
+// (on its way, retried under its id) or needs_review (stopped: its Detail says
+// why; POST /api/schedule/retry_send or discard_send). Diagnostic is the
+// technical cause, for a details view only.
+type QueuedSendView struct {
+	State      string `json:"state"`
+	Rev        int64  `json:"rev"`
+	Diagnostic string `json:"diagnostic,omitempty"`
 }
 
 // DMStateText is what the page says about a DM message's state.

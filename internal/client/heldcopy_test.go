@@ -110,13 +110,13 @@ func TestHeldResentRecordSettlesIntoOneNotice(t *testing.T) {
 		t.Fatalf("legacy rows: %d %v", len(held), err)
 	}
 	a.convWork.due(convRetry)
-	a.convSync(tctx(t))
+	a.convSyncByHand(tctx(t))
 	if held, err = a.Quarantine(); err != nil || len(held) != 1 || held[0].ID != copies[0] || held[0].Copies != 4 {
 		t.Fatalf("legacy rows after one look: %+v %v", held, err)
 	}
 	for range 3 {
 		a.convWork.due(convRetry)
-		a.convSync(tctx(t))
+		a.convSyncByHand(tctx(t))
 	}
 	if n := holdLines(); n != 5 {
 		t.Fatalf("an unchanged recheck logged again: %d lines", n)
@@ -127,7 +127,7 @@ func TestHeldResentRecordSettlesIntoOneNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 4 {
-		a.convSync(tctx(t))
+		a.convSyncByHand(tctx(t))
 	}
 	for _, id := range copies {
 		if state, e := a.store.disposition(id); e != nil || state != protocol.StateDelivered {

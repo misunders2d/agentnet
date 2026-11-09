@@ -873,7 +873,13 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			}
 			return over(tx, replyID)
 		}
-		_, err = a.SendMessage(ctx, Outgoing{To: from, Body: d.Text, ReplyTo: in.Ref.ID, Kind: replyKind(kind), Status: status, claim: claim})
+		// Its claim commits with its outbox row, so an answer cannot be lost.
+		// Delivering it is the outbox's work, not the stream reader's.
+		send := withoutReaderBudget(ctx)
+		if a.awayFromReader(ctx) != nil {
+			send = WithQueuedSend(send, "")
+		}
+		_, err = a.SendMessage(send, Outgoing{To: from, Body: d.Text, ReplyTo: in.Ref.ID, Kind: replyKind(kind), Status: status, claim: claim})
 		var dr *decisionRefused
 		switch {
 		case errors.As(err, &dr):

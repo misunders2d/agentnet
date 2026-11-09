@@ -5,6 +5,7 @@
 // executor or an answer proves), and the approval card when the server
 // lists actions for it. Delivery says only what receipts prove.
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { savedReadOnly } from "../saved-storage";
 import { Popover } from "@base-ui/react/popover";
 import { parseCollective } from "../collective-mentions.mjs";
 import { sendID } from "../optimistic.mjs";
@@ -14,7 +15,7 @@ import { requestResultText } from "../requestResult";
 import {
   IconArrowBackUp, IconBolt, IconMessageQuestion, IconCheck, IconChecks, IconClock, IconAlertTriangle, IconEye, IconCircleCheckFilled, IconCircle,
 } from "@tabler/icons-react";
-import type { T } from "../api";
+import { errorText, type T } from "../api";
 import { useApp, useHoverPointer, useWide } from "../context";
 import { deliveryWord, deviceName, firstLine, fullStamp, owner, personName, plain, reminderOf, stampOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
@@ -75,6 +76,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const [confirm, setConfirm] = useState<boolean | null>(null);
   const [emoji, setEmoji] = useState<boolean | null>(null);
   const [hot, setHot] = useState(false);
+  // An open actions menu keeps its toolbar, and its open state lives here: a pointer
+  // leaving or a redraw while it opens (macOS WKWebView) must not unmount or close it.
+  const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
   const [assign, setAssign] = useState<boolean | null>(null);
@@ -137,14 +141,14 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const body = (
     <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
-      {wide && hot && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} />}
+      {wide && (hot || menuOpen) && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} menuOpen={menuOpen} onMenuOpen={setMenuOpen} />}
       {last && !who.mine && (
         <span className="absolute -left-10 bottom-0">
           {who.agent ? <AgentAvatar seed={who.seed} size={32} guest={who.guest} device={who.device} /> : <PersonAvatar name={who.name} seed={who.seed} size={32} guest={who.guest} />}
         </span>
       )}
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
-      {!grouped && m._local && <p className="text-xs text-muted" role="status">{sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
+      {!grouped && m._local && <div className="text-xs text-muted" role="status" data-local-send={m._failed ? "stopped" : "waiting"}>{sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}<LocalSendActions m={m} /></div>}
       {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
@@ -178,7 +182,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
       <div hidden={terminal} className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={() => { if (wide) setHot(true); onEntryFocus?.(m.id); }}
-        onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]")) setHot(false); } : undefined}
+        onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]") && !e.currentTarget.contains(document.activeElement)) setHot(false); } : undefined}
         {...(readOnly || selecting ? {} : touch.handlers)}
         onPointerMove={e => { if (wide && !hot) setHot(true); if (!readOnly && !selecting) touch.handlers.onPointerMove(e); }}
         onContextMenu={readOnly || selecting ? undefined : e => {
@@ -201,10 +205,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
           {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
           {!compact && !terminal && body}
-          {grouped && !targets && m._local && <p className="mt-1 text-[13px] text-muted" role="status">
+          {grouped && !targets && m._local && <div className="mt-1 text-[13px] text-muted" role="status" data-local-send={m._failed ? "stopped" : "waiting"}>
             {requestLabel(m, ctx)} · {sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}
-            {m._failed && <button type="button" className="ml-2 min-h-11 underline" onClick={m._retry}>Retry</button>}
-          </p>}
+            <LocalSendActions m={m} />
+          </div>}
           {!outcomeOnly && <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />}
           {!targets && !m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} answer={answer} onDetails={acts.details} onJump={onJump} />}
           {compact && live && !selecting && <button type="button" className="min-h-11 px-1 text-[13px] underline"
@@ -346,6 +350,18 @@ function exactRequestLabel(m: AnyMsg, ctx: Ctx) {
   const target = !isThreadMsg(m) ? agentOf(ctx, m.pid) : undefined;
   const duplicateName = target && (ctx.dm?.agents || []).some(a => a.pid !== target.pid && agentLabel(a, ctx) === agentLabel(target, ctx));
   return requestLabel(m, ctx) + (duplicateName ? " · " + deviceWords(target.host.address, ctx.overview) + " · " + (target.agent_id || target.pid).slice(0, 8) : "");
+}
+
+// What the person can do about a message not yet stored for sending. The short
+// reason is above; the technical cause stays behind Details.
+function LocalSendActions({m}: {m: AnyMsg}) {
+  const store = useApp();
+  const run = (action?: () => unknown) => { void Promise.resolve().then(action).catch(e => store.toast(errorText(e), "error")); };
+  return <>
+    {m._failed && m._retry && <button type="button" className="ml-2 min-h-11 underline" data-send-retry onClick={() => run(m._retry)}>Retry</button>}
+    {m._discard && <button type="button" className="ml-2 min-h-11 underline" data-send-discard onClick={() => run(m._discard)}>{m._failed ? "Discard" : savedReadOnly() ? "Stop" : "Cancel"}</button>}
+    {m._diagnostic && <details data-send-diagnostic><summary className="cursor-pointer underline">Details</summary><code className="block whitespace-pre-wrap break-words">{m._diagnostic}</code></details>}
+  </>;
 }
 
 function SendFailure({m,ctx,failure,onDetails}: {m:AnyMsg;ctx:Ctx;failure:NonNullable<ReturnType<typeof sendFailure>>;onDetails:()=>void}) {

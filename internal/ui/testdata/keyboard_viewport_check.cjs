@@ -65,7 +65,10 @@ const frames = (p, n = 3) => p.evaluate((n) => new Promise((done) => { const go 
 async function openChat(p, name) {
   await p.goto(url);
   await p.waitForSelector('section[aria-label="Chats"]', { timeout: 20000 });
-  await p.getByRole('button', { name: /Not linked to a person/ }).first().click();
+  // Since 9133893b a chat bound to no person is not a list row; this one is reached by
+  // its waiting task, which lands on that task, then the app's own way down to the newest.
+  await p.getByRole('button', { name: /Count the pallets on every dock/ }).first().click();
+  await p.getByRole('button', { name: /^(\d+ new|Latest)$/ }).first().click();
   await p.waitForFunction((n) => {
     const sr = document.getElementById('skin').shadowRoot;
     const scope = sr.querySelector('[data-card]:not([aria-hidden])') || sr.querySelector('main') || sr;
@@ -76,7 +79,8 @@ async function openChat(p, name) {
     throw new Error(name + ': the conversation did not open with ' + total + ' messages and a message box: ' + JSON.stringify(await measure(p)) + '\n' + e.message);
   });
   await p.waitForTimeout(450); // the card has arrived
-  const m = await measure(p);
+  let m = await measure(p);
+  for (let i = 0; i < 30 && !(m.gap !== null && m.gap <= 1); i++) { await p.waitForTimeout(100); m = await measure(p); } // Latest scrolls smoothly
   assert.ok(m.gap !== null && m.gap <= 1, name + ': the conversation opens at its newest message: ' + JSON.stringify(m));
   return m;
 }
@@ -264,7 +268,14 @@ async function desktop(browser) {
   p.on('pageerror', (e) => errors.push(String(e)));
   let m = await openChat(p, name);
   assert.equal(m.coarse, false, name + ': a fine pointer');
-  assert.ok(m.focused, name + ': opening a chat puts the cursor in the field');
+  // This chat opened from a waiting task and Latest. A list row gives the first focus.
+  await p.goto(url);
+  await p.waitForSelector('section[aria-label="Chats"]', { timeout: 20000 });
+  await p.getByRole('button', { name: /not linked to a person/i }).first().click();
+  await field(p).waitFor({ timeout: 20000 });
+  await p.waitForTimeout(450); // the card has arrived
+  m = await measure(p);
+  assert.ok(m.focused, name + ': opening a chat from its list row puts the cursor in the field: ' + JSON.stringify(m));
   assert.equal(await p.getByRole('radio', { name: 'Do it' }).count(), 0, name + ': no up-front task toggle');
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();

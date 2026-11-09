@@ -9,12 +9,16 @@ import model from './comic_model.mjs';
 import {pendingSends} from '../static/optimistic.mjs';
 import {share} from '../web/src/structural.ts';
 import {mainPreferences,personRoots} from '../skins/shared/person-topics.mjs';
+import {savedSendDrafts,readPending} from '../web/src/send-journal.mjs';
+import {savedReadOnly,readOnlyTitle} from '../web/src/saved-storage.ts';
+// store.ts now saves drafts through these (B5/B6); the sandbox gets the real modules, its own storage and a window stub.
+const savedPrelude="var savedStorage=()=>localStorage;if(typeof window==='undefined')globalThis.window={addEventListener(){},removeEventListener(){}};\n";
 const scheduleSource=stripTypeScriptTypes((await readFile(new URL('../web/src/schedule-saves.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'')).replace(/^export /gm,'');
 const source=stripTypeScriptTypes((await readFile(new URL('../web/src/store.ts',import.meta.url),'utf8'))
  .replace(/^import .*;$/gm,'').replace('constructor(readonly host: Host) {','constructor(host: Host) { this.host = host;')).replace(/^export /gm,'');
 const visibilityListeners=new Map(),focusListeners=new Map();
-const Store=runInNewContext(scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true,addEventListener:(type,fn)=>visibilityListeners.set(type,fn),removeEventListener:type=>visibilityListeners.delete(type)},window:{addEventListener:(type,fn)=>focusListeners.set(type,fn),removeEventListener:type=>focusListeners.delete(type)},localStorage:{getItem:()=>null,setItem:()=>{}},setTimeout,clearTimeout});
+const Store=runInNewContext(savedPrelude+scheduleSource+'\n'+source+'\nStore',{api,errorText,pendingSends,share,messageTarget:model.messageTarget,currentCatalogAgents:model.currentCatalogAgents,directChatKey:model.directChatKey,mainPreferences,personRoots,savedSendDrafts,readPending,savedReadOnly,readOnlyTitle,brand:{storage:'test'},document:{visibilityState:'visible',hasFocus:()=>true,addEventListener:(type,fn)=>visibilityListeners.set(type,fn),removeEventListener:type=>visibilityListeners.delete(type)},window:{addEventListener:(type,fn)=>focusListeners.set(type,fn),removeEventListener:type=>focusListeners.delete(type)},localStorage:/* drafts are saved and read back (B6); each case has its own workspace key */(()=>{const m=new Map();return{getItem:k=>m.get(k)??null,setItem:(k,v)=>{m.set(k,String(v));},removeItem:k=>{m.delete(k);}};})(),setTimeout,clearTimeout});
 const tick=()=>new Promise(r=>setImmediate(r)),gate=()=>{let release;const promise=new Promise(r=>release=r);return{promise,release};};
 // These small fixtures present every row of the selected topic. The actual
 // timeline supplies this viewport input through its one observer.
@@ -124,7 +128,7 @@ for(const blocked of [false,true]){
   if(path.startsWith('/api/agents'))return{agents:[]};return{};
  }};
  const s=new Store(host);mount(s);await s.start();s.setDraft(conv,{text:'',topic});await s.open({kind:'dm',id:conv});for(let i=0;i<20;i++)await tick();
- assert.equal(reads,1);assert.equal(s.get().toasts.length,blocked?0:1,'confirmation failure uses existing load error only');assert(!s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'),'accepted write has no duplicate write warning');
+ assert.equal(reads,1);assert.equal(s.get().toasts.length,blocked?0:1,'confirmation failure uses existing load error only: '+JSON.stringify(s.get().toasts.map(t=>t.text)));assert(!s.get().toasts.some(t=>t.text==='Read status not confirmed. Reopen this chat to retry.'),'accepted write has no duplicate write warning');
  s.close();assert.equal(s.get().open,null,'Back remains available during blocked confirmation');heldView.release();for(let i=0;i<20;i++)await tick();s.stop();console.log(JSON.stringify({ok:true,mode:blocked?'blocked-read-confirmation':'failed-read-confirmation',reads}));
 }
 

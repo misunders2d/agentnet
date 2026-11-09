@@ -1,5 +1,35 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+## v0.10.10 candidate (MEL-748) — November 4, not released
+
+Branch `t3/v0110-responsive`. Owner reports after v0.10.9: the app froze during
+catch-up, messages sat in the queue and were cancelled, and every interaction was
+slow on the ThinkPad. Causes, fixes, measurements and what is still unshown are in
+[interaction evidence](INTERACTION_COVERAGE.md#mel-748-v01010-candidate--november-4-2026).
+Exact control evidence, Back on real engines, send-to-custody and what stays unproven are
+there too. Run the opt-in journey with `AGENTNET_CUSTODY=1`. A new client test changes the
+assignment of every test after it, so re-derive and rebalance `scripts/race-shard.sh`.
+UI tests and the client's race partitions start new stores from a copy of the fresh schema
+(`schematest.Use`), and their runs say how many: those results are not schema proof. Every
+other client run, CI's native jobs included, runs every step.
+Pre-CI review not cleared; no full, platform or skins qualification has run.
+
+## v0.10.9 published and Hub deployed — November 3
+
+[App v0.10.9](https://github.com/misunders2d/agentnet/releases/tag/v0.10.9) at
+`cabe5c3c`, MEL-747: a recovered person's own frozen old identity heals, and
+messages naming a claim-frozen person wait. Hub image
+`agentnet-revived:v0.10.9-cabe5c3c`. Follow-ups open: Bohdan's quarantined rows and
+closing MEL-747 after on-device checks. The owner found the app froze on this
+release; see the candidate above.
+
+## v0.10.8 published and Hub deployed — November 3
+
+[App v0.10.8](https://github.com/misunders2d/agentnet/releases/tag/v0.10.8) at
+`78aac66d`, MEL-736 messaging continuity from the same verified Google email. Hub
+image `agentnet-revived:v0.10.8-78aac66d`. Three Hub deploys that day each started
+the 30-minute grace period, after which older devices cannot send until they update.
+
 ## MEL-736 Option A candidate — November 2 evening
 
 `mel736-one-person` implements messaging continuity from the same verified

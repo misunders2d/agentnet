@@ -44,7 +44,12 @@ export interface Acts {
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
 
-export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; mine: boolean }) {
+// Focus leaving an open menu closes it only when the person moved it (Tab, a
+// press). A redraw that moves focus (macOS WKWebView) must not close it.
+let personInput = -Infinity;
+if (typeof document !== "undefined") for (const type of ["keydown", "pointerdown"]) document.addEventListener(type, () => { personInput = performance.now(); }, true);
+
+export function Toolbar({ m, ctx, can, acts, mine, menuOpen, onMenuOpen }: { m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; mine: boolean; menuOpen: boolean; onMenuOpen: (open: boolean) => void }) {
   const portal = usePortal();
   const btn = "grid size-11 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink data-[popup-open]:bg-sunken";
   return (
@@ -55,7 +60,11 @@ export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can:
           trigger={<button type="button" aria-label="React" title="React" className={btn}><IconMoodSmile size={20} /></button>} />
       )}
       {can.reply && <button type="button" aria-label="Reply" title="Reply" onClick={acts.reply} className={btn}><IconArrowBackUp size={20} /></button>}
-      <Menu.Root modal={false}>
+      <Menu.Root modal={false} open={menuOpen} onOpenChange={(open, details) => {
+        // Cancelled, not only ignored: an ignored close still runs the menu's own close.
+        if (!open && details.reason === "focus-out" && performance.now() - personInput > 1000) { details.cancel(); return; }
+        onMenuOpen(open);
+      }}>
         <Menu.Trigger aria-label="More actions" title="More actions" className={btn + " data-[popup-open]:bg-sunken"}><IconDots size={20} /></Menu.Trigger>
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align={mine ? "end" : "start"} sideOffset={6} collisionPadding={12} className="z-50">

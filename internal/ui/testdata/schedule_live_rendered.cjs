@@ -26,7 +26,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
   // Leave at least 45 seconds for saving/editing before the original deadline.
   const oldDue=Math.ceil((Date.now()+45000)/60000)*60000,newDue=oldDue+60000;
   const fillTime=async(dialog,prefix,instant)=>{const iso=new Date(instant).toISOString();await dialog.getByLabel(prefix+' date',{exact:true}).fill(iso.slice(0,10));await dialog.getByLabel(prefix+' time',{exact:true}).fill(iso.slice(11,16));};
-  await fillTime(create,'Send',oldDue);await create.getByRole('button',{name:'Save schedule',exact:true}).click();await list().waitFor();
+  await fillTime(create,'Send',oldDue);await create.getByRole('button',{name:'Save schedule',exact:true}).click();await create.waitFor({state:'hidden'});await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Outbox\b/}).click();await list().waitFor();
   const [saved]=await rows();assert.equal(saved.due,new Date(oldDue).toISOString().replace('.000',''));assert.equal(saved.rev,1);assert.equal(saved.files.length,1);
   await list().getByRole('button',{name:'Edit schedule',exact:true}).click();await fillTime(list(),'Reschedule',newDue);
   const time=list().getByLabel('Reschedule time',{exact:true});await time.focus();

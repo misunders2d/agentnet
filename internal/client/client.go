@@ -44,6 +44,9 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
+	readerAwayCtx atomic.Pointer[context.Context] // this run's, for work leaving the stream's reader
+	readerAway    sync.WaitGroup                  // that work, waited for when the run ends
+
 	deliveryLocks    keyedLocks // envelope ID, shared by immediate sends and retry passes
 	flushOnce        sync.Once
 	flushLock        chan struct{} // readable turns serialize independently of replication
@@ -57,6 +60,8 @@ type Agent struct {
 	receiptLock      chan struct{} // dispositions never wait for history upkeep
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
+	queued           queuedSends
+	topicCache       topicCache
 	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
 	humanMu          sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
 	statusLocks      keyedLocks    // one status of a request at a time (headless.go)
@@ -74,6 +79,10 @@ type Agent struct {
 	adQuery          string                     // this run's signed session ad, for the push stream
 	kick             func()                     // wakes the current stream's retry worker
 	kickMu           sync.Mutex                 // guards kick for kickNow
+	paceClaimed      func()                     // optional deterministic after-claim test barrier
+	retryFiring      func(uint64)               // optional before-claim test barrier
+	retryClaimed     func(uint64)               // optional after-claim test barrier
+	readerFiring     func(string, uint64)       // optional before-mutation test barrier
 	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
 	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
@@ -335,6 +344,7 @@ func Open(home string) (*Agent, error) {
 func (a *Agent) Close() error {
 	a.fetches.stop()
 	a.stopArchivePosts()
+	a.queued.stop()
 	a.stopBackgroundPosts()
 	a.typingDisconnected()
 	a.hub.release()

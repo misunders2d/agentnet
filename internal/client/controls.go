@@ -1082,9 +1082,10 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		if e != nil {
 			return hold(reasonProof, e.Error())
 		}
-		for _, member := range packet.State.Members {
-			if _, e = a.refreshPerson(ctx, member.Person, false); e != nil {
-				return holdForMember(e, member.Person == sp.info.Person, hold)
+		persons := groupMemberPersons(packet.State.Members)
+		for i, e := range a.refreshAdmitting(ctx, persons) {
+			if e != nil {
+				return holdForMember(e, persons[i] == sp.info.Person, hold)
 			}
 		}
 		group = &packet

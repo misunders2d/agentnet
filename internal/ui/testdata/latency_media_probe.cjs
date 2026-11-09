@@ -27,8 +27,18 @@ function mediaResponse(bytes,method,range){
 const signature=d=>d?.currentSrcScheme==='blob'&&d.errorCode===4&&d.readyState===0&&d.networkState===3;
 const empty=a=>Array.isArray(a)&&a.length===0;
 const clean=r=>empty(r.pageErrors)&&empty(r.feedbackFailures)&&empty(r.presentationFailures)&&!r.driverError;
+// The fixture's source selection refuses before metadata when every real source it probes, though
+// claimed playable, ends in errorCode 4 (runs 42489116365, 42509830468, 42514401934: MP4 and WebM alike).
+const WEBM_TYPE='video/webm; codecs="vp8,vorbis"',NO_DECODER='No supported real video source decoder; playback is unqualified';
+const refusedSources=r=>r?.mediaSourceCapabilities?.length===2&&r.mediaSourceCapabilities.every(c=>typeof c?.canPlayType==='string'&&c.canPlayType!=='')&&
+ r.mediaSourceProbes?.length===2&&r.mediaSourceProbes[0]?.contentType===MP4.contentType&&r.mediaSourceProbes[1]?.contentType===WEBM_TYPE&&r.mediaSourceProbes.every(p=>p.loaded===false&&p.error===4);
 function isWindowsMediaCandidate({platform,engine,suite,report,driverErrors}){
  const v=report?.variants?.[0],input=report?.mediaInputs?.[1];
+ if(platform==='win32'&&engine==='webkit'&&suite==='media'&&report?.suite==='media'&&report.ok===false&&
+  report.error?.split('\n')[0]==='baseline: '+NO_DECODER&&refusedSources(report)&&clean(report)&&empty(driverErrors)&&
+  report.variants?.length===1&&v?.ok===false&&v.suite==='media'&&v.portableVector===''&&v.error?.split('\n')[0]===NO_DECODER&&refusedSources(v)&&clean(v)&&
+  report.suiteVectors?.length===1&&report.suiteVectors[0]==='baseline'&&report.mediaInputs===undefined&&
+  Array.isArray(report.actions)&&report.actions.length>0&&report.actions.every(a=>a.ok===true&&a.stateVerified===true))return true;
  return platform==='win32'&&engine==='webkit'&&suite==='media'&&report?.suite==='media'&&report.ok===false&&
   report.error?.split('\n')[0]==='baseline: Timed out: actual video metadata'&&signature(report.videoMetadataFailure)&&clean(report)&&empty(driverErrors)&&
   report.variants?.length===1&&v?.ok===false&&v.suite==='media'&&v.portableVector===''&&v.error?.split('\n')[0]==='Timed out: actual video metadata'&&signature(v.videoMetadataFailure)&&clean(v)&&

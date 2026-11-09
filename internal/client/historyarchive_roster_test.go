@@ -24,7 +24,7 @@ func TestHistoryArchiveRosterLagRecoversWithoutReflood(t *testing.T) {
 	if bound, err := inChainIn(phone.store.db, me.Person, me.Roster); err != nil || bound {
 		t.Fatalf("fixture is not behind the source roster: %v %v", bound, err)
 	}
-	if _, err := source.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := source.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.archiveStep(tctx(t)); err != nil {
@@ -90,7 +90,7 @@ func TestHistoryArchiveRosterLagRecoversWithoutReflood(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 3 {
-		if _, err := source.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		if _, err := source.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 		if err := source.archivePack(tctx(t)); err != nil {

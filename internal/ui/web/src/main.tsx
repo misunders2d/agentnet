@@ -11,6 +11,7 @@ import { StoreContext } from "./context";
 import type { Host } from "./host";
 import { OwnedContext, ownTheme } from "./owned";
 import { Store } from "./store";
+import { setSavedReadOnly } from "./saved-storage";
 import { applySavedTheme } from "./features/Settings";
 import { clearPictures } from "./features/Message.files";
 
@@ -32,6 +33,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
   root.append(app, portals);
   const stopTheme = ownTheme(root);
   applySavedTheme();
+  setSavedReadOnly(host.savedReadOnly === true); // before the store reads saved drafts and sends
   const store = new Store(host);
   // A notification click opens its exact conversation; it never accepts
   // or approves anything (the host routes #conv=, #msg= and #review here).

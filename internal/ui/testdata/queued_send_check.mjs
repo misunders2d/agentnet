@@ -72,3 +72,57 @@ assert.equal(oldChanges,1);assert.equal(newChanges,1);assert.equal(newUI.merge('
 const otherUI=standalone.pendingSends({workspace:{id:'two'},workspaces:{state:()=>({})}});
 assert.equal(otherUI.merge('dm',[]).length,0,'pending previews stay in their own membership');newUI.dispose();
 console.log('queued engine send PASS: durable return, FIFO, retry, no duplicate post, Close drain; optimistic merge/failure/retry PASS');
+
+// A message kept by the host: its row keeps its place, Retry and Discard show at
+// once and undo if refused, and a local preview yields to the host's row.
+{
+  const called=[]; let refuse=null;
+  const host={api:async(path,body)=>{called.push([path,body.id]);if(refuse)throw refuse;return {};}};
+  let notices=0; const sends=pendingSends(host,()=>{notices++;});
+  const at=s=>new Date(Date.parse('2026-11-04T12:00:00Z')+s*1000).toISOString();
+  const inbound={id:'i',dir:'in',at:at(180),body:'later'};
+  const kept=(state,rev,extra={})=>({id:'q',lid:'q',dir:'out',at:at(0),body:'kept',state:'queued',detail:'Waiting to send.',queued_send:{state,rev,diagnostic:'Get https://hub/chain?after=1: context deadline exceeded'},...extra});
+  let shown=sends.merge('c',[kept('pending',2),inbound]);
+  assert.equal(shown[0].id,'q');assert.equal(shown[1].id,'i');
+  assert.equal(shown[0]._local,true);assert.equal(shown[0].state_text,'Waiting to send.');
+  assert.equal(shown[0]._failed,false);assert.ok(!shown[0].state_text.includes('deadline'));assert.ok(shown[0]._diagnostic.includes('deadline'));
+  shown=sends.merge('c',[kept('needs_review',3,{detail:'This person is frozen.'}),inbound]);
+  assert.equal(shown[0]._failed,true);assert.equal(shown[0].state_text,'This person is frozen.');
+  const again=sends.merge('c',shown);assert.equal(again[0].id,'q','a decorated row survives a repeated merge');
+  let before=notices; const retried=shown[0]._retry();
+  assert.equal(notices,before+1,'retry shows before the host answers');
+  assert.equal(sends.merge('c',[kept('needs_review',3,{detail:'x'})])[0].state_text,'Sending…');
+  await retried;assert.deepEqual(called.at(-1),['/api/schedule/retry_send','q']);
+  assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})])[0]._failed,true,'a new revision is the host speaking again');
+  const row=sends.merge('c',[kept('needs_review',4,{detail:'x'})])[0];
+  refuse=Object.assign(Error('this message was already sent'),{status:409});
+  const refused=row._discard();
+  assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})]).length,0,'discard hides at once');
+  await assert.rejects(refused,/already sent/);
+  assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})]).length,1,'a refused discard restores the row');
+  refuse=null;await sends.merge('c',[kept('needs_review',4,{detail:'x'})])[0]._discard();
+  assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})]).length,0);
+  assert.equal(sends.merge('c',[]).length,0);
+  assert.equal(sends.merge('c',[kept('needs_review',4,{detail:'x'})]).length,1,'the host decides once the action is settled');
+  // Refused on its first attempt: the answer says failed and the host's row
+  // brings Retry and Discard, one row with its words throughout.
+  const refusedID=sends.begin('r',{id:'rf',lid:'rf',dir:'out',at:at(1),body:'kept'});
+  sends.finish(refusedID,{id:'rf',lid:'rf',state:'failed',detail:'This person is frozen.'});
+  let answered=sends.merge('r',[]);
+  assert.equal(answered.length,1);assert.equal(answered[0].body,'kept');assert.equal(answered[0].state,'failed');assert.equal(answered[0].state_text,'This person is frozen.');
+  const hostRow={id:'rf',lid:'rf',dir:'out',at:at(1),body:'kept',state:'failed',detail:'This person is frozen.',queued_send:{state:'needs_review',rev:2}};
+  answered=sends.merge('r',[hostRow]);
+  assert.equal(answered.length,1);assert.equal(answered[0].body,'kept');assert.equal(answered[0].state_text,'This person is frozen.');
+  assert.equal(answered[0]._failed,true);assert.equal(typeof answered[0]._retry,'function');assert.equal(typeof answered[0]._discard,'function');
+  // A local preview takes its place by time, keeps it failed, and yields by id.
+  const id=sends.begin('d',{id:'l',lid:'l',dir:'out',at:at(10),body:'local'});
+  const older={id:'o',dir:'in',at:at(5)},newer={id:'n',dir:'in',at:at(20)};
+  assert.deepEqual(sends.merge('d',[older,newer]).map(m=>m.id),['o','l','n']);
+  sends.fail(id,'no answer',true);
+  const failed=sends.merge('d',[older,newer]);
+  assert.deepEqual(failed.map(m=>m.id),['o','l','n']);assert.equal(failed[1].state_text,'Not confirmed: no answer');
+  failed[1]._discard();assert.deepEqual(sends.merge('d',[older,newer]).map(m=>m.id),['o','n']);
+  sends.begin('d',{id:'r',lid:'r',dir:'out',at:at(10),body:'yields'});
+  assert.deepEqual(sends.merge('d',[older,{id:'copy',lid:'r',dir:'out',at:at(10)},newer]).map(m=>m.id),['o','copy','n']);
+  assert.equal(sends.has('r'),false);
+}

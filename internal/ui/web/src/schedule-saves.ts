@@ -2,6 +2,7 @@
 // renderer state; it never schedules work, retries, fetches or activates a host.
 import type { Host } from "./host";
 import { skin as brand } from "./skin/brand";
+import { savedStorage } from "./saved-storage";
 import type { ScheduleAttempt } from "./features/Composer.schedule-model";
 export interface ScheduleToken {id:string;conv:string;files:{name:string;size:number}[]}
 export interface ScheduleSave extends ScheduleToken {
@@ -17,7 +18,7 @@ export function scheduleSaves(host:Host, changed:()=>void) {
   const workspace=host.workspaces?.state?.(host.workspace.id) as Record<PropertyKey,unknown> | undefined, storageKey="agentnet.messenger.schedule-save."+host.workspace.id;
   function tokens():Record<string,ScheduleToken> {
     try {
-      const raw=JSON.parse(localStorage.getItem(storageKey) || "null"), out:Record<string,ScheduleToken>={};
+      const raw=JSON.parse(savedStorage().getItem(storageKey) || "null"), out:Record<string,ScheduleToken>={};
       if(raw?.v!==1 || !raw.conv || typeof raw.conv!=="object" || Array.isArray(raw.conv))return out;
       for(const [conv,value] of Object.entries(raw.conv)) {
         const t=value as ScheduleToken;
@@ -32,7 +33,7 @@ export function scheduleSaves(host:Host, changed:()=>void) {
       const all=tokens();
       if(remove){if(all[token.conv]?.id!==token.id)return true;delete all[token.conv];}
       else all[token.conv]={id:token.id,conv:token.conv,files:token.files.map(f=>({name:f.name,size:f.size}))};
-      if(Object.keys(all).length)localStorage.setItem(storageKey,JSON.stringify({v:1,conv:all}));else localStorage.removeItem(storageKey);
+      if(Object.keys(all).length)savedStorage().setItem(storageKey,JSON.stringify({v:1,conv:all}));else savedStorage().removeItem(storageKey);
       return true;
     }catch{return false;}
   }

@@ -682,7 +682,7 @@ class UpdaterInstrumentation : Instrumentation() {
         check(latencySuite in setOf("history", "navigation", "settings", "unread", "actions", "topics", "groups", "compose", "media", "review", "outbox", "agents", "teams", "profile", "storage", "workspaces", "permissions")) { "Unknown timing workload." }
         val scriptFile = File(targetContext.cacheDir, "latency-fixture.mjs")
         val inputFile = File(targetContext.cacheDir, "latency-input.json")
-        check(scriptFile.isFile && scriptFile.length() in 1L..262144L) { "Stage the bounded latency fixture in this owned app's private cache." }
+        check(scriptFile.isFile && scriptFile.length() in 1L..524288L) { "Stage the bounded latency fixture (at most 512 KiB; about 300 KB now) in this owned app's private cache." }
         check(inputFile.isFile && inputFile.length() in 1L..1048576L) { "Stage the synthetic latency input in this owned app's private cache." }
         val source = scriptFile.readText()
         val entryImport = "import {mount,unmount} from '/assets/skins/comic/entry.mjs';"
@@ -872,7 +872,11 @@ class UpdaterInstrumentation : Instrumentation() {
                 .put("engineVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("device", android.os.Build.MODEL)
             check(measured.toString().toByteArray().size <= 1048576) { "Latency result exceeds its bound." }
-            result.putString("stream", "LATENCY_JSON=${measured}\n")
+            // The report goes through the app's cache: a result Bundle near 340 KB lost
+            // its Binder transaction (runs 42525260190, 42531731022), and the qualifier
+            // reads the file whether or not the workload passed.
+            File(targetContext.cacheDir, "latency-result.json").writeText(measured.toString())
+            result.putString("stream", "LATENCY_JSON_FILE=latency-result.json\n")
             phase("latency-report-after")
             check(measured.optBoolean("ok")) { measured.optString("error", "Native Android latency fixture failed") }
             check(nativeSaveValid) { "Native download cancellation or original staged bytes were not proven" }

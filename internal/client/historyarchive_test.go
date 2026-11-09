@@ -171,7 +171,7 @@ func TestHistoryArchiveLegacyCustodyMigrationExactAndOnce(t *testing.T) {
 
 func TestHistoryArchiveCapabilityLossKeepsExactManifestAcrossRestart(t *testing.T) {
 	_, a, phone, _ := archiveFixture(t, 3)
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.archiveStep(tctx(t)); err != nil {
@@ -271,8 +271,8 @@ func TestHistoryArchiveReceiptDrivenMultiChunkCompletion(t *testing.T) {
 	if full, err := syncWindowFull(a.store.db, phone.Self()); err != nil || full {
 		t.Fatalf("synthetic export did not start with an available sync window: %v %v", full, err)
 	}
-	for page := int64(1); page <= 4; page++ {
-		if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	for page := int64(1); page <= 124; page++ { // the smallest page takes one round per row
+		if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := a.archiveStep(tctx(t)); err != nil {
@@ -334,7 +334,7 @@ func TestHistoryArchiveDoesNotBlockExactReadSync(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.archiveStep(tctx(t)); err != nil {
@@ -346,7 +346,7 @@ func TestHistoryArchiveDoesNotBlockExactReadSync(t *testing.T) {
 	}
 	// A long backlog tries to refill while the first archive remains in
 	// custody. State synchronization must keep its own bounded capacity.
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	var original string
@@ -407,22 +407,31 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	var count int
 	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != historyPage {
+	if count < 1 || count > historyPage {
 		t.Fatalf("prebuilt corpus instead of one source page: %d", count)
+	}
+	// Paced pages reach one full window, and stop there, before any is packed.
+	for range historyPage {
+		if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil || count != historyPage {
+		t.Fatalf("paced corpus did not fill exactly one window: %d %v", count, err)
 	}
 	if err = a.archivePack(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
 	first := archiveDescriptor(t, a)
 	for range 8 {
-		if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+		if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -538,7 +547,7 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 
 func TestHistoryArchiveBlockedUploadDoesNotBlockSamePhoneLive(t *testing.T) {
 	w, a, phone, conv := archiveFixture(t, 55)
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	base := a.hub.http.Transport
@@ -611,7 +620,7 @@ func TestHistoryArchiveBlockedUploadDoesNotBlockSamePhoneLive(t *testing.T) {
 	if err = a.verifyAndStore(tctx(t), incoming); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if err = a.store.db.QueryRow(`SELECT o.envelope FROM outbox o JOIN history_copies h ON h.carrier=o.id WHERE o.recipient=? AND h.lid=? AND o.replication_live=1`, phone.Address, lid).Scan(&raw); err != nil {
@@ -640,7 +649,7 @@ func TestHistoryArchiveBlockedUploadDoesNotBlockSamePhoneLive(t *testing.T) {
 
 func TestHistoryArchiveDescriptorNoIOUntilCiphertextRetained(t *testing.T) {
 	_, a, phone, _ := archiveFixture(t, 3)
-	if _, err := a.historyCatchupPage(tctx(t), phone.Self()); err != nil {
+	if _, err := a.pageByHand(tctx(t), phone.Self()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.archiveStep(tctx(t)); err != nil {

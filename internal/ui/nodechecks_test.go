@@ -22,5 +22,6 @@ func TestNodeModuleChecks(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s: %v\n%s", strings.Join(check, " "), err, out)
 		}
+		t.Logf("%s\n%s", strings.Join(check, " "), out)
 	}
 }

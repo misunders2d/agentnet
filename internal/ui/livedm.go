@@ -60,26 +60,36 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 			o.People = append(o.People, PersonView{Label: p.Label, Email: p.Email, Picture: p.Picture, PictureURL: pictureURL(p.Picture), Address: p.Address, State: PersonListed, Devices: deviceViews(p.Devices)})
 		}
 	}
+	if err := l.viewDirty(); err != nil { // before anything of a chat is read
+		return err
+	}
 	convs, err := l.a.MessagingConversations()
 	if err != nil {
 		return err
 	}
+	chats := l.keptChats(convs)
 	// The agents each person's device runs in DMs here, from the
 	// participations as resolved (the host's person and device).
 	links := map[string][]AgentLink{}
-	// Resolve each conversation once for this build. People, event labels and
-	// the guest count use the same evidence; the next build reads it afresh.
+	// Resolve each conversation once. People, event labels and the guest count
+	// use the same evidence, kept with the chat until a write touches it.
 	type participationView struct {
 		infos []client.ParticipationInfo
 		err   error
 	}
 	parts := map[string]participationView{}
 	participations := func(conv string) ([]client.ParticipationInfo, error) {
+		if e := chats[conv]; e != nil && e.partsKept {
+			return e.infos, nil
+		}
 		if view, ok := parts[conv]; ok {
 			return view.infos, view.err
 		}
 		infos, err := l.a.Participations(conv)
 		parts[conv] = participationView{infos, err}
+		if err == nil { // one that could not resolve is asked again
+			chat(chats, conv).infos, chat(chats, conv).partsKept = infos, true
+		}
 		return infos, err
 	}
 	for _, c := range convs {
@@ -113,49 +123,20 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		if c.Deleted { // deleted here, nothing later yet (client convclear.go)
 			continue
 		}
-		msgs, err := l.a.MessagingConversationMessages(c.ID)
-		if err != nil {
-			return err
-		}
-		var assigned, titles map[string]string
-		var titleErr error
-		projectTitles := func() error {
-			if assigned != nil {
-				return titleErr
-			}
-			assigned = client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
-			topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
-			titleErr = err
-			if err != nil {
+		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address}
+		e := chat(chats, c.ID)
+		if !e.summaryKept {
+			if err := l.buildChatSummary(c, e, participations); err != nil {
 				return err
 			}
-			titles = make(map[string]string, len(topics))
-			for _, topic := range topics {
-				titles[topic.ID] = topic.Title
-			}
-			return nil
 		}
-		infos, partsErr := participations(c.ID)
-		people := l.conversationPeopleForParticipations(c, infos)
-		shown := shownRows(msgs, people) // its rows as the conversation shows them (DM)
-		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
-			Count: len(shown), LastAt: time.Unix(c.Created, 0)}
-		// The core projects personal attention over canonical admitted rows,
-		// including deliberately marked sent turns.
-		for _, m := range shown {
-			if m.Unread {
-				s.Unread++
-			}
+		e.applyTo(&s, c)
+		if unread != nil {
+			*unread = append(*unread, e.unread...)
 		}
 		*o.UnreadTotal += s.Unread
 		if !mutes[c.ID] {
 			*o.AlertTotal += s.Unread
-		}
-		if unread != nil && s.Unread > 0 {
-			if err := projectTitles(); err != nil {
-				return err
-			}
-			appendChatUnread(unread, c.ID, shown, assigned, titles)
 		}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
 		if c.Role == "visitor" {
@@ -180,63 +161,196 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		} else {
 			s.Members = originalViews(c)
 		}
-		// Who is present to help: a conversation whose participations
-		// cannot be resolved here now (a group's pending context) counts none.
-		if partsErr == nil {
-			for _, info := range infos {
-				if info.State == client.PartActive {
-					s.Guests++
-				}
-			}
-		}
-		for _, m := range msgs {
-			switch {
-			case m.Dir == "in" && m.State == "conv_held":
-				s.Held++
-			// Match the message's delivery tick: one lagging device copy
-			// must not turn delivery to that person back into an unsent turn.
-			case m.Dir == "out" && cmp.Or(m.Delivery, m.State) == "waiting":
-				s.Waiting++
-			}
-		}
-		if len(shown) > 0 {
-			line := func(m client.ConvMessage) string { // a participation record in words, not its body
-				if m.Deleted {
-					return "Message deleted"
-				}
-				if m.Edited {
-					return client.BodyPreview(m.Text)
-				}
-				if m.Sub == envelope.SubEvent {
-					return eventText(m.Body, people)
-				}
-				if envelope.TopicOrganization(m.TopicEvent) {
-					if m.Topic != "" {
-						if err := projectTitles(); err != nil {
-							return client.TopicOrganizationNotice(m.Topic, "")
-						}
-					}
-					return client.TopicOrganizationNotice(m.Topic, titles[m.Topic])
-				}
-				if m.Body == "" && len(m.Attachments) > 0 { // files only: their names
-					var names []string
-					for _, f := range m.Attachments {
-						names = append(names, client.SafeName(f.Name))
-					}
-					return "📎 " + strings.Join(names, ", ")
-				}
-				return client.BodyPreview(m.Body)
-			}
-			last := shown[len(shown)-1]
-			s.Title, s.Last, s.LastEvent = line(shown[0]), line(last), lastEvent(last, people)
-			if c.Kind == protocol.ConvKindGroup {
-				s.Title = c.Title
-			}
-			s.LastID, s.LastAt = previewMessageID(shown, last), time.Unix(last.At, 0)
-		}
 		o.DMs = append(o.DMs, s)
 	}
 	sort.SliceStable(o.DMs, func(i, j int) bool { return o.DMs[i].LastAt.After(o.DMs[j].LastAt) })
+	if !l.viewCachesOff {
+		l.chats = chats // a chat gone from the list leaves with it
+	}
+	return nil
+}
+
+// chatEntry is what one chat's list row reads from its messages, kept between
+// list builds until a write touches the chat (client viewdirty.go). Nothing in
+// it is an authority: it is what the same read would show.
+type chatEntry struct {
+	partsKept, summaryKept bool
+	infos                  []client.ParticipationInfo
+	count, unreadCount     int
+	held, waiting, guests  int
+	title, last, lastID    string
+	lastAt                 time.Time
+	lastEvent              *LastEvent
+	unread                 []UnreadRow
+}
+
+func chat(chats map[string]*chatEntry, conv string) *chatEntry {
+	e := chats[conv]
+	if e == nil {
+		e = &chatEntry{}
+		chats[conv] = e
+	}
+	return e
+}
+
+func (e *chatEntry) applyTo(s *DMSummary, c client.ConversationInfo) {
+	s.Count, s.Unread, s.Held, s.Waiting, s.Guests = e.count, e.unreadCount, e.held, e.waiting, e.guests
+	s.Title, s.Last, s.LastID, s.LastEvent = e.title, e.last, e.lastID, e.lastEvent
+	s.LastAt = e.lastAt
+	if e.count == 0 {
+		s.LastAt = time.Unix(c.Created, 0)
+	}
+}
+
+// viewDirty collects what was written since the last list build. The keys wait
+// for keptChats, so a build failing before then loses none of them. Called before
+// anything they may mark is read.
+func (l *Live) viewDirty() error {
+	if l.viewCachesOff {
+		return nil
+	}
+	keys, next, err := l.a.ViewDirtySince(l.viewMark)
+	if err != nil {
+		return err
+	}
+	l.viewMark, l.dirtyKeys = next, append(l.dirtyKeys, keys...)
+	return nil
+}
+
+// keptChats are the list rows still current. A write to a chat not listed may be
+// one of a listed chat's earlier conversations (client personcontinuity.go), so
+// it, like "*", reads every chat again; that costs only the read.
+func (l *Live) keptChats(convs []client.ConversationInfo) map[string]*chatEntry {
+	if l.viewCachesOff {
+		return map[string]*chatEntry{}
+	}
+	listed := make(map[string]bool, len(convs))
+	for _, c := range convs {
+		listed[c.ID] = true
+	}
+	kept := make(map[string]*chatEntry, len(convs))
+	for conv, e := range l.chats {
+		if listed[conv] {
+			kept[conv] = e
+		}
+	}
+	l.chats = nil // until this build completes: its marks are used now, and it may fail
+	dirty := l.dirtyKeys
+	l.dirtyKeys = nil
+	for _, key := range dirty {
+		if key == "h" {
+			l.historyDirty = true
+		}
+		if key == "*" {
+			l.historyDirty = true
+			clear(kept)
+		} else if conv, ok := strings.CutPrefix(key, "c:"); ok {
+			if !listed[conv] {
+				clear(kept)
+			}
+			delete(kept, conv)
+		}
+	}
+	return kept
+}
+
+// buildChatSummary reads one chat's messages for its list row.
+func (l *Live) buildChatSummary(c client.ConversationInfo, e *chatEntry, participations func(string) ([]client.ParticipationInfo, error)) error {
+	if overviewChatBuilt != nil && !l.viewCachesOff {
+		overviewChatBuilt(c.ID)
+	}
+	msgs, err := l.a.MessagingConversationMessages(c.ID)
+	if err != nil {
+		return err
+	}
+	var assigned, titles map[string]string
+	var titleErr error
+	projectTitles := func() error {
+		if assigned != nil {
+			return titleErr
+		}
+		assigned = client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
+		topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
+		titleErr = err
+		if err != nil {
+			return err
+		}
+		titles = make(map[string]string, len(topics))
+		for _, topic := range topics {
+			titles[topic.ID] = topic.Title
+		}
+		return nil
+	}
+	infos, partsErr := participations(c.ID)
+	people := l.conversationPeopleForParticipations(c, infos)
+	shown := shownRows(msgs, people) // its rows as the conversation shows them (DM)
+	// The core projects personal attention over canonical admitted rows,
+	// including deliberately marked sent turns.
+	e.count, e.unreadCount, e.held, e.waiting, e.guests = len(shown), 0, 0, 0, 0
+	e.title, e.last, e.lastID, e.lastEvent, e.lastAt, e.unread = "", "", "", nil, time.Time{}, nil
+	for _, m := range shown {
+		if m.Unread {
+			e.unreadCount++
+		}
+	}
+	if e.unreadCount > 0 {
+		if err := projectTitles(); err != nil {
+			return err
+		}
+		appendChatUnread(&e.unread, c.ID, shown, assigned, titles)
+	}
+	// Who is present to help: a conversation whose participations
+	// cannot be resolved here now (a group's pending context) counts none.
+	if partsErr == nil {
+		for _, info := range infos {
+			if info.State == client.PartActive {
+				e.guests++
+			}
+		}
+	}
+	for _, m := range msgs {
+		switch {
+		case m.Dir == "in" && m.State == "conv_held":
+			e.held++
+		// Match the message's delivery tick: one lagging device copy
+		// must not turn delivery to that person back into an unsent turn.
+		case m.Dir == "out" && cmp.Or(m.Delivery, m.State) == "waiting":
+			e.waiting++
+		}
+	}
+	if len(shown) > 0 {
+		line := func(m client.ConvMessage) string { // a participation record in words, not its body
+			if m.Deleted {
+				return "Message deleted"
+			}
+			if m.Edited {
+				return client.BodyPreview(m.Text)
+			}
+			if m.Sub == envelope.SubEvent {
+				return eventText(m.Body, people)
+			}
+			if envelope.TopicOrganization(m.TopicEvent) {
+				if m.Topic != "" {
+					if err := projectTitles(); err != nil {
+						return client.TopicOrganizationNotice(m.Topic, "")
+					}
+				}
+				return client.TopicOrganizationNotice(m.Topic, titles[m.Topic])
+			}
+			if m.Body == "" && len(m.Attachments) > 0 { // files only: their names
+				var names []string
+				for _, f := range m.Attachments {
+					names = append(names, client.SafeName(f.Name))
+				}
+				return "📎 " + strings.Join(names, ", ")
+			}
+			return client.BodyPreview(m.Body)
+		}
+		last := shown[len(shown)-1]
+		e.title, e.last, e.lastEvent = line(shown[0]), line(last), lastEvent(last, people)
+		e.lastID, e.lastAt = previewMessageID(shown, last), time.Unix(last.At, 0)
+	}
+	e.summaryKept = partsErr == nil && !l.viewCachesOff
 	return nil
 }
 
@@ -395,6 +509,12 @@ func (l *Live) DM(id string) (DMThread, error) {
 		if c.ID != id {
 			continue
 		}
+		// Before the messages: a send stored between the two reads is then seen
+		// twice and shown once, where the other order would lose it from this view.
+		queued, err := l.a.QueuedSends(id)
+		if err != nil {
+			return DMThread{}, err
+		}
 		msgs, err := l.a.MessagingConversationMessages(id)
 		if err != nil {
 			return DMThread{}, err
@@ -483,6 +603,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, p := range known {
 			labels[p.Person] = p.Label
 		}
+		confirmable := l.a.ProposalConfirmer()
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
@@ -558,7 +679,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 					dm.StateText = "Your agent: " + strings.ToLower(text[:1]) + text[1:]
 				}
 			}
-			if m.Kind == KindAnswer && m.Status() == envelope.StatusProposal && l.a.CanConfirmProposal(m.ID) {
+			if m.Kind == KindAnswer && m.Status() == envelope.StatusProposal && confirmable(m.ID) {
 				dm.Actions = []string{DoIt}
 			}
 			if m.Kind == KindTask {
@@ -578,6 +699,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Messages = append(t.Messages, dm)
 		}
 		linkReplies(msgs, t.Messages)
+		t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
 		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
 	}
@@ -600,6 +722,11 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 		return Sent{}, err
 	}
 	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
+	if receiver == nil {
+		if sent, done, e := l.queueDM(d, body, files); done {
+			return sent, e
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
 	ctx = client.WithQueuedSend(ctx, d.ID)
@@ -608,6 +735,65 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 		return Sent{}, Refuse(sentence(err))
 	}
 	return Sent{LID: res.LID, ID: res.ID, State: res.State, Detail: res.Detail}, nil
+}
+
+// queueDM accepts an ordinary message durably before anything can make it wait
+// (client.QueueSend). done is false when this device cannot accept it that way
+// (a new topic, a reply it cannot resolve here, a recovered person's chat not
+// created yet, no author here): the ordinary sender then decides, and its
+// refusal stays authoritative.
+func (l *Live) queueDM(d DMDraft, body string, files []client.OutgoingFile) (Sent, bool, error) {
+	id := d.ID
+	if id == "" {
+		id = protocol.NewID()
+	}
+	res, err := l.a.QueueSend(client.ScheduledSendInput{ID: id, Conv: d.Conv, Topic: d.Topic, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Files: files}, d.PID, l.sendWait)
+	if errors.Is(err, client.ErrQueuedSendDiscarded) {
+		return Sent{}, true, Refuse(sentence(err))
+	}
+	if err != nil {
+		return Sent{}, false, nil
+	}
+	if res.Sent != nil {
+		return Sent{LID: res.Sent.LID, ID: res.Sent.ID, State: res.Sent.State, Detail: res.Sent.Detail}, true, nil
+	}
+	if res.Row.State == client.ScheduledNeedsReview {
+		// A refused message keeps its place with its words, Retry and Discard, as
+		// a later failure does (TDLib fail_send_message): its text is safe if this
+		// answer is lost, which handing it back to the composer could not promise.
+		return Sent{LID: id, ID: id, State: "failed", Detail: res.Row.Detail}, true, nil
+	}
+	return Sent{LID: id, ID: id, State: "queued", Detail: res.Row.Detail}, true, nil
+}
+
+// withQueuedSends shows messages accepted here and not yet stored for sending
+// in their place in the chat, so a reload or restart keeps them in view. A
+// yet-unsent message keeps the position it took when accepted, and a failed
+// one keeps it too (TDLib, MessagesManager.cpp at 4c6377aa: fail_send_message).
+func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self string) []DMMessage {
+	for _, s := range queued {
+		if slices.ContainsFunc(rows, func(m DMMessage) bool { return m.Dir == "out" && m.LID == s.ID }) {
+			continue
+		}
+		m := DMMessage{ID: s.ID, LID: s.ID, Dir: "out", From: self, Kind: KindMessage, Body: s.Body, ReplyTo: s.ReplyTo, Quote: s.Quote,
+			Origin: envelope.OriginUI, Topic: s.Topic, PID: s.Audience.AuthorPID, At: s.Created, State: "queued", StateText: "Sending…", Detail: s.Detail,
+			QueuedSend: &QueuedSendView{State: s.State, Rev: s.Rev, Diagnostic: s.Diagnostic}}
+		if s.Ask != nil { // a kept ask shows as the request it is, to its agent
+			m.Kind, m.PID = s.Ask.Kind, s.Ask.PID
+		}
+		if s.State == client.ScheduledNeedsReview {
+			m.State, m.StateText = "failed", s.Detail
+		}
+		for i, f := range s.Files {
+			m.Attachments = append(m.Attachments, FileView{Index: i, Name: f.Name, Size: f.Size})
+		}
+		at := len(rows)
+		for at > 0 && rows[at-1].At.After(m.At) {
+			at--
+		}
+		rows = slices.Insert(rows, at, m)
+	}
+	return rows
 }
 
 // refreshDM is Refresh for a DM or group (ok false when id is not one): once

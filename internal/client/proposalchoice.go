@@ -14,12 +14,38 @@ import (
 
 // Choice records are local, transactional deduplication, not received grants.
 // A host records a choice only after matching its original question/proposal.
+// Finding one logical row or the replies to one, without reading the table.
+const proposalLookupSchema = `
+CREATE INDEX inbox_lid ON inbox(lid) WHERE lid IS NOT NULL;
+CREATE INDEX inbox_reply_to ON inbox(reply_to) WHERE reply_to IS NOT NULL;
+CREATE INDEX outbox_reply_to ON outbox(reply_to) WHERE reply_to IS NOT NULL;
+`
+
 const proposalChoiceSchema = `
 CREATE TABLE proposal_choices(conv TEXT NOT NULL,ref TEXT NOT NULL,proposal TEXT NOT NULL,task TEXT NOT NULL UNIQUE,PRIMARY KEY(conv,ref));
 CREATE TABLE proposal_sends(conv TEXT NOT NULL,ref TEXT NOT NULL,author TEXT NOT NULL,task TEXT NOT NULL UNIQUE,body TEXT NOT NULL,needs_new INTEGER NOT NULL,PRIMARY KEY(conv,ref,author));
 `
 
 type proposalSendIDKey struct{}
+
+// convIs names one conversation's rows and leaves the choice of index to a row's
+// own id, logical id or reply, which each find a few rows. a coalesced conv and a
+// logical id behind CASE made SQLite read the whole table, once for each task and
+// proposal a chat shows (MEL-748). Rows stored with no conversation keep the old form.
+func convIs(conv string) string {
+	if conv != "" {
+		return "+conv=?"
+	}
+	return "coalesce(conv,'')=?"
+}
+
+// convRowIs is the same with one logical row of it.
+func convRowIs(conv string) string {
+	if conv != "" {
+		return "+conv=? AND lid=?"
+	}
+	return "coalesce(conv,'')=? AND CASE WHEN conv IS NULL THEN id ELSE lid END=?"
+}
 
 func storedProposalChoice(q dbq, in envelope.Inner, key string) (string, error) {
 	var proposal string
@@ -55,7 +81,7 @@ func (a *Agent) sharedProposalQuestion(q dbq, p confirmableProposal) (target, pi
 		return targetJSON(h.Target), "", "", nil
 	}
 	var from, key string
-	err = q.QueryRow(`SELECT sender,coalesce(verified_by,claimed_fp,''),coalesce(target,''),coalesce(pid,''),coalesce(topic,'') FROM inbox WHERE conv=? AND (id=? OR lid=?) AND kind='question' AND ref_id IS NULL AND coalesce(sub,'')='' LIMIT 1`, p.conv, p.replyTo, p.replyTo).Scan(&from, &key, &target, &pid, &topic)
+	err = q.QueryRow(`SELECT sender,coalesce(verified_by,claimed_fp,''),coalesce(target,''),coalesce(pid,''),coalesce(topic,'') FROM inbox WHERE +conv=? AND (id=? OR lid=?) AND kind='question' AND ref_id IS NULL AND coalesce(sub,'')='' LIMIT 1`, p.conv, p.replyTo, p.replyTo).Scan(&from, &key, &target, &pid, &topic)
 	if err != nil {
 		return "", "", "", ErrNotConfirmable
 	}
@@ -206,15 +232,15 @@ func (a *Agent) sentProposalView(id string) (*ProposalView, error) {
 		return nil, err
 	}
 	v := &ProposalView{Task: body, ConfirmedBy: a.Address}
-	err = a.store.db.QueryRow(`SELECT id,body,coalesce(reply_to,'') FROM inbox WHERE coalesce(conv,'')=? AND CASE WHEN conv IS NULL THEN id ELSE lid END=? AND coalesce(verified_by,claimed_fp,'')=?
- UNION ALL SELECT id,body,coalesce(reply_to,'') FROM outbox WHERE coalesce(conv,'')=? AND CASE WHEN conv IS NULL THEN id ELSE lid END=? AND ?=? LIMIT 1`, conv, ref, author, conv, ref, author, a.Self().Fingerprint()).Scan(&v.ProposalID, &v.Proposal, &v.QuestionID)
+	err = a.store.db.QueryRow(`SELECT id,body,coalesce(reply_to,'') FROM inbox WHERE `+convRowIs(conv)+` AND coalesce(verified_by,claimed_fp,'')=?
+ UNION ALL SELECT id,body,coalesce(reply_to,'') FROM outbox WHERE `+convRowIs(conv)+` AND ?=? LIMIT 1`, conv, ref, author, conv, ref, author, a.Self().Fingerprint()).Scan(&v.ProposalID, &v.Proposal, &v.QuestionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	err = a.store.db.QueryRow(`SELECT body,sender FROM inbox WHERE coalesce(conv,'')=? AND (id=? OR lid=?) AND kind='question' UNION ALL SELECT body,? FROM outbox WHERE coalesce(conv,'')=? AND (id=? OR lid=?) AND coalesce(kind,json_extract(envelope,'$.kind'))='question' LIMIT 1`, conv, v.QuestionID, v.QuestionID, a.Address, conv, v.QuestionID, v.QuestionID).Scan(&v.Question, &v.Asker)
+	err = a.store.db.QueryRow(`SELECT body,sender FROM inbox WHERE `+convIs(conv)+` AND (id=? OR lid=?) AND kind='question' UNION ALL SELECT body,? FROM outbox WHERE `+convIs(conv)+` AND (id=? OR lid=?) AND coalesce(kind,json_extract(envelope,'$.kind'))='question' LIMIT 1`, conv, v.QuestionID, v.QuestionID, a.Address, conv, v.QuestionID, v.QuestionID).Scan(&v.Question, &v.Asker)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -233,7 +259,7 @@ func (a *Agent) syncedProposalChoice(q dbq, p confirmableProposal, onlyID ...str
 	if p.conv != "" {
 		ref = p.lid
 	}
-	rows, err := q.Query(`SELECT id,sender,coalesce(verified_by,claimed_fp,''),coalesce(lid,'') FROM inbox WHERE coalesce(conv,'')=? AND kind='task' AND reply_to=? AND coalesce(pid,'')=? AND coalesce(topic,'')=? AND coalesce(target,'')=? AND ref_id IS NULL AND coalesce(sub,'')='' ORDER BY received_at,id`, p.conv, ref, p.pid, p.topic, targetJSON(p.target))
+	rows, err := q.Query(`SELECT id,sender,coalesce(verified_by,claimed_fp,''),coalesce(lid,'') FROM inbox WHERE `+convIs(p.conv)+` AND kind='task' AND reply_to=? AND coalesce(pid,'')=? AND coalesce(topic,'')=? AND coalesce(target,'')=? AND ref_id IS NULL AND coalesce(sub,'')='' ORDER BY received_at,id`, p.conv, ref, p.pid, p.topic, targetJSON(p.target))
 	if err != nil {
 		return "", err
 	}
@@ -298,7 +324,7 @@ func (a *Agent) syncedProposalView(id string) (*ProposalView, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = a.store.db.QueryRow(`SELECT id,sender,coalesce(verified_by,claimed_fp,''),body,coalesce(reply_to,''),coalesce(lid,''),coalesce(pid,''),coalesce(topic,'') FROM inbox WHERE coalesce(conv,'')=? AND CASE WHEN conv IS NULL THEN id ELSE lid END=? AND kind='answer' AND status='proposal' AND ref_id IS NULL AND coalesce(sub,'')='' LIMIT 1`, p.conv, ref).Scan(&p.id, &p.from, &p.key, &p.body, &p.replyTo, &p.lid, &p.pid, &p.topic)
+	err = a.store.db.QueryRow(`SELECT id,sender,coalesce(verified_by,claimed_fp,''),body,coalesce(reply_to,''),coalesce(lid,''),coalesce(pid,''),coalesce(topic,'') FROM inbox WHERE `+convRowIs(p.conv)+` AND kind='answer' AND status='proposal' AND ref_id IS NULL AND coalesce(sub,'')='' LIMIT 1`, p.conv, ref).Scan(&p.id, &p.from, &p.key, &p.body, &p.replyTo, &p.lid, &p.pid, &p.topic)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -306,7 +332,7 @@ func (a *Agent) syncedProposalView(id string) (*ProposalView, error) {
 		return nil, err
 	}
 	v := &ProposalView{ProposalID: p.id, Proposal: p.body, Task: body, ConfirmedBy: from, Edited: body != p.body}
-	err = a.store.db.QueryRow(`SELECT id,body,sender,coalesce(target,'') FROM inbox WHERE coalesce(conv,'')=? AND (id=? OR lid=?) AND kind='question' UNION ALL SELECT id,body,?,coalesce(target,'') FROM outbox WHERE coalesce(conv,'')=? AND (id=? OR lid=?) AND coalesce(kind,json_extract(envelope,'$.kind'))='question' LIMIT 1`, p.conv, p.replyTo, p.replyTo, a.Address, p.conv, p.replyTo, p.replyTo).Scan(&v.QuestionID, &v.Question, &v.Asker, &target)
+	err = a.store.db.QueryRow(`SELECT id,body,sender,coalesce(target,'') FROM inbox WHERE `+convIs(p.conv)+` AND (id=? OR lid=?) AND kind='question' UNION ALL SELECT id,body,?,coalesce(target,'') FROM outbox WHERE `+convIs(p.conv)+` AND (id=? OR lid=?) AND coalesce(kind,json_extract(envelope,'$.kind'))='question' LIMIT 1`, p.conv, p.replyTo, p.replyTo, a.Address, p.conv, p.replyTo, p.replyTo).Scan(&v.QuestionID, &v.Question, &v.Asker, &target)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

@@ -6,10 +6,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"filippo.io/age"
 
@@ -96,13 +98,51 @@ func (p Public) Verify() error {
 	if len(p.SignKey) != ed25519.PublicKeySize {
 		return errors.New("bad signing key")
 	}
+	key := p.verifyKey()
+	verified.Lock()
+	_, known := verified.m[key]
+	verified.Unlock()
+	if known {
+		return nil
+	}
 	if _, err := age.ParseX25519Recipient(p.BoxRecipient); err != nil {
 		return fmt.Errorf("bad encryption key: %w", err)
 	}
 	if !ed25519.Verify(p.SignKey, bindingMessage(p.Address, p.BoxRecipient), p.BoxSig) {
 		return errors.New("encryption key not signed by signing key")
 	}
+	verified.Lock()
+	if len(verified.m) >= verifiedKept {
+		clear(verified.m)
+	}
+	verified.m[key] = struct{}{}
+	verified.Unlock()
 	return nil
+}
+
+// Verify is a pure function of these exact bytes, and the same pinned keys are
+// checked again on every roster parse. Only a success is remembered, under a
+// hash of everything it covered, so any different byte gets a real check. This
+// is no statement about whether the key is still current: revocation, rosters
+// and pins are read and decided as before.
+const verifiedKept = 4096
+
+var verified = struct {
+	sync.Mutex
+	m map[[sha256.Size]byte]struct{}
+}{m: map[[sha256.Size]byte]struct{}{}}
+
+func (p Public) verifyKey() [sha256.Size]byte {
+	h := sha256.New()
+	for _, part := range [][]byte{[]byte(p.Address), p.SignKey, []byte(p.BoxRecipient), p.BoxSig} {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(part)))
+		h.Write(n[:])
+		h.Write(part)
+	}
+	var key [sha256.Size]byte
+	h.Sum(key[:0])
+	return key
 }
 
 // Recipient parses the entry's age recipient.

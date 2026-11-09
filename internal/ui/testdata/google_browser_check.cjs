@@ -51,7 +51,7 @@ const shots = process.env.AGENTNET_SCREENSHOTS;
       await page.route('**/api/google/access',async route=>{if(route.request().method()!=='GET')return route.continue();const response=await route.fetch();const body=await response.json();body.enabled=false;return route.fulfill({response,json:body});});
       await page.goto(native+'/?t='+token);await you();if(width===390)await page.getByRole('button',{name:'You',exact:true}).first().click();
       await page.getByRole('button',{name:/^Workspaces/}).click();await page.getByLabel('Invite by email',{exact:true}).fill('awaiting.setup@example.com');
-      await page.getByRole('button',{name:'Invite by email',exact:true}).click();await page.getByText('Saved. They can sign in once Google sign-in is set up.',{exact:true}).waitFor();await capture('membership-disabled');
+      await page.getByRole('button',{name:'Invite by email',exact:true}).click();await page.getByText('Google sign-in is not set up for this workspace yet. Ask your workspace admin.',{exact:true}).waitFor(); /* 3374c1c8 replaced the saved message */await capture('membership-disabled');
       await page.unroute('**/api/google/access');
 
       await page.goto(setup+'/?t='+token+'#google-signin='+encodeURIComponent('https://workspace.example'));
