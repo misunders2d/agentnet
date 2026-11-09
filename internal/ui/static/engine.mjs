@@ -682,11 +682,10 @@ export const TOPICS = Object.freeze({
 export const EXEC_RUNNING_MAX_AGE = 3600;
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting", "helpers_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined", "not_delivered"]);
-// replyCloses: an agent reply that is its request's last word, as client
-// convAnswer/execTerminal: a terminal status. A needs_human result posted as
-// the agent's reply carries none, so the host's needs_human word stays.
-const replyClosesStatus = new Set(["done", "failed", "timeout", "cancelled", "declined", "interrupted", "proposal"]);
-const replyCloses = (r) => (r.kind === "answer" || r.kind === "result") && replyClosesStatus.has(r.status || "");
+// replyCloses: an answer or result is its request's last word unless it says
+// it is not (client convAnswer): an agent's needs_human result posted as its
+// reply (envelope.StatusNeedsHuman) leaves the host's needs_human word.
+const replyCloses = (r) => (r.kind === "answer" || r.kind === "result") && r.status !== "needs_human";
 const topicExecutionClosed = new Set(["done", "answered", "failed", "timeout", "cancelled", "stopped", "declined", "resolved", "not_run", "proposal", "unavailable"]);
 const topicRequest = (k) => k === "question" || k === "task";
 // topicOpen: one message keeps its topic pending (client topicOpen).

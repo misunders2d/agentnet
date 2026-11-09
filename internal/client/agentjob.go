@@ -1004,7 +1004,7 @@ func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, 
 		return settleSteeringIn(tx, j.ID)
 	}
 	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: j.ID, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
-		Emotion: "neutral", PID: j.PID, Topic: topic, claim: claim}) // no terminal status: the host's needs_human state stays the request's word (convAnswer)
+		Emotion: "neutral", PID: j.PID, Topic: topic, status: envelope.StatusNeedsHuman, claim: claim}) // not final: the host's needs_human state stays the request's word (convAnswer)
 	var hb *heldBack
 	switch {
 	case errors.As(err, &hb):
