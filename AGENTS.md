@@ -204,13 +204,13 @@ program, `agentnet`, that is both the laptop client and the Hub.
   `Co-authored-by: Claude <noreply@anthropic.com>`. Credit actual contributors;
   do not invent account emails for other assistants.
 - Tests: `go vet ./...`, `scripts/race-shard.sh others`, and all client
-  partitions `scripts/race-shard.sh client-K 18` for K=0 through 17 (owner-approved
-  October 17, 2026). The script derives the current test list and keeps every race package at 600 seconds.
+  partitions `scripts/race-shard.sh client-K 24` for K=0 through 23 (owner-approved
+  November 9, 2026). The script derives the current test list and keeps every race package at 600 seconds.
   `others` runs the remaining packages first, then isolates `internal/ui` in
   three sequential partitions (owner-approved October 22, 2026). Focused UI
   reruns use `scripts/race-shard.sh ui-0`, `ui-1` and `ui-2`; UI always has
   three partitions, independent of the client count.
-  The older four/six/twelve partitions outgrew that bound; do not reuse their
+  The older four/six/twelve/eighteen partitions outgrew that bound; do not reuse their
   obsolete duration estimates or raise timeouts to make a run fit. Retain passing
   unchanged partitions when correcting a failure. Native Windows client
   qualification uses `bash scripts/native-client-shard.sh K 6` for K=0 through
