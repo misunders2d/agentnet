@@ -33,6 +33,7 @@ bad) printf 'the deploy failed at step 3\nemotion: Very Sad\n' ;;
 sleep) touch "$AGENT_LOG.started"; sleep 30 & wait; printf 'late reply\nemotion: calm\n' ;;
 propose) printf 'AGENTNET: PROPOSE-TASK\nRestart the deploy from step 3.\nemotion: calm\n' ;;
 echo) printf '%s\nemotion: calm\n' "$AGENT_ANSWER" ;;
+needs) printf 'AGENTNET: NEEDS-HUMAN\nWhich carrier should I book?\n' ;;
 esac
 `
 

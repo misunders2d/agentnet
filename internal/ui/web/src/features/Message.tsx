@@ -140,7 +140,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
 
   // An agent's needs_human result, from its host's record here or its signed
   // owner report: shown as that agent's own chat message, never a card.
-  const needsHuman = isRequest(m) && !m._local && !m.deleted && (m.dir === "in" ? m.state : m.exec?.stale ? "" : m.exec?.state) === "needs_human";
+  // A conversation agent posts its needs_human result as its own reply
+  // (finishAgentNeedsHuman): that reply is the message, so the request does not repeat it.
+  const posted = !isThreadMsg(m) && !!ctx.dm?.messages?.some(r => isReply(r) && !!r.pid && (r.reply_to === m.id || !!m.lid && r.reply_to === m.lid));
+  const needsHuman = isRequest(m) && !m._local && !m.deleted && !posted && (m.dir === "in" ? m.state : m.exec?.stale ? "" : m.exec?.state) === "needs_human";
   const needsHumanDetail = !needsHuman ? "" : (isThreadMsg(m) ? m.detail : m.job_detail) || remoteNeedsHumanDetail(m, ctx.overview) ||
     (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
 

@@ -490,10 +490,21 @@ func (a *Agent) projectConvAttention(conv string, msgs []ConvMessage) error {
 			continue
 		}
 		mark := marks[convAttentionRef(conv, *m)]
-		m.Unread = attentionUnread(mark, m.Dir == "in" && m.Unread)
+		m.Unread = attentionUnread(mark, (m.Dir == "in" || ownAgentTagsOwner(*m, owner)) && m.Unread)
 		m.Attention = attentionGeneration(mark)
 	}
 	return nil
+}
+
+// ownAgentTagsOwner: a reply of this person's own agent, from another of
+// their devices, that tags this person (an agent's needs_human result is
+// posted that way, finishAgentNeedsHuman) is an arrival for them like any
+// agent reply tagging them, though convMessages lists own devices' rows as
+// sent. Their own messages from another device, and untagged agent replies,
+// stay read.
+func ownAgentTagsOwner(m ConvMessage, owner string) bool {
+	return owner != "" && m.Via != "" && m.PID != "" && envelope.AgentOrigin(m.Origin) &&
+		(m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && strings.Contains(m.Body, "](agentnet:person/"+owner+")")
 }
 func (a *Agent) projectDirectAttention(msgs []ConversationMessage) error {
 	owner, err := attentionOwner(a.store.db)

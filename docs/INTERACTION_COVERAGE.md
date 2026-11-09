@@ -4,7 +4,7 @@
 
 Owner, 2026-11-09: "we need to remove these idiotic popup windows with 'asks' -
 they make no sense at all, impossible to understand what's needed and only
-bring chaos." Changed (Comic, plus one client store hunk; no wire or
+bring chaos." Changed (Comic and client; no new message kind, wire field or
 skin-contract change):
 
 - An agent's needs_human result shows as that agent's own chat message under
@@ -21,7 +21,26 @@ skin-contract change):
   reruns, and native permission requests (NativeRequest) are unchanged.
 - Review no longer lists needs_human items, report rows or reports made only
   of them; the Review badge, banner and chat-row counts exclude them.
-- The result is unread like any other arrival: ending a job as needs_human
+- In a conversation the agent's needs_human result is delivered as its normal
+  chat reply (`finishAgentNeedsHuman`, `finishAgent`'s `SendConv` path, kind
+  answer/result), signed and encrypted to the conversation's audience, opening
+  with the asker's exact mention (also in a plain DM). The claim stores the
+  reply and keeps the request at needs_human in one transaction, so a restart
+  or redelivery never posts it twice, and a reply or the exact continuation
+  continues it. The request no longer repeats it as a turn when that reply is
+  in the chat. Consequence: the text, including any native-permission detail,
+  now reaches everyone who can see the agent's replies there, other people
+  in a group too; before, it never left the agent's device.
+- At the asker's device it is a normal arrival: unread, counted in the badge
+  and chat-row numbers, and a chat alert where alerts allow it (another
+  person's agent). An own agent's reply from another of the owner's devices
+  is listed as sent, so a reply of their own agent that tags the owner
+  (`ownAgentTagsOwner`) counts as an arrival; their own messages and untagged
+  agent replies stay read. Own devices get no chat alert (an own device is
+  not an alert sender); the review notice still covers them.
+- Without a conversation (device thread), or for a cut-off proposal or a
+  harness's own attention, the result stays on the host and is unread like
+  any other arrival: ending a job as needs_human
   writes a new attention generation on the request's exact
   chat/author/message tuple (`needsHumanUnread`, the `MarkUnread` path). The
   badge counts it, read sync carries it to the person's human devices
@@ -38,12 +57,15 @@ Reply), `TestAttentionLabelsRendered`, `TestComicOKsNavigationRendered`,
 `TestFullApprovalReasonRendered`, `TestNeedsHumanReportHistoryRendered`,
 `TestNeedsYouRendered` (Review clear, full text in chat), and
 `TestCompactProposalApprovalRendered`; client
-`TestNeedsHumanResultIsUnreadAttention` (unread, badge recount, carried to the
-phone, cleared by reading; failed without the fix). Not done: attention when
-the agent's device has no human key (it sends no read sync, so the person's
-other devices get only the review notice); the native notice still says "needs
-your decision"; a different person who asked in a group gets nothing (the
-result never leaves the agent's device); CLI
+`TestNeedsHumanResultPostedToAsker` (agent on a host without a human key,
+asker on another device: one tagged reply, unread, one chat alert, host stays
+needs_human with no mark, no rerun or second post, reading clears; failed
+without the fix), `TestOwnAgentReplyTaggingOwnerIsUnread` (predicate only),
+`TestNeedsHumanResultIsUnreadAttention` (host-only path). Not done: an
+end-to-end own-device run (owner and agent host as one person); the review
+notice still says "needs your decision"; a held-back needs_human reply leaves
+the host request at needs_human; Reply on the posted reply walking to the
+request (Composer.followup.ts already accepts needs_human) is not exercised; CLI
 `agentnet inbox --review` and harness-hook "awaiting your human's decision"
 wording; device-thread review rows (`review[]` carries no state); latency
 measurement; agentnet-skins collection skins.

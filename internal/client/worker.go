@@ -772,6 +772,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if rest == "" {
 			rest = r.Harness + " said this needs your decision but gave no reason"
 		}
+		if j.PID != "" && j.Receiver == nil && !j.followUp() {
+			a.finishAgentNeedsHuman(ctx, j, r, rest) // the agent's chat message
+			return
+		}
 		a.endJob(j.ID, stateNeedHuman, rest, j.nativeAttempt)
 		if state, _ := a.store.jobState(j.ID); state == stateNeedHuman {
 			a.Logf("%s %s: needs your decision", j.Kind, j.ID)
@@ -1184,7 +1188,7 @@ func clarificationPrompt(owner string, mention ...string) string {
 	}
 	return "For ordinary missing information or business choices, ask a normal question in this authorized chat, " + tag + ". Their answer, tagged or sent with Reply on your question, continues the same requested outcome and context; other untagged messages are background context and do not start work. Do not use a separate blocking decision or require a manual Mark as handled step for an ordinary clarification.\n" +
 		"Missing checkout or session context is not a permission denial. Inspect available capabilities within the requested scope and native policy; if context is still unavailable, report the exact failed operation and evidence in the chat, who can fix it and their supported next action (or nothing). Ask only for missing information; do not repeat unexplained environment jargon or replay completed work.\n" +
-		fmt.Sprintf("Only when a concrete native permission or required sender/task authorization prevents progress, make your first line exactly %q and describe the exact blocked operation and required authorization for %s; nothing will be sent back. Do not use this marker for ordinary clarification or business choices.\n", needsHumanMarker, owner)
+		fmt.Sprintf("Only when a concrete native permission or required sender/task authorization prevents progress, make your first line exactly %q and describe the exact blocked operation and required authorization for %s; in a conversation it is posted there as your reply, tagging the requester. Do not use this marker for ordinary clarification or business choices.\n", needsHumanMarker, owner)
 }
 
 // tail returns the last max bytes of s.
