@@ -70,6 +70,50 @@ request (Composer.followup.ts already accepts needs_human) is not exercised; CLI
 wording; device-thread review rows (`review[]` carries no state); latency
 measurement; agentnet-skins collection skins.
 
+## MEL-750 video posters — unreleased, November 9, 2026
+
+Owner: "video upload should show a preview or something." A video was a
+file card plus a separate Play button.
+
+**Counterpart inspected in source.** Telegram Desktop `5ff61571`:
+`history/view/media/history_view_gif.cpp` 794–796 (`validateThumbCache`
+draws the thumbnail), 828–871 (Play/Download/Cancel in the middle of it);
+`data/data_document_media.cpp` 53–72 (`PrepareGoodThumbnail` takes a frame of
+the downloaded file) and 445–500 (`GenerateGoodThumbnail` runs it off the main
+thread, once, and caches a failure as "(failed)"). Telegram also sends a small
+inline thumbnail with the message; reusing that would be a manifest change, so
+it is not reused. Slack and WhatsApp are closed; not inspected.
+
+**Reused/adapted.** The card keeps its existing player, FileChip (name,
+size, Download), Close video, Expand and every label. Its top is now a frame:
+once the file is on this device (received and downloaded, or a sent file's
+kept copy) and Play could open it (≤16 MiB), the first frame near 0.1 s of
+the same bytes Play reads, captured in a muted element that is never played
+or put in the page, then unloaded (`video-poster.ts`). Captures run one at a
+time, only for cards near the screen, give up after 4 s, and are kept in
+memory like pictures (not across reloads). The frame is the Play control
+("Play video NAME"), with a spinner while the video loads. Without a still
+(capture failed, not a video) the dark frame keeps Play; a file still to
+download, or too big to play here, shows the frame without Play and its
+existing Download / "Videos up to 16 MiB" text. No protocol or manifest
+field; `UI_SKINS.md` host API unchanged. Gallery skins Classic/Holonet/Zoom
+keep their own copies of the shared player and are unchanged.
+
+| Control / state | Immediate local change | Completion | Failure | Evidence |
+|---|---|---|---|---|
+| Video card on screen, file here | dark frame with Play at once; still fades in when made | poster (`data-poster="ready"`), video ratio, bounded like pictures | plain frame keeps Play and Download (`none`) | `TestVideoPosterRendered`, `TestImageViewerRendered` |
+| Play video (poster frame) | spinner in the frame, "Loading video…" | existing player; Close returns to the same poster | existing notes; Play and Download stay | same |
+| Composer while a poster's read is held | key visible | — | — | `TestVideoPosterRendered`: one key 48–245 ms |
+
+Chromium 1440/390 and Firefox 1440/390, local run November 9: poster after
+the held read was released 68–332 ms, Play to player 168–404 ms, no page
+errors, zero `play()` calls before Play, every capture Blob revoked
+(`TestImageViewerRendered`). Not run locally: WebKit (Playwright's Linux
+WebKit needs Ubuntu ICU 74/libflite libraries this host lacks); it runs as a
+new macOS WebKit CI step (`AGENTNET_VIDEO_ENGINES=webkit`). Not run: the Linux
+app's WebKitGTK webview (capture uses Play's interleaved bytes there),
+macOS/Windows/Android shells, physical devices.
+
 ## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
 
 Not qualified, not released, pre-CI hold. Focused evidence only.
