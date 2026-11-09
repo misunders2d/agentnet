@@ -43,7 +43,7 @@ func (s *stub) runs() []string {
 func sessionOf(t *testing.T, a *Agent, id string) *sessionRef {
 	t.Helper()
 	var raw sql.NullString
-	if err := a.store.db.QueryRow(`SELECT session_ref FROM inbox WHERE id = ?`, id).Scan(&raw); err != nil {
+	if err := a.store.db.QueryRow(`SELECT session_ref FROM inbox WHERE id = ? OR lid = ? ORDER BY id = ? DESC LIMIT 1`, id, id, id).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	if !raw.Valid {
@@ -471,5 +471,116 @@ func TestCodexAnswerFromEvents(t *testing.T) {
 				t.Fatalf("malformed approval became actionable: callbacks=%d err=%v", callbacks, err)
 			}
 		}
+	}
+}
+
+// convAsk asks a conversation's agent through the real app path (AskAgent:
+// target AgentID + participation PID) and waits for its answer.
+func convAsk(t *testing.T, from *Agent, conv, pid, body string) string {
+	t.Helper()
+	q, err := from.AskAgent(tctx(t), pid, envelope.KindQuestion, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, from, conv, q.ID)
+	return q.ID
+}
+
+func lastRun(st *stub) string { runs := st.runs(); return runs[len(runs)-1] }
+
+// MEL-746: the conversation's agent keeps its native session between turns.
+// The second ask in the same chat, by the same verified person, resumes the
+// session the first one started; a different person in the chat never gets
+// it, and their own next ask resumes their own.
+func TestSessionResumesInAgentConversation(t *testing.T) {
+	st := sessionStub(t)
+	w, conv, lids, _ := agentWorld(t)
+	setResponder(t, w.bob, "cstyle", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:1], nil)
+
+	q1 := convAsk(t, w.alice, conv, pid, "first")
+	ref := sessionOf(t, w.bob, q1)
+	if ref == nil || len(ref.ID) != 36 {
+		t.Fatalf("no saved session for a conversation ask: %+v (run %s)", ref, lastRun(st))
+	}
+	if run := lastRun(st); !strings.Contains(run, "--session-id "+ref.ID) || strings.Contains(run, sessionOneShot) {
+		t.Fatalf("first run: %s", run)
+	}
+	q2 := convAsk(t, w.alice, conv, pid, "second")
+	if run := lastRun(st); !strings.Contains(run, "--resume "+ref.ID) || strings.Contains(run, "--session-id") {
+		t.Fatalf("second ask in the conversation did not resume: %s", run)
+	}
+	if r2 := sessionOf(t, w.bob, q2); r2 == nil || r2.ID != ref.ID {
+		t.Fatalf("second job's session %+v", r2)
+	}
+
+	// The host's own person is another person here: their own session.
+	own := convAsk(t, w.bob, conv, pid, "mine")
+	if r := sessionOf(t, w.bob, own); r == nil || r.ID == ref.ID || strings.Contains(lastRun(st), "--resume") {
+		t.Fatalf("another person reused alice's session: %+v %s", r, lastRun(st))
+	}
+	mine := sessionOf(t, w.bob, own).ID
+	// Alice continues hers, then bob his: neither is broken by the other.
+	convAsk(t, w.alice, conv, pid, "third")
+	if run := lastRun(st); !strings.Contains(run, "--resume "+ref.ID) {
+		t.Fatalf("alice's session not resumed after bob's turn: %s", run)
+	}
+	convAsk(t, w.bob, conv, pid, "mine again")
+	if run := lastRun(st); !strings.Contains(run, "--resume "+mine) {
+		t.Fatalf("bob's session not resumed: %s", run)
+	}
+}
+
+// MEL-746, Codex: the conversation's second ask resumes the exact owned
+// native thread instead of starting a new one.
+func TestCodexSessionResumesInAgentConversation(t *testing.T) {
+	st := sessionStub(t)
+	w, conv, lids, _ := agentWorld(t)
+	setResponder(t, w.bob, "xstyle", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:1], nil)
+	q1 := convAsk(t, w.alice, conv, pid, "first")
+	if ref := sessionOf(t, w.bob, q1); ref == nil || ref.ID != "thread-1" {
+		t.Fatalf("captured %+v", ref)
+	}
+	q2 := convAsk(t, w.alice, conv, pid, "second")
+	raw, _ := os.ReadFile(st.log + ".rpc")
+	if !strings.Contains(string(raw), "thread/start") || !strings.Contains(string(raw), "thread/resume thread-1") {
+		t.Fatalf("conversation ask did not resume its thread: %s", raw)
+	}
+	if ref := sessionOf(t, w.bob, q2); ref == nil || ref.ID != "thread-1" {
+		t.Fatalf("second job's session %+v", ref)
+	}
+}
+
+// MEL-746: in a group, one person's native context is never reused for
+// another person's ask, and each person's own next ask resumes their own.
+func TestSessionGroupPersonIsolation(t *testing.T) {
+	st := sessionStub(t)
+	w, carol, packet, _ := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	for _, a := range []*Agent{w.alice, w.bob, carol} {
+		roomReader(t, a)
+	}
+	setResponder(t, w.bob, "cstyle", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	w.bob.Approve(carol.Address)
+	part := p6Member(t, w.alice, w.bob, conv)
+	a1 := convAsk(t, w.alice, conv, part.PID, "alice first")
+	alice := sessionOf(t, w.bob, a1)
+	if alice == nil {
+		t.Fatalf("no session for alice's group ask: %s", lastRun(st))
+	}
+	c1 := convAsk(t, carol, conv, part.PID, "carol first")
+	if r := sessionOf(t, w.bob, c1); r == nil || r.ID == alice.ID || strings.Contains(lastRun(st), "--resume") {
+		t.Fatalf("carol got alice's context: %+v %s", r, lastRun(st))
+	}
+	carols := sessionOf(t, w.bob, c1).ID
+	convAsk(t, w.alice, conv, part.PID, "alice second")
+	if run := lastRun(st); !strings.Contains(run, "--resume "+alice.ID) {
+		t.Fatalf("alice's group session not resumed: %s", run)
+	}
+	convAsk(t, carol, conv, part.PID, "carol second")
+	if run := lastRun(st); !strings.Contains(run, "--resume "+carols) {
+		t.Fatalf("carol's group session not resumed: %s", run)
 	}
 }
