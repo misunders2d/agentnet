@@ -67,7 +67,7 @@ export function mountEditorHarness(seed: any, form: string) {
     const [open,setOpen] = useState(false);
     // Render the same invented authoritative report that the real Store uses
     // for exact target/version validation, rather than a props-only report.
-    if (form === "report") o.review = [{id:"7".repeat(32),kind:"message",peer:o.me.address,why:"",excerpt:"",at:new Date().toISOString(),report:{v:1,at:1,host:o.me.address,items:[{id:f.target.repeat(32),key:"exact-key",attempt:f.attempt,from:dm.peer.address,kind:"question",state:"needs_human",blocker:"",since:1,excerpt:"Invented missing information",actionable:true}]}}];
+    if (form === "report") o.review = [{id:"7".repeat(32),kind:"message",peer:o.me.address,why:"",excerpt:"",at:new Date().toISOString(),report:{v:1,at:1,host:o.me.address,items:[{id:f.target.repeat(32),key:"exact-key",attempt:f.attempt,from:dm.peer.address,kind:"question",state:"held",blocker:"",since:1,excerpt:"Invented missing information",actionable:true}]}}];
     const store = getStore(f.workspace);
     const m = {...dm.messages[0],id:f.target.repeat(32),revision:f.attempt};
     const key = JSON.stringify([form,f.target,f.attempt]);
