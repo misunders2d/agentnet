@@ -40,13 +40,15 @@ async function noHorizontalScroll(target, label) {
       // parameter, so the skin is chosen on a second visit.
       await p.goto(process.argv[2]);
       await p.goto(new URL(process.argv[2]).origin+'/?skin='+skin);
+      // The agent's needs_human result is no Review card: Review is clear.
       await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Review/}).click();
-      const summary=p.locator('summary').filter({hasText:'Read the agent’s whole message'}).first();
-      await summary.waitFor();await summary.focus();await summary.press('Enter');
-      assert.equal(await p.locator('details[open] p').first().textContent(),full,skin+': expansion keeps every paragraph');
-      if(skin==='comic') await noHorizontalScroll(summary,'Comic OKs '+mode);
-      await snap('oks-expanded');
-      await p.locator('[data-open]').filter({hasText:'Original request'}).click();
+      await p.getByRole('heading',{name:'Review',exact:true}).waitFor();
+      assert.equal(await p.locator('summary').filter({hasText:'Read the agent’s whole message'}).count(),0,skin+': no needs-attention card');
+      assert.equal(await p.locator('[data-open]').filter({hasText:'Original request'}).count(),0,skin+': not listed in Review');
+      await snap('oks-clear');
+      if(mode==='phone'&&await p.getByRole('button',{name:'Back to chats',exact:true}).count())await p.getByRole('button',{name:'Back to chats',exact:true}).click();
+      await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Chats/}).click();
+      await p.locator('[data-part="chat-row"]').filter({hasText:'Original request'}).first().click();
       const turn=p.locator('[data-agent-needs-you]').filter({visible:true});
       // Markdown keeps paragraph nodes rather than one raw multiline text
       // node. Check every rendered word, including the final unbroken tail.
@@ -54,13 +56,10 @@ async function noHorizontalScroll(target, label) {
       await turn.getByText(tail,{exact:false}).first().waitFor();
       const normalize=s=>s.replace(/\s+/g,' ').trim();
       assert(normalize(await turn.innerText()).includes(normalize(full)),skin+': full Markdown content remains readable');
-      if(mode==='desktop') {
-        await p.getByRole('button',{name:'Ask again',exact:true}).first().waitFor();
-        await p.getByRole('button',{name:'Mark as handled',exact:true}).first().waitFor();
-      } else {
-        assert.equal(await p.getByRole('button',{name:'Ask again',exact:true}).count(),0,skin+': phone gained no execution action');
-        await p.getByText(/Open it on/).locator('visible=true').first().waitFor(); // the closed OKs panel keeps a hidden copy
-      }
+      for(const gone of ['Ask again','Mark as handled','Run it again'])assert.equal(await p.getByRole('button',{name:gone,exact:true}).count(),0,skin+': no '+gone);
+      const page=await p.evaluate(()=>document.querySelector('#skin').shadowRoot.textContent);
+      for(const gone of ['couldn’t finish','needs your attention','For a native permission','waits for you','Open it on'])assert(!page.includes(gone),skin+': removed '+gone);
+      await turn.getByRole('button',{name:'Reply',exact:true}).waitFor();
       assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth > innerWidth+1),false,skin+': horizontal overflow');
       if(skin==='comic') await noHorizontalScroll(turn,'Comic chat '+mode);
       await snap('chat-agent-turn');
@@ -68,5 +67,5 @@ async function noHorizontalScroll(target, label) {
       await ctx.close();
     }
   } finally {await browser.close();}
-  console.log('P13 rendered PASS '+mode+': Comic, keyboard expansion, full chat text, actions/read-only, overflow');
+  console.log('P13 rendered PASS '+mode+': Comic, Review clear, full agent message in chat, Reply only, overflow');
 })().catch(e=>{console.error(e);process.exit(1);});

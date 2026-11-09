@@ -21,7 +21,10 @@ import { agentName, deliveryWord, deviceName, firstLine, fullStamp, owner, perso
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
-import { deviceWords, phaseOf } from "./Approvals.words";
+import { deviceWords, phaseOf, remoteNeedsHumanDetail } from "./Approvals.words";
+import { focusComposer } from "./Composer.focus";
+import { AnswerSheet, AttentionReplyStatus } from "./Approvals.sheets";
+import { useStore } from "../store";
 import { Markdown, MessageLinks, type RenderMention } from "./Markdown";
 import { AssignMessage } from "./Message.assign";
 import { MessageFiles } from "./Message.files";
@@ -36,7 +39,7 @@ import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
 import { copyText } from "./Settings.parts";
 import { sendFailure } from "./Message.send-error";
-import { usePortal } from "../owned";
+import { useOwned, usePortal } from "../owned";
 
 export interface MessageProps {
   m: AnyMsg;
@@ -135,7 +138,14 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     : who.mine ? "rounded-[20px] bg-mine text-mine-ink" + (last ? " rounded-br-md" : "")
       : "rounded-[20px] bg-theirs text-ink" + (last ? " rounded-bl-md" : "");
 
-  const needsHumanDetail = isThreadMsg(m) ? "" : m.job_detail || (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
+  // An agent's needs_human result, from its host's record here or its signed
+  // owner report: shown as that agent's own chat message, never a card.
+  // A conversation agent posts its needs_human result as its own reply
+  // (finishAgentNeedsHuman): that reply is the message, so the request does not repeat it.
+  const posted = !isThreadMsg(m) && !!ctx.dm?.messages?.some(r => isReply(r) && !!r.pid && (r.reply_to === m.id || !!m.lid && r.reply_to === m.lid));
+  const needsHuman = isRequest(m) && !m._local && !m.deleted && !posted && (m.dir === "in" ? m.state : m.exec?.stale ? "" : m.exec?.state) === "needs_human";
+  const needsHumanDetail = !needsHuman ? "" : (isThreadMsg(m) ? m.detail : m.job_detail) || remoteNeedsHumanDetail(m, ctx.overview) ||
+    (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
   const body = (
@@ -231,10 +241,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
         {assign !== null && <AssignMessage open={assign} onOpenChange={setAssign} m={m} ctx={ctx} />}
       </div>
       {targets && <details data-agent-outcomes open={outcomesOpen} className="mx-3 mt-1 rounded-xl bg-surface/60 px-3 sm:mx-4" onToggle={event => setOutcomesOpen(event.currentTarget.open)}>
-        <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] font-semibold text-text-2">{targets.length} agent outcomes{targets.some(target => target._failed || ["decide", "needs_human"].includes(phaseOf(target) || "")) ? " · needs attention" : ""}</summary>
+        <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] font-semibold text-text-2">{targets.length} agent outcomes{targets.some(target => target._failed || phaseOf(target) === "decide") ? " · needs attention" : ""}</summary>
         {outcomesOpen && <div className="max-h-64 overflow-y-auto overscroll-contain pb-2">{targets.map(target => <MessageView key={target.id} m={target} ctx={ctx} all={all} compact grouped outcomeOnly readOnly={readOnly} onJump={onJump} selecting={selecting} selected={selectedIds?.includes(target.id)} onSelect={onSelect} formatTime={formatTime} />)}</div>}
       </details>}
-      {!targets && !readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <AgentNeedsHumanTurn m={m} ctx={ctx} detail={needsHumanDetail} />}
+      {!targets && !readOnly && needsHumanDetail && <AgentNeedsHumanTurn m={m} ctx={ctx} detail={needsHumanDetail} />}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!targets && !readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">
@@ -246,14 +256,45 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   );
 }
 
-export function AgentNeedsHumanTurn({m, ctx, detail}: {m:T.DMMessage; ctx:Ctx; detail:string}) {
-  const name = historicalTargetLabel(m.target, ctx.names);
-  const label = name + (m.target?.address ? " on " + deviceWords(m.target.address, ctx.overview) : "");
-  return <section data-agent-needs-you tabIndex={-1} aria-label={label + " says"} className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4">
-    <p className="font-bold">{label} couldn’t finish — it needs your attention</p>
-    <Markdown className="pt-1 text-ink" text={requestResultText(detail)} />
-    <p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p>
-  </section>;
+/** An agent's needs_human result, as that agent's ordinary chat message to
+ *  whoever asked. Reply (or any message replying to the request) is the exact
+ *  linked follow-up (Composer.followup.ts, MEL-497): it continues this same
+ *  request under the agent's existing permissions; nothing reruns by itself. */
+export function AgentNeedsHumanTurn({m, ctx, detail}: {m:AnyMsg; ctx:Ctx; detail:string}) {
+  const store = useApp();
+  const { root } = useOwned();
+  const target = isThreadMsg(m) ? undefined : m.target;
+  const host = isThreadMsg(m) ? m.exec?.host || m.to || "" : target?.address || "";
+  const name = (isThreadMsg(m) ? "Agent" : historicalTargetLabel(target, ctx.names)) + (host ? " on " + deviceWords(host, ctx.overview) : "");
+  const asker = whoWrote(m, ctx);
+  const requester = asker.mine && ctx.overview?.person ? personName(ctx.overview.person) : asker.name;
+  const reply = ctx.canReply && !(ctx.dm && ctx.dm.frozen);
+  // A request run on another device of yours carries its exact continuation:
+  // the reply goes to that host, which checks it before continuing (MEL-497).
+  // Without it, your own request's Reply is the composer's exact linked
+  // follow-up; another person's request has no continuation from here.
+  const c = m.continuation;
+  const target_ = c ? {host:c.host || "",id:c.id,key:c.key,attempt:c.attempt,action:"continue",expect:"needs_human",report:""} : null;
+  const version = target_ ? store.attentionReplyVersion(target_) : "";
+  const pending = useStore(store, () => store.attentionReply(target_, version));
+  const [answer, setAnswer] = useState(false);
+  return <div data-agent-needs-you data-from="agent" className="mt-2 flex justify-start px-3 sm:px-4">
+    <div className="relative ml-10 flex min-w-0 max-w-[calc(100%-3rem)] flex-col items-start sm:max-w-[80%] lg:max-w-[70%]">
+      <div className="mb-1 pl-1 text-[13px] font-bold leading-tight text-agent-ink">{name}</div>
+      <div role="group" aria-label={name + " says"} className="relative min-w-0 max-w-full rounded-xl bg-agent px-3.5 py-2 text-ink stroke">
+        <span className="absolute -left-10 bottom-0"><AgentAvatar seed={target?.agent_id || host || "agent"} size={32} /></span>
+        <Markdown text={"**@" + requester + "** " + requestResultText(detail)} />
+      </div>
+      {pending && target_ && <div className="mt-1"><AttentionReplyStatus pending={pending} onRetry={() => store.retryAttentionReply(target_, version)} /></div>}
+      {(target_ || reply && asker.mine) && !pending && <button type="button" className="mt-1 inline-flex min-h-11 items-center gap-1 px-1 text-[13px] underline" onClick={() => {
+        if (target_) { setAnswer(true); return; }
+        store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id });
+        focusComposer(root, ctx.conv);
+      }}><IconArrowBackUp size={16} aria-hidden="true" />Reply</button>}
+    </div>
+    {answer && target_ && <AnswerSheet draftKey={JSON.stringify(["answer", ctx.conv, c!.host, c!.id, c!.key, c!.attempt])} question={detail} onClose={() => setAnswer(false)}
+      onSend={text => store.submitAttentionReply(target_, version, text)} />}
+  </div>;
 }
 
 function adjacent(all: AnyMsg[], a: AnyMsg, b: AnyMsg) {

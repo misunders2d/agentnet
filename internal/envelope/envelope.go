@@ -257,6 +257,15 @@ const (
 	// with a non-blank plain body: no files, target, route or sub.
 	StatusProposal = "proposal"
 
+	// StatusNeedsHuman marks an agent's answer or result that is not its
+	// request's last word: the agent posted its needs_human result as its
+	// reply, and the host's needs_human status stays the request's word.
+	// The Go client closes a request only on a terminal status (convAnswer);
+	// the browser engine closes on any other answer or result. Clients before
+	// it admit it unvalidated: their Go client keeps the host's needs_human,
+	// while their browser engine shows the request closed by the reply.
+	StatusNeedsHuman = "needs_human"
+
 	// StatusReviewNotice on a plain message with no reply_to and no files
 	// says only that items wait for a person on the sender's machine. It is
 	// content-free and grants nothing: the recipient files it for its own

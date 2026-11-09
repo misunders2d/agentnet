@@ -1428,6 +1428,12 @@ func (s *store) jobState(id string) (string, error) {
 // outcome is notified afresh. A Stop already stored at that commit wins over
 // completed NEEDS-HUMAN output; daemon interruption retains its unknown outcome.
 func (s *store) finishJob(id, state, detail string, selected ...int64) error {
+	return s.finishJobAs("", id, state, detail, selected...)
+}
+
+// finishJobAs is finishJob by this device's key writer: a needs_human end
+// then also raises the person's attention on the request (needsHumanUnread).
+func (s *store) finishJobAs(writer, id, state, detail string, selected ...int64) error {
 	var attempt int64
 	if len(selected) > 0 {
 		attempt = selected[0]
@@ -1463,8 +1469,48 @@ func (s *store) finishJob(id, state, detail string, selected ...int64) error {
 				return err
 			}
 		}
+		if writer != "" && state == stateNeedHuman {
+			if err = needsHumanUnread(tx, id, writer); err != nil {
+				return err
+			}
+		}
 	}
 	return s.done(tx.Commit())
+}
+
+// needsHumanUnread makes an agent's needs_human result, now shown as the
+// agent's chat message on its request, unread for this person the way a
+// "mark as unread" does (MarkUnread): a new attention generation on the
+// request's exact chat/author/message tuple (arrivalUnread's). The badge
+// counts it, the person's devices receive it by read sync (MEL-693), and
+// reading it on any of them clears it. The decision notice already covers
+// the native notification (notifyReview), so no second alert is queued. A
+// Stop that won (cancelled) or an input bound to a native receiver gets none.
+func needsHumanUnread(tx *sql.Tx, id, writer string) error {
+	var ref protocol.ReadRef
+	var ok bool
+	err := tx.QueryRow(`SELECT coalesce(conv,''),coalesce(verified_by,claimed_fp,''),coalesce(nullif(lid,''),id),
+		state=? AND kind IN (?,?) AND coalesce(sub,'')='' AND NOT EXISTS(SELECT 1 FROM reply_receiver_inputs WHERE inbox_id=inbox.id)
+		FROM inbox WHERE id=?`, stateNeedHuman, envelope.KindQuestion, envelope.KindTask, id).Scan(&ref.Conv, &ref.Fingerprint, &ref.LID, &ok)
+	if err != nil || !ok || !protocol.ValidFingerprint(ref.Fingerprint) || !protocol.ValidFingerprint(writer) {
+		return err
+	}
+	owner, err := attentionOwner(tx)
+	if err != nil || owner == "" {
+		return err
+	}
+	marks, err := loadAttentionMarks(tx, owner, []protocol.ReadRef{ref})
+	if err != nil {
+		return err
+	}
+	old := marks[ref]
+	if old.Rev >= protocol.MaxAttentionRevision {
+		return nil
+	}
+	_, err = tx.Exec(`INSERT INTO attention_marks(owner,conv,fingerprint,lid,state,revision,writer) VALUES(?,?,?,?,'unread',?,?)
+		ON CONFLICT(owner,conv,fingerprint,lid) DO UPDATE SET state='unread',revision=excluded.revision,writer=excluded.writer`,
+		owner, ref.Conv, ref.Fingerprint, ref.LID, old.Rev+1, writer)
+	return err
 }
 
 // unnotified returns the ids of items waiting for this person's decision

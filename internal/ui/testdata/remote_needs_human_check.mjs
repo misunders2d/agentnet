@@ -30,7 +30,8 @@ assert.equal(words.remoteNeedsHumanDetail({...m,continuation:undefined},overview
 assert.deepEqual(m.continuation,{host,id,key,attempt},'presentation preserves exact reply/resolve binding');
 for (const state of ['done','answered','resolved','declined','proposal','unavailable'])
  assert.equal(words.phaseOf({...m,exec:{...m.exec,state},actions:['continue']}),null,'a confirmed terminal outcome cannot display an old continuation as a new human decision');
-assert.equal(words.phaseOf({...m,actions:['continue']}),'needs_human','a different later request succeeding never closes this exact blocker');
+assert.equal(words.phaseOf({...m,actions:['continue']}),null,'a needs_human result is the agent\u2019s chat message, never a card');
+assert.equal(words.phaseOf({...m,continuation:undefined,dir:'in',state:'needs_human',actions:['reply','accept','resolve']}),null,'no Ask again/Mark as handled card on the host either');
 assert.equal(words.phaseOf({...m,kind:'answer',body:'@Sergey Which budget should I use?',continuation:undefined,exec:undefined,actions:[]} ),null,'ordinary signed chat clarification never creates a separate decision form');
 const old=notice([item],100),empty=notice([],101);
 assert.equal(model.latestReviewReport([old,empty]),empty,'newest empty report settles historical blockers');

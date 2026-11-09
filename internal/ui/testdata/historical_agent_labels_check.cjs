@@ -13,7 +13,8 @@ function load(file,globals,extra=''){
  return env.module.exports;
 }
 const model=load('model.ts',{collectivePlain:s=>s,previewText:s=>s}),message=load('features/Message.model.ts',model);
-const view=load('features/Message.tsx',{memo:f=>f,historicalTargetLabel:message.historicalTargetLabel,Markdown:'Markdown',deviceWords:h=>h,requestResultText:s=>s});
+const view=load('features/Message.tsx',{memo:f=>f,historicalTargetLabel:message.historicalTargetLabel,whoWrote:message.whoWrote,isThreadMsg:message.isThreadMsg,personName:model.personName,Markdown:'Markdown',AgentAvatar:'AgentAvatar',AnswerSheet:'AnswerSheet',AttentionReplyStatus:'AttentionReplyStatus',IconArrowBackUp:'IconArrowBackUp',deviceWords:h=>h,requestResultText:s=>s,
+ useApp:()=>({attentionReplyVersion:()=>'',attentionReply:()=>null}),useOwned:()=>({}),useStore:(_,f)=>f(),useState:i=>[i,()=>{}],focusComposer:()=>{}});
 const host='atlas/host',fingerprint='11111111-11111111-11111111-11111111',pi='a'.repeat(32),claude='b'.repeat(32),current='c'.repeat(32);
 const names={[pi]:'Pi',[pi+'#host']:host,[pi+'#host_key']:fingerprint,[pi+'#harness']:'claude',[claude]:'Claude',[claude+'#host']:host,[claude+'#host_key']:fingerprint,[current]:'Current default'};
 const ctx={conv:'d'.repeat(64),names,dm:{agents:[]},thread:null,overview:{me:{address:'atlas/laptop',responder:'codex'}}};
@@ -21,11 +22,12 @@ const target=id=>({address:host,fingerprint,agent_id:id});
 const original={id:'e'.repeat(32),pid:'original-pid',dir:'out',kind:'question',target:target(pi),exec:{state:'needs_human',attempt:3,host},continuation:{host,id:'f'.repeat(32),key:fingerprint,attempt:3}};
 const before=JSON.stringify(original),region=m=>view.AgentNeedsHumanTurn({m,ctx,detail:'Full original reason\nSecond paragraph'});
 const piTree=region(original),claudeTree=region({...original,target:target(claude)});
-assert.equal(piTree.props.tabIndex,-1,'the detached attention region remains focusable');
-assert.equal(piTree.props['aria-label'],'Pi on '+host+' says');assert.equal(claudeTree.props['aria-label'],'Claude on '+host+' says');
-assert.match(text(piTree),/^Pi on atlas\/host couldn’t finish/);assert.match(text(claudeTree),/^Claude on atlas\/host couldn’t finish/);
+const said=t=>nodes(t).find(n=>n.props?.['aria-label']);
+assert.equal(said(piTree).props['aria-label'],'Pi on '+host+' says');assert.equal(said(claudeTree).props['aria-label'],'Claude on '+host+' says');
+assert.match(text(piTree),/^Pi on atlas\/host/);assert.match(text(claudeTree),/^Claude on atlas\/host/);
+assert(!/couldn’t finish|needs your attention|Mark as handled|Ask again/.test(text(piTree)),'an ordinary agent message, never the removed card');
 assert(!text(piTree).includes('Claude'),'historical named request does not borrow a changed current harness');
-assert.equal(nodes(piTree).find(n=>n.tag==='Markdown').props.text,'Full original reason\nSecond paragraph');
+assert.match(nodes(piTree).find(n=>n.tag==='Markdown').props.text,/^\*\*@.+\*\* Full original reason\nSecond paragraph$/,'the agent text, tagging the requester');
 assert.equal(JSON.stringify(original),before,'presentation never changes target or continuation tuple');
 for(const changed of [{[pi+'#host_key']:'changed-key'},{[pi+'#host']:'another/host'},{[pi+'#host_key']:undefined}]){
  const label=message.historicalTargetLabel(target(pi),{...names,...changed});assert.equal(label,'Agent aaaaaaaa','a historical pin mismatch never borrows a catalog name');
@@ -46,12 +48,11 @@ const review=load('features/Approvals.conv.tsx',{...model,historicalTargetLabel:
  Button:'Button',Tag:'Tag',ConfirmSheet:'ConfirmSheet',DeclineSheet:'DeclineSheet',ResolveOwnRequest:'ResolveOwnRequest',
  deviceWords:h=>h,whyWords:s=>s,inChat:()=> 'in One shared group',capital:s=>s,kindTag:()=> 'Question',
 },'\nexport { RequestRow };');
-const o={...ctx.overview,needs_you:[],dms:[{id:ctx.conv,title:'One shared group'}]},item=id=>({conv:ctx.conv,id:id==='a'.repeat(32)?'pi-request':'claude-request',target:target(id),reason:model.Reason.needsHuman,peer:host,kind:'question',why:'Full original explanation',excerpt:'Same question',at:'2026-10-20T09:00:00Z',actions:[]});
+const o={...ctx.overview,needs_you:[],dms:[{id:ctx.conv,title:'One shared group'}]},item=id=>({conv:ctx.conv,id:id==='a'.repeat(32)?'pi-request':'claude-request',target:target(id),reason:model.Reason.interrupted,peer:host,kind:'question',why:'Full original explanation',excerpt:'Same question',at:'2026-10-20T09:00:00Z',actions:[]});
 o.needs_you=[item(pi),item(claude)];
 const reviewRow=c=>review.RequestRow({c,o}),openCard=t=>nodes(t).find(n=>n.tag==='OpenCard');
 for(const [id,label] of [[pi,'Pi'],[claude,'Claude']]){
- const c=item(id),tree=reviewRow(c),card=openCard(tree);assert.equal(card.props.label,label+' on '+host+' couldn’t finish — it needs your attention. Open it in the chat.');
- assert(text(tree).includes(label+' on '+host+' says:'),'said-prefix is exact even outside its caption');card.props.onOpen();
+ const c=item(id),tree=reviewRow(c),card=openCard(tree);assert.equal(card.props.label,label+' on '+host+' was interrupted — run it again if needed. Open it in the chat.');card.props.onOpen();
 }
 assert.deepEqual(opened,[['dm',ctx.conv,'pi-request'],['dm',ctx.conv,'claude-request']]);
 assert.match(openCard(reviewRow({...item(pi),reason:model.Reason.interrupted})).props.label,/^Pi on atlas\/host was interrupted/);

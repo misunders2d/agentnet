@@ -13,8 +13,7 @@ import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { Body, OpenCard, kindTag, useLand, useOpen } from "./Approvals.parts";
-import { Reason, capital, chatName, convTitle, deviceWords, inChat, personOf, senderOf, whyWords } from "./Approvals.words";
-import { ResolveOwnRequest } from "./RequestResolution";
+import { Reason, capital, chatName, convTitle, deviceWords, inChat, personOf, senderOf } from "./Approvals.words";
 import { historicalTargetLabel } from "./Message.model";
 
 type Props = { c: T.ConvItem; o: T.Overview };
@@ -72,27 +71,24 @@ function RequestRow({ c, o }: Props) {
   // A stale host word reports no result and asks nothing; running is work.
   const stale = !!c.stale;
   const running = isRunningElsewhere(c);
-  const human = c.reason === Reason.needsHuman && !stale;
-  const retry = human || c.reason === Reason.interrupted && !stale;
+  const retry = c.reason === Reason.interrupted && !stale;
   const working = isWorkingItem(c);
   const targetID = c.target?.agent_id;
   const targetName = historicalTargetLabel(c.target, names);
   const targetHeading = targetName + (c.target?.address ? " on " + deviceWords(c.target.address, o) : "");
-  const title = human ? targetHeading + " couldn’t finish — it needs your attention"
-    : c.reason === Reason.interrupted && !stale ? targetHeading + " was interrupted — run it again if needed" : convTitle(c, o,names);
+  const title = retry ? targetHeading + " was interrupted — run it again if needed" : convTitle(c, o,names);
   const duplicateName = targetID && (o.needs_you || []).some(x => x.conv === c.conv && x.target?.agent_id && x.target.agent_id !== targetID && ((names[x.target.agent_id] || "Agent "+x.target.agent_id.slice(0,8)) === targetName));
   const targetLabel = c.target ? "To " + targetName + " · " + deviceWords(c.target.address, o) + (duplicateName ? " · " + targetID!.slice(0, 8) : "") : "";
   const who = senderOf(c, o);
   const kind = c.kind === "task" ? "task" : "question";
-  const said = human && c.why ? whyWords(c.why, c.peer, o) : "";
   const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p>
     : stale ? <p className="mt-1 text-[14px] text-text-2 [overflow-wrap:anywhere]" data-unreported>{c.why || "No result reported"}</p>
     : running ? <p className="mt-1 text-[14px] text-text-2">Running on {deviceWords(c.decide_on, o)}.</p>
-    : c.continuation?.host ? <ResolveOwnRequest request={c.continuation} disabled={!!busy} /> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
+    : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
     {can("cancel") && <Button variant="danger" size="sm" disabled={!!busy} onClick={() => setSheet("stop")}>Stop</Button>}
     {can("accept") && <Button variant={retry ? "outline" : "act"} size="sm" disabled={!!busy}
       onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), retry ? "Running it again." : "Allowed once.")}>
-      {busy === "accept" ? (retry ? "Starting…" : "Allowing…") : human ? "Ask again" : retry ? "Run it again" : "Allow once"}
+      {busy === "accept" ? (retry ? "Starting…" : "Allowing…") : retry ? "Run it again" : "Allow once"}
     </Button>}
     {can("decline") && <Button variant="outline" size="sm" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
     {can("resolve") && <Button variant="ghost" size="sm" disabled={!!busy} aria-label="Mark as handled" onClick={() => setSheet("close")}>Mark as handled</Button>}
@@ -100,13 +96,11 @@ function RequestRow({ c, o }: Props) {
   return (
     <>
       <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Open it in the chat."}
-        face={human ? <AgentAvatar seed={c.pid || c.peer} size={40} /> : <SenderFace c={c} o={o} />} actions={actions}
-        detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
-        <Body tag={working || running ? <Tag tone="agent">Working</Tag> : stale ? <Tag tone="muted">No result</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs attention</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
+        face={<SenderFace c={c} o={o} />} actions={actions}>
+        <Body tag={working || running ? <Tag tone="agent">Working</Tag> : stale ? <Tag tone="muted">No result</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
           meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {(working || running) && <NativeActivity detail={c.why} className="pt-1 text-[14px] text-text-2 [overflow-wrap:anywhere]" />}
           {targetLabel && <p className="pt-1 text-[14px] font-semibold text-agent-ink" data-request-target>{targetLabel}</p>}
-          {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">{targetHeading} says:</b> {said}</p>}
         </Body>
       </OpenCard>
       <ConfirmSheet open={sheet === "stop"} onOpenChange={(v) => setSheet(v ? "stop" : "")}

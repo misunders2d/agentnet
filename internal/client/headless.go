@@ -465,7 +465,7 @@ func unreachableNow(err error) bool {
 
 // endJob is finishJob with the requester told where the request stands.
 func (a *Agent) endJob(id, state, detail string, attempt ...int64) error {
-	err := a.store.finishJob(id, state, detail, attempt...)
+	err := a.store.finishJobAs(a.Self().Fingerprint(), id, state, detail, attempt...)
 	var selected int
 	if e := a.store.db.QueryRow(`SELECT count(*) FROM reply_receiver_inputs WHERE inbox_id=?`, id).Scan(&selected); e != nil || selected != 0 {
 		return err

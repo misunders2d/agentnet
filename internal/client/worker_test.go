@@ -148,7 +148,7 @@ func TestQuestionsNeedApprovalAndAnswersDoNotTrigger(t *testing.T) {
 		t.Fatalf("stub run: %s", log)
 	}
 	stdin, _ := os.ReadFile(st.log + ".stdin")
-	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") || !strings.Contains(string(stdin), "send --reply-to <AGENTNET_REQUEST_ID> --progress") || !strings.Contains(string(stdin), "nothing will be sent back") {
+	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") || !strings.Contains(string(stdin), "send --reply-to <AGENTNET_REQUEST_ID> --progress") || !strings.Contains(string(stdin), "in a conversation it is posted there as your reply, tagging the requester") {
 		t.Fatalf("prompt: %s", stdin)
 	}
 }

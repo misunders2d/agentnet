@@ -778,6 +778,11 @@ func (a *Agent) requestAsker(j job, info ParticipationInfo, m dmMembers, author 
 // guests present, opens with so the asker sees it is for them; "" in a plain
 // DM, when the answer already names them, or when no asker can be named.
 func (a *Agent) answerMention(j job, text string) string {
+	return a.askerMention(j, text, false)
+}
+
+// askerMention is answerMention; always also tags in a plain DM.
+func (a *Agent) askerMention(j job, text string, always bool) string {
 	info, err := a.requestContextParticipation(j)
 	if err != nil {
 		return ""
@@ -787,7 +792,7 @@ func (a *Agent) answerMention(j job, text string) string {
 		return ""
 	}
 	guests, author, err := a.requestGuests(j, m)
-	if err != nil || m.root.Kind != protocol.ConvKindGroup && len(guests) == 0 {
+	if err != nil || !always && m.root.Kind != protocol.ConvKindGroup && len(guests) == 0 {
 		return ""
 	}
 	_, mention, err := a.requestAsker(j, info, m, author)
@@ -956,6 +961,58 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		a.Logf("%s %s: answered in its conversation (reply %s %s)", j.Kind, j.ID, res.ID, res.State)
 		a.noteStatus(j.ID)                                 // exact logical completion also reaches other own copies
 		a.sendAssistantReaction(ctx, j, r.Harness, choice) // after the stored reply; failure changes nothing
+	}
+}
+
+// finishAgentNeedsHuman posts a conversation agent's needs_human result as
+// its normal chat reply (owner, 2026-11-09: the result is the agent's chat
+// message), through finishAgent's send path, to the same audience, tagging
+// the asker. The request stays needs_human, so a reply or the exact
+// continuation continues it. The claim stores the reply and the state in one
+// transaction: a restart or redelivery never posts it twice. The delivered
+// message is the attention (unread, badge, alert where it arrives), so the
+// host adds no attention mark of its own (needsHumanUnread).
+func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, rest string) {
+	text := strings.TrimSpace(rest)
+	if mention := a.askerMention(j, text, true); mention != "" {
+		text = mention + "\n\n" + text
+	}
+	topic, _ := a.outgoingTopic(j.Conv, "", j.ID)
+	selfFP := a.id.Public(a.Address).Fingerprint()
+	claim := func(tx *sql.Tx, replyID string) error {
+		v, why, err := agentVerdict(tx, j.agentReq(stateRunning), a.Address, selfFP, true, map[string]*partView{})
+		if err != nil {
+			return err
+		}
+		if v != verdictRun {
+			return &heldBack{why}
+		}
+		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ?, result_id = ?, notified = 0, review_sent = 0 WHERE id = ? AND state = ? AND (?<=0 OR attempts=?)`,
+			stateNeedHuman, rest, replyID, j.ID, stateRunning, j.nativeAttempt, j.nativeAttempt)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return errNotOwned
+		}
+		if _, err := tx.Exec(`DELETE FROM reported WHERE item = ?`, j.ID); err != nil {
+			return err
+		}
+		return settleSteeringIn(tx, j.ID)
+	}
+	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: j.ID, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
+		Emotion: "neutral", PID: j.PID, Topic: topic, status: envelope.StatusNeedsHuman, claim: claim}) // not final: the host's needs_human state stays the request's word (convAnswer)
+	var hb *heldBack
+	switch {
+	case errors.As(err, &hb):
+		a.endJob(j.ID, stateNotDelivered, "not sent: "+hb.why+". The reply:\n"+text, j.nativeAttempt)
+	case errors.Is(err, errNotOwned):
+		a.endJob(j.ID, stateCancelled, "cancelled; its reply was not sent:\n"+text, j.nativeAttempt)
+	case err != nil && res.ID == "":
+		a.endJob(j.ID, stateNotDelivered, "not sent: "+err.Error()+". The reply:\n"+text, j.nativeAttempt)
+	default:
+		a.Logf("%s %s: needs its asker; asked in its conversation (reply %s %s)", j.Kind, j.ID, res.ID, res.State)
+		a.noteStatus(j.ID)
 	}
 }
 

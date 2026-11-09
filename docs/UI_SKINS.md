@@ -958,6 +958,10 @@ types are the Go structs in `internal/ui/*.go`, generated into
   native result reports remain the completion evidence. Results are scoped
   to the callback token, so an earlier input cannot settle a later one in
   the same attempt. Other roles receive no private native payload.
+- An agent's answer or result with `status` `needs_human` is its needs_human
+  result posted as its chat reply, tagging the asker: show it as that agent's
+  message. It does not close its request, whose `exec` keeps the host's
+  `needs_human` (and `continuation` where this device may continue it).
 - Proposals (MEL-521): an answer with `status` `proposal` is an agent's offer,
   never run: its body is exactly the task it proposes. A device-thread or
   conversation question's run may propose. The answer carries

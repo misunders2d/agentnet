@@ -682,6 +682,10 @@ export const TOPICS = Object.freeze({
 export const EXEC_RUNNING_MAX_AGE = 3600;
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting", "helpers_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined", "not_delivered"]);
+// replyCloses: an answer or result is its request's last word unless it says
+// it is not (client convAnswer): an agent's needs_human result posted as its
+// reply (envelope.StatusNeedsHuman) leaves the host's needs_human word.
+const replyCloses = (r) => (r.kind === "answer" || r.kind === "result") && r.status !== "needs_human";
 const topicExecutionClosed = new Set(["done", "answered", "failed", "timeout", "cancelled", "stopped", "declined", "resolved", "not_run", "proposal", "unavailable"]);
 const topicRequest = (k) => k === "question" || k === "task";
 // topicOpen: one message keeps its topic pending (client topicOpen).
@@ -5477,7 +5481,7 @@ export class Engine {
       const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
-      const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
+      const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&replyCloses(r));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
       return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m,read),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,m.state==="not_delivered"&&m.lagging?words(m.lagging):"the group"):"",detail:m.detail||"",...this.attentionFields(m,read,out),replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,stop:await this.stopOf(m,fp,exec),...(this.continuationOf(m,fp,exec)?{continuation:await this.handledOf(this.continuationOf(m,fp,exec)),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
@@ -10536,7 +10540,7 @@ export class Engine {
     };
     const execView = async (m, here) => {
       if (!m.target || (m.kind !== "question" && m.kind !== "task")) return {};
-      const answered = msgs.some((r) => r.fp && shownReply(r.reply_to) === m.id && (r.kind === "answer" || r.kind === "result"));
+      const answered = msgs.some((r) => r.fp && shownReply(r.reply_to) === m.id && replyCloses(r));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === (here ? this.fp : m.fp) && x.from === m.target.address), m.target.address, answered);
       const continuation=await this.handledOf(this.continuationOf(m,here?this.fp:m.fp,e));
       return e ? { exec: e, stop:await this.stopOf(m,here?this.fp:m.fp,e), ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
@@ -12170,7 +12174,7 @@ export class Engine {
       const info = m.pid && m.target && ["question", "task"].includes(m.kind) ? infos.find((p) => p.pid === m.pid) : null;
       if (!info || !mine(info.host) || m.target.address !== info.host.address || this.revokedRecipientKeys?.has(m.target.address + "/" + m.target.fingerprint)) continue;
       const here = !m.fp && !m.excerpt_pid, fp = here ? this.fp : m.fp;
-      const answered = msgs.some((r) => r.fp && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
+      const answered = msgs.some((r) => r.fp && r.reply_to === m.id && replyCloses(r));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted", "running"].includes(e.state)) continue; // client.PageReview's states
       // A decision waits there only while its host's word is current: a

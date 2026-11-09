@@ -117,21 +117,24 @@ export function placeOf(dm?: T.DMThread | null, thread?: T.Thread | null, o?: T.
 }
 
 /** The phase a request to your agent is in, from what may be done now. */
-export type Phase = "decide" | "running" | "needs_human" | "stopped" | "closing";
+export type Phase = "decide" | "running" | "stopped" | "closing";
+
+const state = (m: Req) => m.dir === "in" ? m.state || "" : m.exec?.state || "";
 
 export function phaseOf(m: Req): Phase | null {
   const acts = m.actions || [];
   const outcome = m.dir === "in" ? m.state : m.exec?.state;
   if (isRequest(m) && ["done", "answered", "manual", "resolved", "declined", "proposal", "unavailable"].includes(outcome || "")) return null;
-  if (m.continuation) return "needs_human";
+  // An agent's needs_human result is its own chat message (Message.tsx
+  // AgentNeedsHumanTurn), answered by an ordinary tagged reply: never a card.
+  if (m.continuation || state(m) === "needs_human") return null;
   if (acts.includes("cancel")) return "running";
   const terminal = m.dir === "in" ? m.state : m.exec?.stale ? "" : m.exec?.state;
   if (isRequest(m) && ["interrupted","failed","cancelled","stopped","timeout","not_run"].includes(terminal || "")) return "stopped";
   if (!acts.length) return null;
   if (!isRequest(m)) return acts.includes("resolve") ? "closing" : null; // a report, or a follow-up that needs a person
-  const state = m.dir === "in" ? m.state || "" : m.exec?.state || "";
-  if (["interrupted", "failed", "cancelled"].includes(state)) return "stopped";
-  if (acts.includes("resolve") || state === "needs_human") return "needs_human";
+  if (["interrupted", "failed", "cancelled"].includes(state(m))) return "stopped";
+  if (acts.includes("resolve")) return null;
   return "decide";
 }
 
