@@ -48,7 +48,8 @@ func TestV28CodexBarrierProcess(t *testing.T) {
 			_ = enc.Encode(map[string]any{"id": message.ID, "result": map[string]any{}})
 		case "thread/start":
 			var params map[string]any
-			if json.Unmarshal(message.Params, &params) != nil || params["ephemeral"] != true {
+			// MEL-746: a conversation agent's thread is saved for its next turn.
+			if json.Unmarshal(message.Params, &params) != nil || params["ephemeral"] != false {
 				os.Exit(2)
 			}
 			_ = os.WriteFile(log+"."+request+".thread", []byte(thread), 0600)

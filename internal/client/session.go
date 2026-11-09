@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Background sessions: for harnesses that can save and resume a headless
@@ -30,6 +31,17 @@ import (
 // directory and preset (flags plus the harness binary's identity).
 // Otherwise it starts a new session and says why; it never falls back to an
 // older one further up.
+//
+// Pi and OMP save a session in a directory the worker owns (dirSessions).
+//
+// A request to a conversation's agent (a participation, MEL-746) has no
+// reply chain: its session is the latest one in the same conversation,
+// participation and topic, asked by the same verified person (any of their
+// current devices), in the same mode and for the same agent. Another person,
+// participation or topic gets its own session, and a session is not reused
+// once more people see the answers than when it last ran (owner rule,
+// docs/DECISIONS.md: reuse native context only when history scope and output
+// audience are compatible).
 
 // sessionStyle is how a harness saves and resumes headless sessions.
 type sessionStyle int
@@ -39,6 +51,7 @@ const (
 	claudeSessions                     // --session-id UUID creates, --resume UUID continues
 	codexSessions                      // app-server thread/start and exact owned thread/resume
 	agySessions                        // stream-json reports conversation_id; --conversation ID continues
+	dirSessions                        // pi/omp: --session-dir OWNED_DIR plus --session-id ID (pi) or --continue (omp)
 )
 
 // sessionRef is recorded on the received question or task whose job ran
@@ -49,6 +62,11 @@ type sessionRef struct {
 	Dir     string `json:"dir"`  // canonical working directory
 	Preset  string `json:"preset"`
 	ID      string `json:"id"`
+
+	Agent    string   `json:"agent,omitempty"`    // the executor agent; "": the default responder
+	Scope    string   `json:"scope,omitempty"`    // conversation/participation/topic of a chat's agent
+	Person   string   `json:"person,omitempty"`   // the verified asker within Scope
+	Audience []string `json:"audience,omitempty"` // who sees its answers, sorted
 }
 
 // sessionPlan is how one job runs.
@@ -68,7 +86,7 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 	if j.Kind == envelope.KindTask {
 		mode, base = "task", h.task
 	}
-	if h.sessions == noSessions || j.Receiver == nil && (j.followUp() || j.PID != "" || j.AgentID != "") { // named remote jobs stay fresh; local selected continuation owns its native session
+	if h.sessions == noSessions || j.Receiver == nil && j.followUp() { // a follow-up summary is one-shot
 		return sessionPlan{args: slices.Clone(base)}, nil
 	}
 	dir, err := filepath.EvalSymlinks(r.Dir)
@@ -76,9 +94,24 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 		return sessionPlan{}, err
 	}
 	want := sessionRef{Harness: r.Harness, Mode: mode, Dir: dir, Preset: presetID(h, mode, base)}
-	prev, state, at, err := a.store.sessionAncestor(j.From, j.ID)
-	if j.Receiver != nil {
+	var prev sessionRef
+	var state, at string
+	switch {
+	case j.Receiver != nil:
 		prev, state, at, err = a.store.receiverSessionAncestor(j.Receiver.ID, j.ID)
+	case j.PID != "":
+		want.Agent = executorAgent(j)
+		var known bool
+		if want.Scope, want.Person, want.Audience, known, err = a.sessionScope(j); err != nil {
+			return sessionPlan{}, err
+		}
+		if !known { // no verified asker to keep a context for
+			return sessionPlan{args: slices.Clone(base)}, nil
+		}
+		prev, state, at, err = a.store.scopeSessionAncestor(want, j.ID)
+	default:
+		want.Agent = executorAgent(j)
+		prev, state, at, err = a.store.sessionAncestor(j.From, j.ID)
 	}
 	if err != nil {
 		return sessionPlan{}, err
@@ -88,6 +121,12 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 	case at == "":
 	case at == j.ID:
 		note = "this job is being run again, so the session of its earlier attempt was not reused"
+	case j.Receiver == nil && prev.Agent != want.Agent:
+		note = "the earlier session of this conversation was not reused: it belonged to another agent"
+	case prev.Scope != want.Scope || prev.Person != want.Person:
+		note = "the earlier session of this conversation was not reused: it was another person's or another chat's"
+	case !audienceWithin(want.Audience, prev.Audience):
+		note = "the earlier session of this conversation was not reused: more people see the answers now than when it ran"
 	case prev.Harness != want.Harness:
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: it was a %s session", prev.Harness)
 	case prev.Mode != want.Mode:
@@ -98,14 +137,56 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: its last job ended as %q, so its state is uncertain", state)
 	case a.store.sessionHead(prev) != at:
 		note = "the earlier session of this conversation was not reused: a later job has run in it since, or its latest job is unknown"
+	case a.store.sessionBusy(prev, j.ID):
+		note = "the earlier session of this conversation was not reused: another job is running in it"
 	default:
 		want.ID = prev.ID
-		return sessionPlan{args: resumeArgs(h, mode, base, prev.ID), ref: &want, resume: true}, nil
+		args := resumeArgs(h, mode, base, prev.ID)
+		if h.sessions == dirSessions {
+			if args, err = a.dirSessionArgs(r.Harness, base, prev.ID); err != nil {
+				return sessionPlan{}, err
+			}
+		}
+		return sessionPlan{args: args, ref: &want, resume: true}, nil
 	}
-	if h.sessions == claudeSessions {
+	if h.sessions == claudeSessions || h.sessions == dirSessions {
 		want.ID = newUUID()
 	}
-	return sessionPlan{args: createArgs(h, base, want.ID), ref: &want, note: note}, nil
+	args := createArgs(h, base, want.ID)
+	if h.sessions == dirSessions {
+		if args, err = a.dirSessionArgs(r.Harness, base, want.ID); err != nil {
+			return sessionPlan{}, err
+		}
+	}
+	return sessionPlan{args: args, ref: &want, note: note}, nil
+}
+
+// dirSessionArgs saves a Pi/OMP session in a directory the worker owns, one
+// per session. Pi opens the exact session ID there (--session-id: "the
+// current directory's existing session with the ID, creating it otherwise",
+// pi 1.5.0 docs/cli.md); OMP has no such flag, so --continue opens the only
+// session in that directory. Reused from Heimdall aac5a1d
+// (internal/harness/harness.go sessionArgs, style sessionDir). Both lookups
+// are scoped to the run's working directory: a session is resumed only when
+// the responder's canonical directory is unchanged (planSession), and the
+// process cwd is that directory.
+func (a *Agent) dirSessionArgs(harness string, base []string, id string) ([]string, error) {
+	if !protocol.ValidID(strings.ReplaceAll(id, "-", "")) {
+		return nil, fmt.Errorf("invalid %s session id %q", harness, id)
+	}
+	home, err := filepath.Abs(a.home)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(home, "native-sessions", harness, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	args := append(withoutFlags(base, "--no-session"), "--session-dir", dir)
+	if harness == "pi" {
+		return append(args, "--session-id", id), nil
+	}
+	return append(args, "--continue"), nil
 }
 
 // createArgs starts a new saved session.
@@ -131,6 +212,115 @@ func resumeArgs(h harness, mode string, base []string, id string) []string {
 		return append(slices.Clone(base), "--conversation", id)
 	}
 	return slices.Clone(base)
+}
+
+// executorAgent is the agent a job runs as: its admitted executor's, else
+// the one it was addressed to ("" for the default responder).
+func executorAgent(j job) string {
+	if j.Executor != nil {
+		return j.Executor.AgentID
+	}
+	return j.AgentID
+}
+
+// audienceWithin reports whether every reader of now already saw the
+// session's answers before: a narrower or equal audience may reuse it.
+func audienceWithin(now, before []string) bool {
+	for _, who := range now {
+		if !slices.Contains(before, who) {
+			return false
+		}
+	}
+	return true
+}
+
+// sessionScope is a conversation agent request's session scope, its
+// verified asker and the audience its answer reaches. known is false when
+// the asker cannot be named from verified keys: such a run keeps no session.
+// Own human devices are one person; guests and asking group agents are keyed
+// by their exact participation.
+func (a *Agent) sessionScope(j job) (scope, person string, audience []string, known bool, err error) {
+	info, err := a.requestContextParticipation(j)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	m, err := a.dmMembers(j.Conv)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	guests, author, err := a.requestGuests(j, m)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	topic := ""
+	if info.Topic != nil {
+		topic = *info.Topic
+	}
+	scope = j.Conv + "/" + j.PID + "/" + topic
+	switch {
+	case j.Local:
+		if info.Host.Person != "" {
+			person = "person:" + info.Host.Person
+		}
+	case author != nil:
+		person = "guest:" + author.PID
+	default:
+		for id, p := range m.persons {
+			if p.has(j.From, j.Key) && a.personSender(p, j.From, j.Key).Relation != SenderUnverified {
+				person = "person:" + id
+			}
+		}
+	}
+	if info.Member {
+		h, err := storedHuman(a.store.db, "in", j.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", "", nil, false, err
+		}
+		if h != nil && h.AgentAuthor() {
+			person = "agent:" + h.AuthorPID
+		}
+	}
+	for id := range m.persons {
+		audience = append(audience, "person:"+id)
+	}
+	for _, g := range guests {
+		audience = append(audience, "guest:"+g.PID)
+	}
+	slices.Sort(audience)
+	return scope, person, slices.Compact(audience), person != "", nil
+}
+
+// sessionScopeKey names the latest job of one conversation agent session scope.
+func sessionScopeKey(ref sessionRef) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{ref.Scope, ref.Person, ref.Mode, ref.Agent}, "\x00")))
+	return "session_scope:" + hex.EncodeToString(sum[:16])
+}
+
+// scopeSessionAncestor returns the latest job in want's scope that recorded
+// a session: its session, state and id (empty if none or no longer recorded).
+func (s *store) scopeSessionAncestor(want sessionRef, current string) (ref sessionRef, state, at string, err error) {
+	id, err := s.config(sessionScopeKey(want))
+	if errors.Is(err, sql.ErrNoRows) || err == nil && id == "" {
+		return ref, "", "", nil
+	}
+	if err != nil {
+		return ref, "", "", err
+	}
+	if id == current {
+		return ref, "", id, nil // this job is being run again
+	}
+	var raw sql.NullString
+	err = s.db.QueryRow(`SELECT session_ref, state FROM inbox WHERE id = ?`, id).Scan(&raw, &state)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && !raw.Valid {
+		return ref, "", "", nil
+	}
+	if err != nil {
+		return ref, "", "", err
+	}
+	if err := json.Unmarshal([]byte(raw.String), &ref); err != nil {
+		return sessionRef{}, "unreadable", id, nil // not reusable
+	}
+	return ref, state, id, nil
 }
 
 // withoutFlags returns args without the given value-less flags.
@@ -234,7 +424,20 @@ func (s *store) setSessionRef(id string, ref sessionRef, requireRunning ...bool)
 	if _, err := tx.Exec(`INSERT INTO config(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, headKey(ref), id); err != nil {
 		return err
 	}
+	if ref.Scope != "" {
+		if _, err := tx.Exec(`INSERT INTO config(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, sessionScopeKey(ref), id); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+// sessionBusy reports whether a job other than id is running in ref's
+// session: two runs never share one native session.
+func (s *store) sessionBusy(ref sessionRef, id string) bool {
+	var busy bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE id<>? AND state IN (?, ?) AND json_extract(session_ref,'$.harness')=? AND json_extract(session_ref,'$.id')=?)`, id, stateRunning, stateCancelReq, ref.Harness, ref.ID).Scan(&busy)
+	return err != nil || busy
 }
 
 func headKey(ref sessionRef) string { return "session_head:" + ref.Harness + ":" + ref.ID }

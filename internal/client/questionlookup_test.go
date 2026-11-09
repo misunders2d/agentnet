@@ -387,7 +387,7 @@ func TestNativeFixtureAnswerProcess(t *testing.T) {
 		// One-shot Claude chooses a fresh session when no saved ID is requested.
 		session := newUUID()
 		for i := 1; i+1 < len(os.Args); i++ {
-			if os.Args[i] == "--session-id" {
+			if os.Args[i] == "--session-id" || os.Args[i] == "--resume" {
 				session = os.Args[i+1]
 			}
 		}
@@ -398,7 +398,7 @@ func TestNativeFixtureAnswerProcess(t *testing.T) {
 		_ = enc.Encode(map[string]any{"type": "user", "uuid": protocol.NewID(), "isReplay": true, "parent_tool_use_id": nil, "session_id": session, "message": message})
 		_ = enc.Encode(map[string]string{"type": "result", "session_id": session, "result": answer})
 	} else {
-		if name != "omp" || request.Type != "prompt" || request.ID == "" || json.Unmarshal(request.Message, &prompt) != nil {
+		if name != "omp" && name != "pi" || request.Type != "prompt" || request.ID == "" || json.Unmarshal(request.Message, &prompt) != nil {
 			os.Exit(6)
 		}
 		if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
@@ -407,7 +407,11 @@ func TestNativeFixtureAnswerProcess(t *testing.T) {
 		_ = enc.Encode(map[string]string{"type": "agent_start"})
 		_ = enc.Encode(map[string]any{"type": "message_end", "message": map[string]string{"role": "assistant", "content": answer, "stopReason": "stop"}})
 		_ = enc.Encode(map[string]string{"type": "agent_end"})
-		_ = enc.Encode(map[string]any{"type": "prompt_result", "id": request.ID, "status": "completed", "sessionSettled": true})
+		if name == "pi" {
+			_ = enc.Encode(map[string]string{"type": "agent_settled"})
+		} else {
+			_ = enc.Encode(map[string]any{"type": "prompt_result", "id": request.ID, "status": "completed", "sessionSettled": true})
+		}
 	}
 	// Terminal native output makes the worker close its input; never require EOF first.
 	var unexpected any
