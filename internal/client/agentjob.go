@@ -1462,7 +1462,7 @@ func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit 
 			} else {
 				c.Unrelated++
 			}
-		case (roomRefs[ref] || msg.liveContext) && msg.Sub == "" && (!msg.Replica || info.Member) && !msg.History && msg.ExcerptPID == "":
+		case (roomRefs[ref] || msg.liveContext) && msg.Sub == "" && (!msg.Replica || info.Member || roomRefs[ref]) && !msg.History && msg.ExcerptPID == "":
 			c.Addressed++
 			authorPID := msg.PID
 			if msg.Human != nil && msg.Human.AgentAuthor() {
