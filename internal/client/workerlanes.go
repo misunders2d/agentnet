@@ -212,10 +212,13 @@ func (a *Agent) reserveExecutor(j job, parent string) {
 	a.workerLanes.jobs[j.ID] = executionLane{executor: key, parent: parent, conv: j.Conv, fresh: independentSession(j, j.Executor)}
 }
 
-// Only this branch of planSession is guaranteed not to select a saved or
-// explicitly delegated session. Unrecognized harness/launcher contracts keep
-// conservative executor serialization. Codex checks its actual returned thread
-// before turn/start, including when the owner's PATH entry is a wrapper.
+// A conversation agent's saved session is keyed by its conversation (and
+// participation, topic and asker, session.go), so runs in different
+// conversations never select the same native session; within one, the head
+// and running-session fences in planSession keep runs apart. Unrecognized
+// harness/launcher contracts keep conservative executor serialization. Codex
+// checks its actual returned thread before turn/start, including when the
+// owner's PATH entry is a wrapper.
 func independentSession(j job, stamp *ExecutorStamp) bool {
 	if stamp == nil || j.Conv == "" || j.Receiver != nil || j.PID == "" && j.AgentID == "" || j.Kind != envelope.KindQuestion && j.Kind != envelope.KindTask {
 		return false
@@ -229,7 +232,7 @@ func independentSession(j job, stamp *ExecutorStamp) bool {
 		args = h.task
 	}
 	known := h.bin == stamp.Responder.Harness && (stamp.Responder.Harness == "claude" && h.sessions == claudeSessions && slices.Contains(args, sessionOneShot) ||
-		(stamp.Responder.Harness == "pi" || stamp.Responder.Harness == "omp") && h.sessions == noSessions && slices.Contains(args, "--no-session"))
+		(stamp.Responder.Harness == "pi" || stamp.Responder.Harness == "omp") && h.sessions == dirSessions && slices.Contains(args, "--no-session"))
 	if !known {
 		return false
 	}

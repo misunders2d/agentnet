@@ -31,10 +31,11 @@ const isMe = (p: T.PersonView | null | undefined, o: T.Overview | null) => !!p &
 
 // ---- agents -------------------------------------------------------------------
 
-/** agentLabel: what an agent in this conversation is called (model.agentName):
- *  its own name, else "Your agent" / "Vitalii’s agent". */
+/** agentLabel: what an agent in this conversation is called: whose agent,
+ *  which agent and its device (owner, 2026-11-09), "Your Pi · Linux laptop" /
+ *  "Vitalii’s agent · Zenbook", so two agents of one person never read alike. */
 export const agentLabel = (a: T.AgentView, ctx: Pick<Ctx, "names" | "overview">) =>
-  agentName(a.agent_id, ctx.names, a.host, ctx.overview?.person);
+  agentName(a.agent_id, ctx.names, a.host, ctx.overview?.person) + (a.agent_id && ctx.names[a.agent_id] && a.host?.address ? " · " + niceDevice(a.host.address) : ""); // an unnamed one already says "… on Device"
 
 /** hostOf: the person (you or someone in the directory) one of whose devices is this address. */
 export function hostOf(address: string, o: T.Overview | null): T.PersonView | null {

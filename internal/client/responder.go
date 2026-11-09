@@ -61,10 +61,10 @@ var Harnesses = map[string]harness{
 		stdin: true, sessions: codexSessions, limits: nativeHarnessPermissions + " Codex app-server selects native automatic approval review and inherits your sandbox policy. Received files and task output paths are supplied in context; AgentNet grants no additional writable folders.",
 	},
 	"omp": {
-		bin: "omp", question: []string{"-p", "--no-session", "--auto-approve"}, task: []string{"-p", "--no-session", "--auto-approve"}, stdin: true, limits: nativeHarnessPermissions,
+		bin: "omp", question: []string{"-p", "--no-session", "--auto-approve"}, task: []string{"-p", "--no-session", "--auto-approve"}, stdin: true, sessions: dirSessions, limits: nativeHarnessPermissions,
 	},
 	"pi": {
-		bin: "pi", question: []string{"-p", "--no-session"}, task: []string{"-p", "--no-session"}, stdin: true, limits: nativeHarnessPermissions + " File paths are supplied in context; no folder is added for Pi.",
+		bin: "pi", question: []string{"-p", "--no-session"}, task: []string{"-p", "--no-session"}, stdin: true, sessions: dirSessions, limits: nativeHarnessPermissions + " File paths are supplied in context; no folder is added for Pi.",
 	},
 }
 

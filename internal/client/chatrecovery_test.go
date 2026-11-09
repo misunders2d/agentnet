@@ -624,7 +624,7 @@ func TestGroupAnswerTagsAskingAgent(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	anchor := mentionAnchor("agent", from.PID, agentMentionLabel(source.Host.Label))
+	anchor := mentionAnchor("agent", from.PID, agentMentionLabel(source.Host, ""))
 	if body != anchor+"\n\nthe deploy failed at step 3" || !strings.Contains(stub.last(), anchor) {
 		t.Fatalf("agent-origin answer %q; prompt names %q: %v", body, anchor, strings.Contains(stub.last(), anchor))
 	}

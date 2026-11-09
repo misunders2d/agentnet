@@ -2003,6 +2003,9 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   await page.evaluate(()=>{fixture.thread.messages.push({id:'incoming-ref',lid:'incoming-ref',from:'brin/desktop',dir:'in',kind:'message',body:'[@Analyst](agentnet:agent/agent-a) [@Analyst](agentnet:agent/agent-b) INERT_INCOMING_MARKER',at:'2026-10-05T10:03:00Z'});reloadFixture();});
   await page.getByText(/INERT_INCOMING_MARKER/).first().waitFor();await settle(page);
   assert.equal((await asks()).length,3,'incoming text never originates fanout');
+  // Owner, 2026-11-09: an agent chip says whose agent, which agent and its device.
+  const chips=await page.locator('#skin').evaluate(e=>[...e.shadowRoot.querySelectorAll('span[title$=" · agent"]')].map(s=>s.textContent));
+  assert(chips.length>=2&&chips.every(c=>/^@\S.* · \S/.test(c)),'agent mention chips name owner, agent and device: '+JSON.stringify(chips));
   const shot=path.join(evidence,skin+'-multi-agent-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
  }catch(e){const shot=path.join(evidence,skin+'-multi-agent-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,shot,errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
  finally{await context.close();}

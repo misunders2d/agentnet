@@ -426,6 +426,27 @@ if (humanVectors) {
  check(!wire.topicRequestJSON(organization.event.request).includes('SYNTHETIC_PRIVATE_REQUEST'),'compact event discloses no private body');
 }
 
+// Owner rule, 2026-11-09: the host's own person asking their own agent in
+// their own chat covers every message they select there (client
+// topicOrganizationAdmission), not only grants; an outside host's does not.
+{
+ const w=await world(),{alice:a,bob:b}=w,server=await w.sibling(b,'bob/server');
+ for(const e of [a,b,server])await w.caps(e,[wire.CapEnv2,wire.CapPerson,wire.CapControl,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapTopicOrganization,wire.CapAgentOrganization]);
+ const own=await wire.signAgent(server.keys,{id:id(),host:server.address,host_key:server.fp,label:'Bob server agent',ts:Math.floor(now/1000)});
+ w.catalogs.set(server.address,[JSON.parse(wire.agentJSON(own))]);
+ await a.sendDM({conv:w.conv,body:'Earlier message, not selected'});await w.drain(b);
+ const invite=await b.inviteAgent({conv:w.conv,host:server.address,agent_id:own.id});await w.drain(a);await w.drain(server);
+ const ev=await w.decision(server,invite.pid);for(const e of [a,b])await w.receive(await w.from(server,e,{sub:'event',pid:invite.pid,body:wire.eventJSON(ev)}),e);
+ const live=await a.sendDM({conv:w.conv,body:'Live message the owner refers to'});await w.drain(b);
+ const q=await b.askAgent({pid:invite.pid,kind:'question',body:'move today messages into a topic'});await w.drain(a);
+ const original=(await b.followupOriginal(w.conv,{id:q.lid,fingerprint:b.fp})).item,hash=await wire.groupHistoryContentHash(w.conv,original),source=await a.store.get('outbox',live.id),topic=id();
+ const fields={lid:id(),pid:invite.pid,agent_id:own.id,origin:wire.OriginAgentOrganization,emotion:'neutral',topic,body:'Moved selected messages to this topic.',topic_event:{action:'move',moves:[{lid:live.lid,author:a.fp,hash:await wire.groupHistoryContentHash(w.conv,a.itemOf(source,true))}],request:{lid:q.lid,author:b.fp,hash}}};
+ a.queueOutbox=()=>{};a.caps=[wire.CapTopicOrganization,wire.CapAgentOrganization];
+ await a.followupOriginal(w.conv,{id:q.lid,fingerprint:b.fp});
+ const rid=await w.receive(await w.from(server,a,fields),a);check(!!await a.store.get('inbox',rid),'owner request to own agent covers an ungranted live message: '+JSON.stringify(await a.store.get('held',rid)));
+ check(chatTopicAssignments(await a.convMessages(w.conv,await a.store.all('inbox'),await a.store.all('outbox'))).get(live.lid)===topic,'browser projects owner-selected live message to new topic');
+}
+
 // Real remote human original; missing original waits and then recovers. A
 // received move grants no new request, agent context or native execution.
 {

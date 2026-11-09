@@ -29,6 +29,10 @@ type RunOptions struct {
 	// Intended for separately enrolled human-only mobile devices.
 	HumanOnly bool
 
+	// RunOrigin serves <home>/run-origin.sock (Linux): local root or same-user
+	// processes ask whether a process is a run this daemon started, for whom.
+	RunOrigin bool
+
 	// Notify delivers content-free native chat, review and reminder alerts
 	// after existing local suppression and due bookkeeping.
 	// Its fragment is a validated destination, never message content. Nil uses desktop notifications.

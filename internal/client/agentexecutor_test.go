@@ -59,6 +59,7 @@ func TestNamedExecutorABAAndImmutableClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	var previous string
+	sessions := map[string]bool{}
 	for i, rec := range []protocol.AgentRecord{a, b, a} {
 		request := namedExecutorRequest(t, w, rec.ID, envelope.KindQuestion, previous)
 		if !w.bob.runNext(tctx(t), nil) {
@@ -87,9 +88,13 @@ func TestNamedExecutorABAAndImmutableClaim(t *testing.T) {
 		if err = w.alice.store.db.QueryRow(`SELECT agent_id FROM inbox WHERE id=?`, answerID).Scan(&author); err != nil || author != rec.ID {
 			t.Fatalf("author %q %v", author, err)
 		}
-		if sessionOf(t, w.bob, request) != nil {
-			t.Fatal("named request persisted native session")
+		// MEL-746: a named agent keeps its own saved session; the nearest
+		// earlier one belongs to the other agent, so none is resumed here.
+		ref := sessionOf(t, w.bob, request)
+		if ref == nil || ref.Agent != rec.ID || sessions[ref.ID] {
+			t.Fatalf("named request session %+v", ref)
 		}
+		sessions[ref.ID] = true
 		previous = answerID
 	}
 	after, _ := w.bob.Responder()
@@ -100,7 +105,7 @@ func TestNamedExecutorABAAndImmutableClaim(t *testing.T) {
 		t.Fatalf("rerun/count %d", st.count())
 	}
 	log, _ := os.ReadFile(st.log)
-	if strings.Count(string(log), "args=--question-mode --no-session-persistence") != 2 || strings.Count(string(log), "args=--other-flags --no-session-persistence") != 1 || strings.Contains(string(log), "--resume") {
+	if strings.Count(string(log), "args=--question-mode --session-id") != 2 || strings.Count(string(log), "args=--other-flags --session-id") != 1 || strings.Contains(string(log), "--resume") || strings.Contains(string(log), sessionOneShot) {
 		t.Fatalf("A/B/A/session mapping: %s", log)
 	}
 

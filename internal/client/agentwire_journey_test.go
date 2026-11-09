@@ -65,7 +65,7 @@ func TestNamedAgentEncryptedWireJourneyABA(t *testing.T) {
 		}
 	}
 
-	var previous string
+	var previous, previousRequest string
 	for i, record := range []protocol.AgentRecord{a, b, a} {
 		sent, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "question for " + record.Label, ReplyTo: previous,
 			Target: &envelope.Target{Address: w.bob.Address, Fingerprint: w.bob.Self().Fingerprint(), AgentID: record.ID}})
@@ -88,16 +88,16 @@ func TestNamedAgentEncryptedWireJourneyABA(t *testing.T) {
 			t.Fatalf("wrong author %q %v", author, err)
 		}
 		requestAuthor(sent.ID, record.ID)
-		if sessionOf(t, w.bob, sent.ID) != nil {
-			t.Fatal("native session retained")
+		if ref := sessionOf(t, w.bob, sent.ID); ref == nil || ref.Agent != record.ID {
+			t.Fatalf("named agent session not kept: %+v", ref)
 		}
-		previous = answer.ID
+		previous, previousRequest = answer.ID, sent.ID
 	}
 	if st.count() != 3 {
 		t.Fatalf("A/B/A runs=%d", st.count())
 	}
 	log, _ := os.ReadFile(st.log)
-	if strings.Count(string(log), "args=--question-mode --no-session-persistence") != 2 || strings.Count(string(log), "args=--other-flags --no-session-persistence") != 1 {
+	if strings.Count(string(log), "args=--question-mode --session-id") != 2 || strings.Count(string(log), "args=--other-flags --session-id") != 1 || strings.Contains(string(log), "--resume") {
 		t.Fatalf("executor sequence: %s", log)
 	}
 	if r, err := w.bob.Responder(); err != nil || r != nil {
@@ -128,5 +128,18 @@ func TestNamedAgentEncryptedWireJourneyABA(t *testing.T) {
 	requestAuthor(task.ID, b.ID)
 	if st.count() != 4 {
 		t.Fatalf("exactly-once runs=%d", st.count())
+	}
+
+	// MEL-746: continuing A's own last answer resumes A's saved session.
+	last := previousRequest
+	again, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "follow-up for A", ReplyTo: previous,
+		Target: &envelope.Target{Address: w.bob.Address, Fingerprint: w.bob.Self().Fingerprint(), AgentID: a.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "named follow-up answer", func() bool { _, ok := findReply(w.alice, again.ID); return ok })
+	want := sessionOf(t, w.bob, last)
+	if ref := sessionOf(t, w.bob, again.ID); want == nil || ref == nil || ref.ID != want.ID || !strings.Contains(lastRun(st), "--resume "+want.ID) {
+		t.Fatalf("named agent did not resume its session: %+v %+v %s", want, ref, lastRun(st))
 	}
 }

@@ -37,7 +37,6 @@ func testRoomReciprocalRoots(t *testing.T, mode string) {
 	const script = `#!/bin/sh
 set -e
 cat >/dev/null
-case " $* " in *" --resume "*|*" --session-id "*) exit 22;; esac
 printf '%s\n' "$AGENTNET_ROOM_REQUEST" >> "$RECIP_DIR/runs"
 if mkdir "$RECIP_DIR/__SIDE__.root" 2>/dev/null; then
  printf '%s' "$AGENTNET_ROOM_REQUEST" > "$RECIP_DIR/__SIDE__.root-id"
@@ -122,6 +121,15 @@ fi
 		if jobState(t, a, id) != stateRunning || jobState(t, a, roots[i].ID) != stateRunning {
 			t.Fatal("root/child ended before both children entered")
 		}
+	}
+	// MEL-746: each concurrent run has its own saved native session.
+	seen := map[string]bool{}
+	for _, id := range []string{roots[0].ID, roots[1].ID, children[0], children[1]} {
+		ref := sessionOf(t, a, id)
+		if ref == nil || seen[ref.ID] {
+			t.Fatalf("concurrent runs share or lack a native session: %s %+v", id, ref)
+		}
+		seen[ref.ID] = true
 	}
 	testReciprocalGuards(t, a, roots[0].ID, roots[1].ID, children[1], children[0])
 	if jobState(t, a, unrelated.ID) != stateAgentWaiting {

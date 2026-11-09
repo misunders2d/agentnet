@@ -842,7 +842,7 @@ Trust ADDRESS's current keys after you verified the fingerprint with its
 owner. Needed after a key change: sending is blocked and their messages are
 held until you do.`,
 
-	"daemon": `Usage: agentnet daemon [start] [--listen ADDR] [--advertise https://HOST:PORT] [--ui 127.0.0.1:0]
+	"daemon": `Usage: agentnet daemon [start] [--listen ADDR] [--advertise https://HOST:PORT] [--ui 127.0.0.1:0] [--run-origin]
        agentnet daemon status [--agent ID] [--json]
 
 status is read-only: it reports the daemon's actual transport and named-agent
@@ -862,6 +862,9 @@ runs per home.
                       no NAT traversal). Defaults to https://LISTEN.
   --ui ADDR           also serve the messenger page on this loopback address
                       (e.g. 127.0.0.1:0); agentnet ui prints the address to open
+  --run-origin        (Linux) serve HOME/run-origin.sock, owner-only: local root
+                      or same-user programs (Heimdall) ask which person's
+                      request a running background run serves; see INSTALL.md
 
 Start it at login: agentnet help startup.`,
 

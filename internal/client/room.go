@@ -31,7 +31,12 @@ func recordRoomContext(tx *sql.Tx, in envelope.Inner, fp, self string) error {
 	if err != nil {
 		return err
 	}
-	if m.group == nil && in.Replica {
+	// A DM's live turn reaches the author person's other devices as a
+	// display-only replica (conv.go). It is still a turn of the chat admitted
+	// here now: a helper hosted on such a device follows it like any other
+	// (MEL-633), including its owner's other agents' replies and requests.
+	// Replicated records and forwarded history (via) never become context.
+	if m.group == nil && in.Replica && in.Sub != "" {
 		return nil
 	}
 	if m.group != nil && in.Sub == "" {

@@ -29,8 +29,13 @@ func (a *Agent) codexRoomEligible(j job, r *Responder, plan sessionPlan) bool {
 	return p.Member && err == nil && m.group != nil
 }
 
+// A conversation agent's saved thread gets the bound room tool at
+// thread/start (MEL-746). thread/resume takes no dynamicTools (codex 0.167
+// app-server schema); Codex keeps a thread's dynamic tools with the thread
+// (its state table thread_dynamic_tools). Each call is still bound to the
+// current run's own request.
 func (a *Agent) codexAgentActionsEligible(j job, r *Responder, plan sessionPlan) bool {
-	if r.Harness != "codex" || j.Kind != envelope.KindQuestion && j.Kind != envelope.KindTask || j.Receiver != nil || j.PID == "" || plan.ref != nil {
+	if r.Harness != "codex" || j.Kind != envelope.KindQuestion && j.Kind != envelope.KindTask || j.Receiver != nil || j.PID == "" {
 		return false
 	}
 	p, e := a.Participation(j.PID)

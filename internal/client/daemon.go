@@ -66,6 +66,13 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	} else {
 		defer stop()
 	}
+	if opts.RunOrigin && !opts.HumanOnly {
+		if stop, err := a.listenRunOrigin(); err != nil {
+			a.Logf("run origin socket unavailable; no run is vouched for: %v", err)
+		} else {
+			defer stop()
+		}
+	}
 	if err := a.CleanOpened(); err != nil { // this process alone writes there; nothing is open yet
 		a.Logf("plaintext left by an earlier run: %v", err)
 	}
