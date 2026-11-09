@@ -115,15 +115,31 @@
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
   const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
   const { parseLink, linkTo, matchingWorkspace, checkTarget } = await import('/assets/conversation-links.mjs');
-  // Leaving the page ends the API requests it still waits on. WebKit reports
-  // a request the navigation cuts off as a page error ("cannot load ... due
-  // to access control checks"); ended first, it is an ordinary refused
-  // request, which every caller already handles. A page restored from the
-  // back/forward cache asks again with a fresh signal.
-  let leaving = new AbortController();
+  // Leaving the page starts no API request and ends those it still waits
+  // on. From beforeunload until the next document commits (pagehide), WebKit
+  // refuses every load the page starts (CachedResource::load: the frame's
+  // load is provisional) and reports each as a page error ("Fetch API cannot
+  // load ... due to access control checks"); work still running then, such
+  // as a view mounting or a refresh after an answer, would start them. From
+  // beforeunload a new request is an ordinary refused request instead, which
+  // every caller already handles, and pagehide ends those under way (the
+  // browser cuts them off silently by then anyway). A navigation that does
+  // not happen leaves the page in use (Android's WebView cancels every
+  // external link after beforeunload and hands it to another app; a
+  // download, a mail link): it asks again on the person's next input, on
+  // focus or on becoming visible again, and at the latest once a navigation
+  // has not committed within 2 s, so live updates never stall. A page
+  // restored from the back/forward cache asks again with a fresh signal.
+  let leaving = new AbortController(), unloading = 0;
+  const stay = () => { clearTimeout(unloading); unloading = 0; };
+  addEventListener("beforeunload", () => { clearTimeout(unloading); unloading = setTimeout(stay, 2000); });
+  for (const kind of ["pointerdown", "keydown"]) addEventListener(kind, stay, true);
+  addEventListener("focus", stay); // the window's own focus, not an element's a script moves it to
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") stay(); });
   addEventListener("pagehide", () => leaving.abort());
-  addEventListener("pageshow", (e) => { if (e.persisted) leaving = new AbortController(); });
-  const pageFetch = (url, init = {}) => fetch(url, init.signal ? init : { ...init, signal: leaving.signal });
+  addEventListener("pageshow", (e) => { stay(); if (e.persisted) leaving = new AbortController(); });
+  const pageFetch = (url, init = {}) => unloading ? Promise.reject(new DOMException("The page is being left.", "AbortError"))
+    : fetch(url, init.signal ? init : { ...init, signal: leaving.signal });
   const json = async (path, body) => {
     if (!path.startsWith("/api/")) throw new Error("Expected an AgentNet API path");
     if (browser) return browser.api(path, body);
