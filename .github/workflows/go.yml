@@ -103,11 +103,24 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           node -e "require('./node_modules/esbuild').transformSync('')"
       - run: go vet ./...
-      - name: rendered interaction recovery
+      - name: rendered interaction recovery (1 of 2)
         if: ${{ (!inputs.test_run || contains(inputs.test_run, 'Rendered')) && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
         env:
-          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestPictureChangesRendered|TestPersonRenameRendered|TestPersonCreationRendered|TestWorkspaceNameRendered|TestGoogleAccessRendered|TestNotificationChangesRendered|TestDeviceLinkRendered|TestDeviceDecisionsRendered|TestDeviceRemovalRendered|TestGroupDecisionsRendered|TestGroupChangesRendered|TestAgentDismissalsRendered|TestTeamSelectionRendered|TestTeamCreationRendered|TestTeamChangesRendered|TestTeamPeopleRendered|TestInviteOpenRendered|TestInvitationSendRendered|TestNewGroupRendered|TestHistoryContributionComicRendered|TestTopicOrganizationComicRendered|TestNewChatRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered|TestFileDropRendered|TestReviewUnreadRetainsPresentationRendered|TestAndroidSendPendingRendered|TestAttentionReplyPendingRendered)$' }}
+          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestLocalChangesRendered|TestPersonCreationRendered|TestNotificationChangesRendered|TestDeviceLinkRendered|TestGroupDecisionsRendered|TestTeamCreationRendered|TestTeamChangesRendered|TestTeamPeopleRendered|TestInviteOpenRendered|TestInvitationSendRendered|TestNewGroupRendered|TestHistoryContributionComicRendered|TestTopicOrganizationComicRendered|TestReactionPendingRendered|TestPaneEntranceRendered|TestTimelineKeyboardRendered|TestFirstUnreadTimelineRendered|TestFileDropRendered|TestAttentionReplyPendingRendered)$' }}
+          AGENTNET_RENDERED_COUNT: ${{ inputs.test_count || '1' }}
+        run: |
+          tooling="$RUNNER_TEMP/agentnet-interaction-regressions"
+          npm install --prefix "$tooling" --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          "$tooling/node_modules/.bin/playwright" install --with-deps chromium
+          export AGENTNET_PLAYWRIGHT="$tooling/node_modules/playwright"
+          export AGENTNET_CHROMIUM="$(node -p 'require(process.env.AGENTNET_PLAYWRIGHT).chromium.executablePath()')"
+          go test -count="$AGENTNET_RENDERED_COUNT" -timeout 600s -v ./internal/ui -run "$AGENTNET_RENDERED_RUN"
+      - name: rendered interaction recovery (2 of 2)
+        if: ${{ !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+        shell: bash
+        env:
+          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestPictureChangesRendered|TestPersonRenameRendered|TestWorkspaceNameRendered|TestGoogleAccessRendered|TestDeviceDecisionsRendered|TestDeviceRemovalRendered|TestGroupChangesRendered|TestAgentDismissalsRendered|TestTeamSelectionRendered|TestNewChatRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestReviewUnreadRetainsPresentationRendered|TestAndroidSendPendingRendered)$' }}
           AGENTNET_RENDERED_COUNT: ${{ inputs.test_count || '1' }}
         run: |
           tooling="$RUNNER_TEMP/agentnet-interaction-regressions"
@@ -139,6 +152,14 @@ jobs:
           export AGENTNET_INTERACTION_HEADED=1
           export INTERACTION_EVIDENCE="$RUNNER_TEMP/agentnet-macos-controls.png"
           go test -count=1 -timeout 180s -run '^TestMessageInteractionRendered$' -v ./internal/ui
+      - name: video posters on macOS WebKit
+        if: ${{ runner.os == 'macOS' && !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+        shell: bash
+        run: |
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          export AGENTNET_PLAYWRIGHT="$RUNNER_TEMP/agentnet-webkit/node_modules/playwright"
+          export AGENTNET_VIDEO_ENGINES=webkit
+          go test -count=1 -timeout 300s -run '^TestVideoPosterRendered$' -v ./internal/ui
       - name: browser Back on macOS WebKit
         if: ${{ runner.os == 'macOS' && !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
@@ -203,7 +224,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","client-12","client-13","client-14","client-15","client-16","client-17","others"]') }}
+        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","client-12","client-13","client-14","client-15","client-16","client-17","client-18","client-19","client-20","client-21","client-22","client-23","others"]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -227,7 +248,7 @@ jobs:
       - name: race (${{ matrix.shard }})
         env:
           AGENTNET_RACE_SHARD: ${{ matrix.shard }}
-        run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 18
+        run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 24
       - name: browser storage (real IndexedDB, headless)
         if: matrix.shard == 'others' || matrix.shard == 'ui-1'
         shell: bash
