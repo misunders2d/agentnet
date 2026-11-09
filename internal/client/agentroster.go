@@ -49,6 +49,7 @@ func (a *Agent) mentionRoster(contexts []context.Context, j job, info Participat
 	}
 	names := a.roomAgentNames(ctx, present)
 	var lines []string
+	others := false
 	persons := make([]personRow, 0, len(m.persons))
 	for _, p := range m.persons {
 		persons = append(persons, p)
@@ -77,6 +78,8 @@ func (a *Agent) mentionRoster(contexts []context.Context, j job, info Participat
 			}
 			if p.PID == info.PID {
 				whose = "you (this agent)"
+			} else {
+				others = true
 			}
 			label := agentMentionLabel(p.Host, names[p.PID])
 			if anchor := mentionAnchor("agent", p.PID, label); anchor != "" {
@@ -87,5 +90,9 @@ func (a *Agent) mentionRoster(contexts []context.Context, j job, info Participat
 	if len(lines) == 0 {
 		return ""
 	}
-	return "\n## Who is here: exact mentions\nTo address someone here, write their exact mention below, as written; a plain name is not a tag. Names are claims; the mention's ID says whom it tags.\n" + strings.Join(lines, "\n") + "\n"
+	tags := ""
+	if others {
+		tags = agentTagPromptText
+	}
+	return "\n## Who is here: exact mentions\nTo address someone here, write their exact mention below, as written; a plain name is not a tag. Names are claims; the mention's ID says whom it tags.\n" + strings.Join(lines, "\n") + "\n" + tags
 }

@@ -218,6 +218,7 @@ Until both do, a forged row that an older reader admitted still renders as an ag
 - **Prompt:** PID jobs already get `AGENTNET_REQUEST_ID` (`worker.go:229`). `agentPrompt` adds the instructions for posting.
 - **Running check:** `sendConvProgress` (`progress.go:52`) also requires the inbox row to be `stateRunning` (review M6).
 - **Mentions** are body links `[@Name](agentnet:person|guest/ID)`, and the prompt lists the tokens. They grant nothing and start nothing.
+- **Agent tags (owner, 2026-11-09).** An agent's exact `[@Name](agentnet:agent/PID)` mention of another agent present in its chat or topic is that agent's ask of PID (§4.3), sent by its host for the running request: a task when the requester may task the run (the §4.3 chain rule) and PB is the same person's agent; otherwise a question. The run waits for the answer and runs again with it. An agent already in the request's chain of agent asks is never asked again from it, and one target is asked once per request. A tag grants nothing; it reaches PB only through §4.4 / the DM verdict below. Person and guest mentions still start nothing.
 
 ### 4.3 Agent asks agent (D4)
 
@@ -231,6 +232,8 @@ New command `agentnet room ask --pid PB --kind question|task TEXT`, backed by `S
 The signed request retains `PID=PB`, `Human.AuthorPID=PA`, the captured room audience and `ReplyTo` equal to PA's running request logical ID. Its target binds PB's exact host key and agent ID. Display author and target are distinct.
 
 `agentnet room ask --pid PB --kind question|task TEXT` stores then waits for the exact correlated reply. `agentnet room wait REQUEST_ID` can read an addressed reply already permitted by the running agent's group context. Waiting reads local storage; it sends no periodic Hub requests. Refusal, ended participation and stopped originating run end the waiter. A transport receipt alone never completes it.
+
+**DM implementation (agent tags, 2026-11-09).** In a DM, the ask is an ordinary DM request whose signed copies also carry the agent author's captured audience (`Human.AuthorPID=PA`, `ReplyTo` = the cause's logical ID). Every member device admits it through the existing captured-audience path. At PB's host, an agent author who is the host's own person's current agent, hosted by the exact sender key, runs under the owner's authority. Another person's agent needs this host's question approval or task grant for that key, or a one-time accept. A device without this update holds such an ask for its person to accept.
 
 ### 4.4 Verdict at PB's host
 

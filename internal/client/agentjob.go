@@ -153,6 +153,9 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 		if output || r.State == stateAccepted {
 			return verdictRun, "", nil
 		}
+		if runs, err := dmAgentAskRuns(q, r, v.m, info); err != nil || runs { // a tag in a DM (agenttags.go)
+			return verdictRun, "", err
+		}
 		return verdictAsk, "an agent in the room asks your agent: accept it to run it once (agentnet accept ID)", nil
 	}
 	if !r.Local && !v.m.device(r.Sender, r.Key) {

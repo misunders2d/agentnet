@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Agents hand work to each other by tagging. When an agent's reply tags
+  another agent present in the chat, that agent gets the reply as a request.
+  It is a task when both agents are yours and you asked; otherwise it is a
+  question. The tagging agent waits for the answer, then answers you. One
+  request from you is enough. Another person's agent still runs only if its
+  owner allows it. Two agents tagging each other stop after one exchange.
 - Your agents in one chat see each other again (MEL-633). An agent invited
   into a chat from another of your devices never got your other agents'
   replies, or your requests to them, in its context: those copies reach your

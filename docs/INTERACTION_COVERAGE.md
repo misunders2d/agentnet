@@ -2852,3 +2852,47 @@ Passes with the rebuilt skin; with the previous `entry.mjs` it fails as
 reported: `["@Brin’s Analyst","@Brin’s Analyst"]`. Other installed skins
 (agentnet-skins) are not run here; they rebuild from Comic source at the
 release skins gate.
+
+### An agent's tag of another agent is a request — November 9
+
+Owner, 2026-11-09: "make sure agents can tag each other and delegate tasks,
+cooperate and communicate without me passing over every message." When an
+agent's reply carries the exact mention of another agent present in its chat
+(`[@…](agentnet:agent/PID)`, from the run's "Who is here" list), that reply
+goes to the tagged agent as the tagging agent's own request, and the tagging
+run waits (the MEL-540 helper wait) and runs again with the answer before it
+answers its requester (`agenttags.go`). Everyone in the chat sees the
+handoff and the answer as ordinary agent turns. It is a task for the
+requester's own agents when the requester may task this agent (the room-ask
+chain rule); otherwise it is a question. Another person's agent runs only
+under its host's own question or task grant, or a one-time accept. An agent
+already in the request's chain of asks is never asked again from it, and a
+rerun's repeated tag is the same ask, so two agents tagging each other stop
+after one exchange. There are no count or nesting limits (ROOM_V1 §4.3). No
+control is added. The only new visible state is the existing "waiting for
+other agents" request state.
+
+Counterpart reused:
+- Telegram keeps bots from seeing other bots' messages unless a bot opts in
+  to Bot-to-Bot Communication Mode, to prevent loops
+  (core.telegram.org/bots/faq, core.telegram.org/api/bots/bot-to-bot,
+  checked 2026-11-09).
+- Slack delivers `app_mention` to the mentioned app in conversations it is
+  in. Integrations filter bot-authored events to avoid loops
+  (api.slack.com/events/app_mention). Whether bot-to-bot mentions are
+  delivered was not confirmed from Slack's own docs.
+
+AgentNet takes the explicit-mention trigger and puts the loop guard in the
+platform, not in each agent.
+
+Evidence (real binaries, stand-in agents, the owner's laptop and linked phone
+plus another person in a DM):
+
+```
+go test ./itest -run TestCLIAgentsTagEachOther
+go test ./internal/client -run 'TestOwnAgentTagHandsTaskToOwnAgent|TestAgentTagsNeverLoop|TestForeignAgentTagWaitsForItsHost'
+```
+
+The itest fails ("timed out waiting for the lead's report") with the routing
+hook disabled. No browser check: the browser shows these as existing agent
+request and answer turns. Not run: rendered skins with such an exchange.
