@@ -771,8 +771,6 @@ func (a *Agent) requestAsker(j job, info ParticipationInfo, m dmMembers, author 
 	return asker, mention, nil
 }
 
-
-
 // answerMention is the exact mention an answer in a group, or in a chat with
 // guests present, opens with so the asker sees it is for them; "" in a plain
 // DM, when the answer already names them, or when no asker can be named.
