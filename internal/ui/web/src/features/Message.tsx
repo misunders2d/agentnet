@@ -261,7 +261,8 @@ export function AgentNeedsHumanTurn({m, ctx, detail}: {m:AnyMsg; ctx:Ctx; detail
   const store = useApp();
   const { root } = useOwned();
   const target = isThreadMsg(m) ? undefined : m.target;
-  const name = isThreadMsg(m) ? "Agent on " + deviceWords(m.exec?.host || m.to || "", ctx.overview) : historicalTargetLabel(target, ctx.names);
+  const host = isThreadMsg(m) ? m.exec?.host || m.to || "" : target?.address || "";
+  const name = (isThreadMsg(m) ? "Agent" : historicalTargetLabel(target, ctx.names)) + (host ? " on " + deviceWords(host, ctx.overview) : "");
   const asker = whoWrote(m, ctx);
   const requester = asker.mine && ctx.overview?.person ? personName(ctx.overview.person) : asker.name;
   const reply = ctx.canReply && !(ctx.dm && ctx.dm.frozen);
@@ -278,7 +279,7 @@ export function AgentNeedsHumanTurn({m, ctx, detail}: {m:AnyMsg; ctx:Ctx; detail
     <div className="relative ml-10 flex min-w-0 max-w-[calc(100%-3rem)] flex-col items-start sm:max-w-[80%] lg:max-w-[70%]">
       <div className="mb-1 pl-1 text-[13px] font-bold leading-tight text-agent-ink">{name}</div>
       <div role="group" aria-label={name + " says"} className="relative min-w-0 max-w-full rounded-xl bg-agent px-3.5 py-2 text-ink stroke">
-        <span className="absolute -left-10 bottom-0"><AgentAvatar seed={target?.agent_id || target?.address || m.exec?.host || "agent"} size={32} /></span>
+        <span className="absolute -left-10 bottom-0"><AgentAvatar seed={target?.agent_id || host || "agent"} size={32} /></span>
         <Markdown text={"**@" + requester + "** " + requestResultText(detail)} />
       </div>
       {pending && target_ && <div className="mt-1"><AttentionReplyStatus pending={pending} onRetry={() => store.retryAttentionReply(target_, version)} /></div>}
