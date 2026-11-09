@@ -643,7 +643,7 @@ export function ownReportResolution(x: T.ReportItem, host: string, o: T.Overview
   return {id:x.id,key:x.key,host,attempt:x.attempt};
 }
 /** Items this device decides; other-device and running items stay visible apart. */
-export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on && !isWorkingItem(c));
+export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on && !isWorkingItem(c) && c.reason !== Reason.needsHuman);
 
 export const chatOf = (conv: string, o: T.Overview | null) => (o?.dms || []).find((d) => d.id === conv) || null;
 

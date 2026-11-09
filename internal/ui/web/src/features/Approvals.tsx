@@ -118,6 +118,7 @@ export function OksView() {
   if (o) {
     for (const r of reviewAsks(o)) items.push({ key: "r:" + r.id, at: r.at, node: <ReviewRow r={r} o={o} names={names} /> });
     for (const c of o.needs_you || []) {
+      if (c.reason === "agent_needs_human") continue; // the agent's own chat message, never a Review card
       if (isWorkingItem(c) || isRunningElsewhere(c)) working.push(c);
       else if (c.stale) unreported.push(c); // its host's word is not current: nothing to decide, not counted
       else if (c.decide_on) elsewhere.push(c); // decided on another device: listed apart, not counted
@@ -133,7 +134,9 @@ export function OksView() {
   const held = [...(o?.held || [])].sort(newestFirst);
   const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
   const security = (o?.review || []).filter((r) => r.reason === "device_admin").sort(newestFirst);
-  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin");
+  // A report listing only agents' needs_human results duplicates their chat messages.
+  const onlyAgentMessages = (r: T.ReviewItem) => !!r.report?.items?.length && r.report.items.every(x => !x.native && x.state === "needs_human");
+  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin" && !onlyAgentMessages(r));
   const keys = [...items.map((i) => i.key), ...working.map((c) => "w:" + c.conv + ":" + c.id), ...workingReviews.map((r) => "w:r:" + r.id), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...unreported.map((c) => "u:" + c.conv + ":" + c.id), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
   const { root, title, land } = useLanding(keys.join("\n"));
 

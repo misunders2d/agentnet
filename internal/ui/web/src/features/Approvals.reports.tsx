@@ -92,8 +92,11 @@ function HostReport({ host, notices, o }: { host: string; notices: T.ReviewItem[
   // The newest snapshot says what waits there now; older ones are history.
   const latest = latestReviewReport(notices);
   const newest = [...notices].sort((a, b) => b.at.localeCompare(a.at))[0];
-  const items = latest?.report?.items || [];
-  const waiting = items.length || latest?.report?.count || 0;
+  // An agent's needs_human result is its own chat message there, answered by
+  // an ordinary tagged reply: never a report card to handle here.
+  const all = latest?.report?.items || [];
+  const items = all.filter(x => x.native || x.state !== "needs_human");
+  const waiting = items.length || (all.length ? 0 : latest?.report?.count || 0);
   const where = deviceWords(host, o);
   const dismiss = async () => {
     setBusy(true);
@@ -102,6 +105,7 @@ function HostReport({ host, notices, o }: { host: string; notices: T.ReviewItem[
       store.toast("Dismissed here. A newer report from " + where + " shows again if requests still wait.", "ok");
     } finally { setBusy(false); }
   };
+  if (all.length && !items.length) return null;
   return (
     <li className="rounded-2xl bg-surface p-3.5 stroke">
       <div className="flex items-baseline gap-2">

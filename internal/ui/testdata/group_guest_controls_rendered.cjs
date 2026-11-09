@@ -779,20 +779,14 @@ if(process.env.AGENTNET_ATTENTION_LABELS==='1'){
  try{
   const nav=page.getByRole('navigation',{name:'Main',exact:true});
   if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-  const banner=page.getByRole('button',{name:/^2 need attention/});await banner.waitFor();
-  assert.doesNotMatch(await banner.innerText(),/your OK|your answer/i,'mixed attention banner promises no approval or answer');
-  assert.match(await page.locator('[data-part="chat-row"]').first().innerText(),/2 need attention/,'sidebar retains both unresolved items');
+  // An agent's needs_human result is its own chat message, not a Review
+  // card: only the held question counts as attention here.
+  const banner=page.getByRole('button',{name:/^1 needs attention/});await banner.waitFor();
+  assert.match(await page.locator('[data-part="chat-row"]').first().innerText(),/Needs attention/,'sidebar keeps the held question');
   await nav.getByRole('button',{name:/^Review/}).click();
   await page.getByRole('heading',{name:'Review',exact:true}).waitFor();await settle(page);
-  assert.equal(await page.getByRole('heading',{name:'Review',exact:true}).locator('..').getByText('2 need attention',{exact:true}).count(),1,'same aggregate count in existing destination');
-  await page.locator('[data-open]').filter({hasText:'Review carrier handoff'}).click();
-  const blocked=page.locator('[data-mid="needs-person"]');await blocked.waitFor();
-  await blocked.getByText('Needs attention',{exact:true}).waitFor();
-  assert.doesNotMatch(await blocked.innerText(),/Needs your OK|needs your answer|Runs only if you allow/i,'runtime blocker is never a consent request');
-  await blocked.getByRole('button',{name:'Ask again',exact:true}).waitFor();
-  await blocked.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
-  if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
-  await nav.getByRole('button',{name:/^Review/}).click();
+  assert.equal(await page.getByRole('heading',{name:'Review',exact:true}).locator('..').getByText('1 needs attention',{exact:true}).count(),1,'same aggregate count in existing destination');
+  assert.equal(await page.locator('[data-open]').filter({hasText:'Review carrier handoff'}).count(),0,'no needs-attention card in Review');
   await page.locator('[data-open]').filter({hasText:'Which carrier should we use?'}).click();
   const consent=page.locator('[data-mid="held-question"]');await consent.waitFor();
   await consent.getByText('Needs your OK',{exact:true}).waitFor();
@@ -800,12 +794,9 @@ if(process.env.AGENTNET_ATTENTION_LABELS==='1'){
   await page.evaluate(()=>{fixture.overview.needs_you=fixture.overview.needs_you.filter(c=>c.reason==='agent_needs_human');reloadFixture();});
   if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
   await nav.getByRole('button',{name:/^Chats/}).click();
-  await page.getByRole('button',{name:/^1 needs attention/}).waitFor();
-  assert.match(await page.locator('[data-part="chat-row"]').first().innerText(),/Needs attention/,'a runtime-only badge remains visible');
-  await page.evaluate(()=>{fixture.overview.needs_you[0].why='';fixture.thread.messages.find(m=>m.id==='needs-person').job_detail='';reloadFixture();});
-  await page.getByRole('button',{name:/^1 needs attention/}).click();
-  await blocked.getByText('The reason is not available on this device. Review the agent on its host computer.',{exact:true}).waitFor();
-  assert.doesNotMatch(await blocked.innerText(),/needs a person to decide|needs your answer|This run has stopped/,'missing detail invents neither a decision nor a terminated native operation');
+  await page.locator('[data-part="chat-row"]').first().waitFor();await settle(page);
+  assert.equal(await page.getByRole('button',{name:/needs? attention/}).count(),0,'a needs_human result alone is no pending decision');
+  assert.doesNotMatch(await page.locator('[data-part="chat-row"]').first().innerText(),/Needs attention/,'no separate decision badge');
   await settle(page);const shot=path.join(evidence,'comic-attention-labels-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
   assert.equal(await page.evaluate(()=>fixture.requests.some(r=>['/api/act','/api/dm/send','/api/dm/agent/ask','/api/operator/decide'].includes(r.path))),false,'viewing wording never resolves, approves, retries or sends');
   assert.deepEqual(await page.evaluate(()=>fixture.thread.messages.filter(m=>['held-question','needs-person'].includes(m.id)).map(m=>({id:m.id,state:m.state,actions:m.actions}))),[{id:'held-question',state:'held',actions:['accept','decline','approve']},{id:'needs-person',state:'needs_human',actions:['resolve','accept','reply']}],'request states and actual actions stay exact');
@@ -871,33 +862,28 @@ if(process.env.AGENTNET_REPORT_HISTORY_REGRESSION==='1'){
  assert.equal(skin,'comic');
  const {page,context}=await openCase('report-history');
  try{
+  // The blocker is the agent's own chat message: no card, boilerplate or
+  // Mark as handled, in the chat or as a Review report.
   const original=page.locator('[data-mid="'+'3'.repeat(32)+'"]');
-  await original.getByText(/For a native permission or required authorization/).waitFor();
-  await original.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
+  await original.locator('[data-agent-needs-you]').getByText(/OLD_BLOCKER_DETAIL/).waitFor();
+  assert.doesNotMatch(await original.innerText(),/For a native permission|Mark as handled|Ask again|couldn’t finish/,'no needs-attention card');
+  await original.locator('[data-agent-needs-you]').getByRole('button',{name:'Reply',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='3'.repeat(32)).exec.state),'needs_human','same-outcome follow-up success cannot invent an exact resolution');
   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
   await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();
+  await page.getByRole('heading',{name:'Review',exact:true}).waitFor();
   const reports=page.locator('div').filter({has:page.getByRole('button',{name:/^Reports from other computers/})}).last();
-  await page.getByRole('button',{name:/^Reports from other computers/}).click();
   for(const mode of ['active','confirmed','refused','new-attempt','empty-iso','empty-tie']){
    await page.evaluate(mode=>{setReportHistory(mode);reloadFixture();},mode);
    if(mode.startsWith('empty')){
+    const fold=page.getByRole('button',{name:/^Reports from other computers/});await fold.waitFor();
+    if(await fold.getAttribute('aria-expanded')!=='true')await fold.click();
     await reports.getByText(/nothing waits any more/).waitFor();
     assert.doesNotMatch(await reports.innerText(),/OLD_BLOCKER_DETAIL|something waits for a person/,'Newest empty snapshot never revives old blockers');
     assert.equal(await reports.getByRole('button',{name:'Mark as handled',exact:true}).count(),0);
    }else{
-    const row=reports.locator('li li').filter({hasText:'OLD_BLOCKER_DETAIL'});
-    await row.waitFor();
-    if(mode==='confirmed'){
-     await row.getByText(/was closed/).first().waitFor();
-     assert.doesNotMatch(await row.innerText(),/needs a person|Open it on/,'Confirmed resolution is history, with no live blocker claim');
-     assert.equal(await row.getByRole('button',{name:'Mark as handled',exact:true}).count(),0);
-     await row.getByText('Earlier blocker',{exact:true}).click();
-     assert.match(await row.innerText(),/OLD_BLOCKER_DETAIL/,'Original evidence stays readable');
-    }else{
-     await row.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
-     assert.match(await row.innerText(),/needs a person/,'Current or refused/new-attempt blocker keeps its explicit action');
-    }
+    await page.waitForFunction(()=>!document.querySelector('#skin').shadowRoot.textContent.includes('Reports from other computers'));
+    assert.equal(await page.getByRole('button',{name:'Mark as handled',exact:true}).count(),0,mode+': a needs_human report is no Review card');
    }
    await settle(page);const shot=path.join(evidence,'comic-report-history-'+mode+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
   }
@@ -2089,9 +2075,9 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
       if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
       await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();
     }
-    await page.getByText('Read the agent’s whole message',{exact:true}).click();
-    await page.getByText(/FINAL_REASON_MARKER/).filter({visible:true}).first().waitFor();
-    if(skin==='comic')await page.locator('[data-open]').filter({hasText:'Review carrier handoff'}).click();
+    await page.getByRole('heading',{name:'Review',exact:true}).waitFor();
+    assert.equal(await page.getByText(/FINAL_REASON_MARKER|Read the agent’s whole message/).count(),0,'needs_human result is no Review card');
+    if(skin==='comic'){await page.locator('[data-open]').filter({hasText:'Which carrier should we use?'}).click();await page.locator('[data-mid="held-question"]').waitFor();await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:/^All/}).click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/Carrier review/}).click();}
     const region=page.locator('[data-mid="needs-person"] [data-agent-needs-you]');
     try{await region.waitFor();}catch(e){const shot=path.join(evidence,skin+'-full-reason-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,errors,shot,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
     assert((await region.innerText()).includes(await page.evaluate(()=>fixture.why)),'Chat retains the complete overview explanation when message detail is absent');
@@ -2190,14 +2176,14 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     await page.locator('form[aria-label="Write a message"] input[type=file]').setInputFiles({name:'draft.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic unsent file')});await page.getByRole('list',{name:'Files to send'}).waitFor();
     await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:/^All/}).click();
     await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/Carrier review/}).click();assert.equal(await page.locator('[data-mid="main-note"]').count(),0);
-    const oks=async()=>{if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();await page.getByRole('heading',{name:'Review',exact:true}).locator('..').getByText('2 need attention',{exact:true}).waitFor();};
-    if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();const brinRow=page.locator('[data-part="chat-row"]').filter({has:page.getByText('Brin',{exact:true})});await brinRow.getByText('2 need attention',{exact:true}).waitFor();if(width===390)await brinRow.click();await oks();const waiting=page.getByRole('list',{name:'Waiting for you',exact:true}),working=page.getByRole('list',{name:'Working',exact:true});
-    assert.equal(await waiting.locator('[data-open]').count(),2,'Running request does not count as an OK');assert.equal(await working.locator('[data-open]').count(),1);assert(!/Runs only if|Answered only if/.test(await working.innerText()),'Running row has no approval wording');await working.getByRole('button',{name:'Stop',exact:true}).waitFor();
-    await waiting.getByText('Read the agent’s whole message',{exact:true}).click();assert((await waiting.innerText()).includes('FINAL_REASON_MARKER'),'List expands full needs_human detail');
+    const oks=async()=>{if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^Review/}).click();await page.getByRole('heading',{name:'Review',exact:true}).locator('..').getByText('1 needs attention',{exact:true}).waitFor();};
+    if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();const brinRow=page.locator('[data-part="chat-row"]').filter({has:page.getByText('Brin',{exact:true})});await brinRow.getByText('Needs attention',{exact:true}).waitFor();if(width===390)await brinRow.click();await oks();const waiting=page.getByRole('list',{name:'Waiting for you',exact:true}),working=page.getByRole('list',{name:'Working',exact:true});
+    assert.equal(await waiting.locator('[data-open]').count(),1,'Running request does not count as an OK; a needs_human result is a chat message');assert.equal(await working.locator('[data-open]').count(),1);assert(!/Runs only if|Answered only if/.test(await working.innerText()),'Running row has no approval wording');await working.getByRole('button',{name:'Stop',exact:true}).waitFor();
+    assert.doesNotMatch(await waiting.innerText(),/Review carrier handoff|FINAL_REASON_MARKER|Read the agent’s whole message/,'needs_human result is no Review card');
     const arrow=working.locator('[data-open]');await arrow.click();await page.locator('[data-mid="working-request"]').waitFor();assert.equal(await page.locator('[data-mid="needs-person"]').count(),0,'Arrow leaves wrong topic');assert.equal(await composer.inputValue(),'Unsent warehouse draft');await page.getByRole('list',{name:'Files to send'}).waitFor();
     if(width===1280){await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:/^All/}).click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/Carrier review/}).click();await page.evaluate(()=>reloadFixture());await page.waitForFunction(()=>fixture.requests.filter(r=>r.path.startsWith('/api/dm?')).length>2);await page.locator('[data-mid="needs-person"]').waitFor();assert.equal(await page.locator('[data-mid="working-request"]').count(),0,'Background refresh preserves manually selected topic after previous focus');await oks();await arrow.click();await page.locator('[data-mid="working-request"]').waitFor();await page.locator('[data-mid="working-request"]').evaluate(e=>e.getAnimations().forEach(a=>a.finish()));await oks();await arrow.click();await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelector('[data-mid="working-request"]')?.getAnimations().length>0);}
     const rect=await page.locator('[data-mid="working-request"]').boundingBox();assert(rect&&rect.y>=0&&rect.y<900,'Exact requested message visibly focused');await settle(page);const focusedShot=path.join(evidence,'comic-exact-topic-'+width+'.png');await page.screenshot({path:focusedShot});shots.push(focusedShot);
-    await oks();await waiting.locator('[data-open]').filter({hasText:'Review carrier handoff'}).click();await page.locator('[data-mid="needs-person"]').waitFor();const region=page.locator('[data-mid="needs-person"] [data-agent-needs-you]');assert((await region.innerText()).includes(await page.evaluate(()=>fixture.why)),'Chat displays full overview reason when job_detail absent');
+    await page.getByRole('navigation',{name:'Topics',exact:true}).getByRole('button',{name:/^All/}).click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/Carrier review/}).click();await page.locator('[data-mid="needs-person"]').waitFor();const region=page.locator('[data-mid="needs-person"] [data-agent-needs-you]');assert((await region.innerText()).includes(await page.evaluate(()=>fixture.why)),'Chat displays full overview reason when job_detail absent');
     await oks();await waiting.locator('[data-open]').filter({hasText:'Which carrier should we use?'}).click();await page.locator('[data-mid="held-question"]').waitFor();assert.equal(await page.locator('[data-mid="needs-person"]').count(),0,'Main-flow request clears other topic');
     await page.locator('[data-mid="held-question"]').getByRole('button',{name:'Approve Brin…',exact:true}).click();const confirm=page.getByRole('dialog');assert.match(await confirm.innerText(),/This held question still waits: choose Allow once/);await confirm.getByRole('button',{name:'Approve Brin',exact:true}).click();await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.do==='approve'));assert(!await page.evaluate(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.do==='accept')),'Standing approval does not accept held item');
     await page.locator('[data-mid="held-question"]').getByRole('button',{name:'Allow once',exact:true}).click();await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.do==='accept'));assert.equal(await page.evaluate(()=>fixture.requests.find(r=>r.path==='/api/act'&&r.body?.do==='accept').body.id),'held-question');

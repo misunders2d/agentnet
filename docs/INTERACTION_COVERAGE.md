@@ -1,5 +1,40 @@
 # Next-release interaction coverage and responsiveness
 
+## Agent needs_human result is a chat message — unreleased, November 9, 2026
+
+Owner, 2026-11-09: "we need to remove these idiotic popup windows with 'asks' -
+they make no sense at all, impossible to understand what's needed and only
+bring chaos." Changed (Comic only; no Go, wire or skin-contract change):
+
+- An agent's needs_human result shows as that agent's own chat message under
+  the request (`[data-agent-needs-you]`): agent name and avatar, `@requester`,
+  the agent's text, and one **Reply**. Removed: the "Needs attention" card
+  (MEL-539 603666ec, 3705be22), the "couldn't finish — it needs your attention"
+  heading, the "For a native permission…" boilerplate, the You→agent diagram,
+  the "…so this waits for you" pill, **Ask again** and **Mark as handled**.
+- Reply continues the same request: with a continuation descriptor it opens
+  the existing exact answer sheet (`/api/act continue` locally,
+  `/api/operator/decide continue` to the host); on your own request without
+  one it sets the composer's reply binding (Composer.followup.ts, MEL-497).
+  Another person's request without a descriptor shows no Reply. Nothing
+  reruns, and native permission requests (NativeRequest) are unchanged.
+- Review no longer lists needs_human items, report rows or reports made only
+  of them; the Review badge, banner and chat-row counts exclude them.
+
+Evidence: rendered `TestRemoteNeedsHumanCardRendered` (remote own device:
+message, no removed words, Reply → one exact continue),
+`TestComicReviewHistoryRendered` needs_human section (the run then stops at the
+pre-existing draft-retention failure, which also fails on a1990c2f),
+`TestNeedsHumanContinuationRendered` (local/remote continue, stale has no
+Reply), `TestAttentionLabelsRendered`, `TestComicOKsNavigationRendered`,
+`TestFullApprovalReasonRendered`, `TestNeedsHumanReportHistoryRendered`,
+`TestNeedsYouRendered` (Review clear, full text in chat), and
+`TestCompactProposalApprovalRendered`. Not done: new unread/mention attention
+for the result (only the separate decision count was removed); CLI
+`agentnet inbox --review` and harness-hook "awaiting your human's decision"
+wording; device-thread review rows (`review[]` carries no state); latency
+measurement; agentnet-skins collection skins.
+
 ## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
 
 Not qualified, not released, pre-CI hold. Focused evidence only.

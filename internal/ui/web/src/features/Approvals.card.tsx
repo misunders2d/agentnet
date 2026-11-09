@@ -14,14 +14,13 @@ import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import {
   askerOf, capital, deviceWords, headlineOf, inSentence, isMine, isThreadMsg, kindWord, longer, myAgent, myAgentSeed, nameOf,
-  participationOf, phaseOf, placeOf, remoteNeedsHumanDetail, requestText, waitsElsewhere, type Asker, type Phase, type Req,
+  participationOf, phaseOf, placeOf, requestText, waitsElsewhere, type Asker, type Phase, type Req,
 } from "./Approvals.words";
 import { localRunningDetail } from "../runningDetail";
-import { AnswerSheet, AttentionReplyStatus, ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
+import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { focusComposer } from "./Composer.focus";
 import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
-import { ResolveOwnRequest } from "./RequestResolution";
 import { RequestFrame } from "../skin/RequestFrame";
 import { Markdown } from "./Markdown";
 import { requestResultText } from "../requestResult";
@@ -44,7 +43,7 @@ export function ApprovalCard({ message, dm, thread, compact, content }: { messag
       const agent = myAgent(message, names, o, dm);
       const state = message.dir === "in" ? message.state : message.exec?.state;
       const label = phase === "stopped" ? (state === "cancelled" ? "Stopped" : state === "interrupted" ? "Interrupted" : "Didn’t finish")
-        : phase === "running" ? "Working" : phase === "decide" ? "Needs your OK" : "Needs attention";
+        : phase === "running" ? "Working" : "Needs your OK";
       return <details key={message.id + ":" + phase} data-request-disclosure data-terminal-request={phase === "stopped" || undefined}
         className="w-full rounded-xl border border-outline/20 bg-surface">
         <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-[14px]">
@@ -136,7 +135,6 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const { root } = useOwned();
   const [busy, setBusy] = useState("");
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [answer, setAnswer] = useState<{request: NonNullable<Req["continuation"]>; version: string; question: string} | null>(null);
   const acts = m.actions || [];
   const can = (a: string) => acts.includes(a);
   const asker = askerOf(m, o, names, dm);
@@ -147,12 +145,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const conv = dm?.id || thread?.id || "";
 	const runningDetail = (isThreadMsg(m) ? m.detail : m.job_detail) || (phase === "running" && m.exec?.state === "running" && !m.exec.stale ? m.exec.detail : "") || "";
 	const activity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, phase === "running");
-	const said = requestResultText(localRunningDetail(runningDetail || (phase === "needs_human" ? remoteNeedsHumanDetail(m, o) : "") || (phase === "needs_human" ? (o?.needs_you || []).find(c => c.conv === conv && c.id === m.id)?.why : "") || "", phase === "running"));
-  const continuation = m.continuation;
-  const replyTarget = continuation ? {host:continuation.host || "",id:continuation.id,key:continuation.key,attempt:continuation.attempt,action:"continue",expect:"needs_human",report:""} : null;
-  const replyVersion = replyTarget ? store.attentionReplyVersion(replyTarget) : "";
-  const replySlot = useStore(store, () => store.attentionReply(replyTarget, replyVersion));
-  useEffect(() => { if (answer && (JSON.stringify(answer.request) !== JSON.stringify(m.continuation) || answer.version !== replyVersion)) setAnswer(null); }, [answer, m.continuation, replyVersion]);
+	const said = requestResultText(localRunningDetail(runningDetail, phase === "running"));
 	const proposal = m.proposal;
 
   const permissionPerson = thread?.permission_person;
@@ -179,7 +172,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {notice ? capital(deviceWords(m.from, o)) + " has requests waiting for a person there" : capital(agent) + "’s follow-up needs a person"}
           </h3>
           <p className="pt-1.5 text-text-2">{notice ? decidersWords(o?.review?.find((r) => r.id === m.id)?.report, m.from, o) : said || requestText(m)}</p>
-          <Button className="mt-3.5" disabled={!!busy || !!replySlot} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Mark as handled"}</Button>
+          <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Mark as handled"}</Button>
         </div>
         <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
           title={notice ? "Dismiss this report?" : "Mark as handled?"}
@@ -201,16 +194,16 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
   return (
     <section className="mx-auto flex w-full max-w-[560px] flex-col items-center gap-2" aria-labelledby={"appr-" + m.id}>
-      {(phase === "decide" || phase === "needs_human") && (
+      {phase === "decide" && (
         <p className="inline-flex max-w-full items-center gap-1.5 rounded-full border-[1.5px] border-ink/20 bg-surface px-3 py-1.5 text-[13px] font-semibold text-text-2">
           <IconBolt size={15} className="shrink-0 fill-act text-approval-ink" aria-hidden="true" />
           <span className="truncate">{named ? agent + " is your agent, so this waits for you" : "This is for your agent, so it waits for you"}</span>
         </p>
       )}
       <RequestFrame tone={phase === "running" ? "work" : phase === "stopped" ? "quiet" : "act"} at={m.at}
-        label={replySlot ? replySlot.status === "failed" ? "Answer not confirmed" : "Answer pending" : phase === "decide" ? "Needs your OK" : phase === "needs_human" ? "Needs attention" : phase === "running" ? "Working" : stoppedWord}>
+        label={phase === "decide" ? "Needs your OK" : phase === "running" ? "Working" : stoppedWord}>
         <Duo asker={asker} agent={mine.name} sub={named ? mine.where : "On " + mine.where.replace(/^Your agent · /, "")} seed={myAgentSeed(m, o, dm)} device={deviceKind(mine.address)}
-          mood={phase === "running" ? "working" : phase === "decide" || phase === "needs_human" ? "waiting" : "neutral"} live={phase === "decide"} />
+          mood={phase === "running" ? "working" : phase === "decide" ? "waiting" : "neutral"} live={phase === "decide"} />
 
         <div className="px-4 pt-3">
           <p className="text-[15px] font-semibold text-text-2">{lead}</p>
@@ -226,10 +219,10 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           <p className="mt-2">{nameOf(proposal.confirmed_by, o)} {proposal.edited ? "edited and sent this task." : "chose Do it."} This uses only their usual task approval.</p>
         </Details>}
 
-        {phase === "needs_human" || (phase === "stopped" && said) ? (
-          <div data-agent-needs-you={phase === "needs_human" || undefined} role="region" aria-label="Your agent says" tabIndex={-1} className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
-            <p className="text-[13px] font-bold">{phase === "needs_human" ? "Your agent couldn’t finish — it needs your attention" : capital(agent) + " says"}</p>
-            <Markdown className="pt-0.5 text-ink" text={said || "The reason is not available on this device. Review the agent on its host computer."} />
+        {phase === "stopped" && said ? (
+          <div role="region" aria-label="Your agent says" tabIndex={-1} className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
+            <p className="text-[13px] font-bold">{capital(agent) + " says"}</p>
+            <Markdown className="pt-0.5 text-ink" text={said} />
           </div>
         ) : null}
 
@@ -253,46 +246,30 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
         <div className="flex flex-col gap-2 px-4 pt-4 pb-3">
           {phase === "decide" && <>
-            {can("accept") && <Button variant="act" size="lg" icon={<IconCheck size={20} stroke={2.5} />} disabled={!!busy || !!replySlot} onClick={allow}>{busy === "accept" ? "Allowing…" : "Allow once"}</Button>}
-            {can("decline") && <Button variant="outline" size="lg" className="min-h-12!" disabled={!!busy || !!replySlot} onClick={() => setSheet("decline")}>Decline</Button>}
+            {can("accept") && <Button variant="act" size="lg" icon={<IconCheck size={20} stroke={2.5} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Allowing…" : "Allow once"}</Button>}
+            {can("decline") && <Button variant="outline" size="lg" className="min-h-12!" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
-            {can("accept_always") && <TextButton onClick={() => setSheet("always")} disabled={!!busy || !!replySlot}>{named ? "Always allow " + asker.name + " → " + agent + "…" : "Always allow tasks from " + asker.name + "…"}</TextButton>}
-            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy || !!replySlot}>Approve {permissionName}…</TextButton>}
+            {can("accept_always") && <TextButton onClick={() => setSheet("always")} disabled={!!busy}>{named ? "Always allow " + asker.name + " → " + agent + "…" : "Always allow tasks from " + asker.name + "…"}</TextButton>}
+            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy}>Approve {permissionName}…</TextButton>}
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
-          {phase === "needs_human" && <>
-            {replySlot && replyTarget && <AttentionReplyStatus pending={replySlot} onRetry={() => store.retryAttentionReply(replyTarget, replyVersion)} />}
-            <p className="text-[14px] text-text-2">For a native permission or required authorization, review the agent on its host computer.
-              {m.continuation && " Use Reply to supply information for this exact waiting request. The host checks it before continuing under its existing permissions."}
-              {can("accept") && " Ask again requests another attempt with the agent’s existing permissions."}
-              {(m.continuation?.host || can("resolve")) && " Mark as handled asks to close this request without running it again."}
-            </p>
-            {m.continuation && !replySlot && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy || !!replySlot} onClick={() => setAnswer({request: {...m.continuation!}, version: replyVersion, question: said})}>Reply</Button>}
-            {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy || !!replySlot} />}
-            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy || !!replySlot} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
-            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy || !!replySlot}>Mark as handled</TextButton>}
-          </>}
           {phase === "stopped" && <>
-            {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy || !!replySlot} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
+            {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
-            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy || !!replySlot}>Mark as handled</TextButton>}
+            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
           </>}
           {phase === "running" && (
-            <Button variant="danger" size="lg" className="min-h-12!" icon={<IconPlayerStop size={19} />} disabled={!!busy || !!replySlot} onClick={() => setSheet("stop")}>{busy === "cancel" ? "Stopping…" : "Stop"}</Button>
+            <Button variant="danger" size="lg" className="min-h-12!" icon={<IconPlayerStop size={19} />} disabled={!!busy} onClick={() => setSheet("stop")}>{busy === "cancel" ? "Stopping…" : "Stop"}</Button>
           )}
         </div>
 
-        {(phase === "decide" || phase === "needs_human") && (
+        {phase === "decide" && (
           <p className="flex items-center gap-2 border-t-[1.5px] border-ink/10 px-4 py-2.5 text-[13px] font-medium text-text-2">
-            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />{phase === "needs_human" ? m.continuation ? "A reply supplies information; it does not grant new permissions." : "This request still needs attention. Native permissions stay unchanged." : "Only you can approve this. Typing in chat can’t approve it."}
+            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />Only you can approve this. Typing in chat can’t approve it.
           </p>
         )}
       </RequestFrame>
 
-      {answer && <AnswerSheet draftKey={JSON.stringify(["answer", conv, answer.request.host, answer.request.id, answer.request.key, answer.request.attempt])} question={answer.question} onClose={() => setAnswer(null)} onSend={async (text) => {
-        const c = answer.request;
-        return store.submitAttentionReply({host:c.host || "",id:c.id,key:c.key,attempt:c.attempt,action:"continue",expect:"needs_human",report:""}, answer.version, text);
-      }} />}
       <ConfirmSheet open={sheet === "always"} onOpenChange={(v) => setSheet(v ? "always" : null)}
         title={named ? "Always allow " + asker.name + " → " + agent + "?" : "Always allow tasks from " + asker.name + "?"}
         body={permissionName + (permissionPerson ? " can give tasks from all current and future verified devices. Removing a device ends its access; key changes and person conflicts block it." : " can give tasks from this exact device key without asking you.") + " Your agent's normal permissions still apply. Turn it off in Settings → Permissions."}

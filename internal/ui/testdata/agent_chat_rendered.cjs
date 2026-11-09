@@ -76,17 +76,13 @@ async function checkReviewHistory(page,width,nav,shots){
  assert.equal(await recovery.locator('p').innerText(),'This is saved agent history. Its messages, draft and files stay here. For new work, choose a configured agent below.');
  await recovery.getByRole('button',{name:'Chat with Zenbook agent · Claude',exact:true}).waitFor();
  const row=conversation.locator('[data-mid="'+legacyHistory+'"]');
- const card=row.locator('section[aria-labelledby]').filter({has:page.locator('[data-agent-needs-you]')});
- await card.getByText('Exact original clarification for the retained request.',{exact:true}).waitFor();
- const guidance=card.locator('p').filter({hasText:'For a native permission or required authorization'});
- assert.match(await guidance.innerText(),/Use Reply/);
- assert.match(await guidance.innerText(),/Mark as handled/);
- assert.doesNotMatch(await guidance.innerText(),/Ask again|tag the same agent|attention clears/);
- await card.getByText('A reply supplies information; it does not grant new permissions.',{exact:true}).waitFor();
- assert.doesNotMatch(await card.innerText(),/Chat messages don’t approve or restart it/);
+ // The agent's needs_human result is its own chat message (no card,
+ // boilerplate, Ask again or Mark as handled); Reply is the exact continuation.
+ const card=row.locator('[data-agent-needs-you]');
+ await card.getByText('Exact original clarification for the retained request.',{exact:false}).waitFor();
+ const shown=()=>page.evaluate(()=>document.querySelector('#skin').shadowRoot.querySelector('[data-part="conversation"]').textContent);
+ for(const gone of ['couldn’t finish','needs your attention','For a native permission','Mark as handled','Ask again','waits for you','A reply supplies information'])assert.ok(!(await shown()).includes(gone),'removed: '+gone);
  await card.getByRole('button',{name:'Reply',exact:true}).waitFor();
- await card.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
- assert.equal(await card.getByRole('button',{name:'Ask again',exact:true}).count(),0);
  await settle(page);const combined=path.join(evidence,'comic-review-history-'+width+'.png');await page.screenshot({path:combined});shots.push(combined);
  await card.getByRole('button',{name:'Reply',exact:true}).click();
  const answer=page.getByRole('dialog',{name:'Answer your agent',exact:true});await answer.waitFor();
@@ -100,18 +96,11 @@ async function checkReviewHistory(page,width,nav,shots){
  assert.match(body.send_id,/^[a-f0-9]{32}$/);
  assert.deepEqual(body,{host:expected.host,id:expected.id,key:expected.key,attempt:expected.attempt,action:'continue',expect:'needs_human',text:'Use the recorded delivery date.',send_id:body.send_id,report:''});
  assert.equal(await page.evaluate(()=>fixture.threads[fixture.legacyHistory].messages[0].exec.state),'needs_human','queueing an answer does not claim the host completed it');
- // Guidance follows each actually offered action, with no new authorization.
- for(const variant of [{actions:['resolve']},{actions:['accept']},{actions:['continue'],continuation:{id:legacyHistory,key:'original-request-key',attempt:7}}]){
-  await page.evaluate(variant=>{const m=fixture.threads[fixture.legacyHistory].messages[0];delete m.continuation;if(variant.continuation)m.continuation=variant.continuation;m.actions=variant.actions;fixture.change();},variant);
-  await card.getByRole('button',{name:'Reply',exact:true}).waitFor({state:variant.continuation?'visible':'hidden'});
-  if(variant.actions[0]!=='continue')await card.getByRole('button',{name:variant.actions[0]==='resolve'?'Mark as handled':'Ask again',exact:true}).waitFor();
-  if(!variant.actions.includes('resolve'))await card.getByRole('button',{name:'Mark as handled',exact:true}).waitFor({state:'hidden'});
-  if(!variant.actions.includes('accept'))await card.getByRole('button',{name:'Ask again',exact:true}).waitFor({state:'hidden'});
-  const text=await guidance.innerText();assert.doesNotMatch(text,/tag the same agent/);
-  assert.equal(text.includes('Use Reply'),!!variant.continuation);
-  assert.equal(text.includes('Ask again'),variant.actions.includes('accept'));
-  assert.equal(text.includes('Mark as handled'),variant.actions.includes('resolve'));
-  await card.getByText(variant.continuation?'A reply supplies information; it does not grant new permissions.':'This request still needs attention. Native permissions stay unchanged.',{exact:true}).waitFor();
+ // Whatever actions the server lists, no rerun or close control appears.
+ for(const variant of [{actions:['resolve']},{actions:['accept']},{actions:['reply','accept','resolve']}]){
+  await page.evaluate(variant=>{const m=fixture.threads[fixture.legacyHistory].messages[0];delete m.continuation;m.actions=variant.actions;fixture.change();},variant);
+  await card.getByText('Exact original clarification for the retained request.',{exact:false}).waitFor();
+  for(const gone of ['Mark as handled','Ask again','Run it again','couldn’t finish'])assert.ok(!(await shown()).includes(gone),variant.actions+': removed '+gone);
  }
  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/send').length),0,'history and exact continuation never start a replacement conversation');
  assert.equal(await page.evaluate(()=>fixture.staged.length),0,'original history File is never staged for a continuation');

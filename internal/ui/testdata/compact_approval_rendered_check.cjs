@@ -63,7 +63,8 @@ async function settle(p){await p.evaluate(async()=>{await document.fonts.ready;a
      const row=root.locator('[data-mid="approved"]');
      const expected=state==='running'?'Stop':state==='interrupted'?'Run it again':state==='awaiting'?'Allow once':null;
      if(expected)await row.getByRole('button',{name:expected,exact:true}).waitFor();
-     if(state==='interrupted'||state==='needs_human')await row.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
+     if(state==='interrupted')await row.getByRole('button',{name:'Mark as handled',exact:true}).waitFor();
+     if(state==='needs_human')assert.equal(await row.getByRole('button',{name:/^(Mark as handled|Ask again)$/}).count(),0,'needs_human result offers no close or rerun control');
      if(state==='running'){
       await row.getByRole('button',{name:expected,exact:true}).click();
       const response=p.waitForResponse(r=>r.url().endsWith('/api/act')&&r.request().postDataJSON()?.do==='cancel');
