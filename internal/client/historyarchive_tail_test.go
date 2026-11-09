@@ -21,6 +21,34 @@ func TestHistoryArchiveImportedTailRemainsBounded(t *testing.T) {
 	}
 }
 
+// runOwnCaps runs host until its daemon session's own capability record
+// is at the relay. A device link's waiting session publishes a record too
+// and stays live through the relay's reconnect grace, so a profile can read
+// archives before the daemon's record lands; a daemon stopped then leaves a
+// live session that reads nothing, and senders rightly use plain copies.
+func runOwnCaps(t *testing.T, host *Agent) (stop func()) {
+	t.Helper()
+	host.capsPub.mu.Lock()
+	before := host.capsPub.lastTS
+	host.capsPub.mu.Unlock()
+	stop = runAgent(t, host)
+	label, name, _ := protocol.SplitAddress(host.Address)
+	eventually(t, "daemon archive capability of "+host.Address, func() bool {
+		var profile protocol.Profile
+		if host.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile) != nil ||
+			!profile.Supports(host.Address, host.Self().SignKey, protocol.CapHistoryArchive) {
+			return false
+		}
+		for _, raw := range profile.Caps {
+			if c, err := protocol.ParseCapsRecord(raw); err == nil && c.TS > before {
+				return true
+			}
+		}
+		return false
+	})
+	return stop
+}
+
 func importedTailRemainsBounded(t *testing.T, direct bool) {
 	const rows = 120
 	n := rows
@@ -34,15 +62,7 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 		sub = envelope.SubDeviceHistory
 		deferredTable = "device_history_pending"
 	}
-	stopPhone := runAgent(t, phone)
-	waitNamedAgentCaps(t, phone)
-	label, name, _ := protocol.SplitAddress(phone.Address)
-	eventually(t, "phone archive capability", func() bool {
-		var profile protocol.Profile
-		err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
-		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive)
-	})
-	stopPhone()
+	runOwnCaps(t, phone)()
 	a := w.alice
 	t.Cleanup(func() { logReplicationFailure(t, a, "laptop"); logReplicationFailure(t, phone, "phone") })
 	stop := runAgent(t, a)
@@ -55,9 +75,7 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 	if r := <-awaited; r.err != nil {
 		t.Fatal(r.err)
 	}
-	stopThird := runAgent(t, third)
-	waitNamedAgentCaps(t, third)
-	stopThird()
+	runOwnCaps(t, third)()
 	for _, p := range []*backgroundPosts{&a.archivePosting, &a.archiveImporting, &phone.archivePosting, &phone.archiveImporting} {
 		p.Lock()
 		done := p.done
