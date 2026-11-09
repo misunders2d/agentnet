@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -583,4 +584,73 @@ func TestSessionGroupPersonIsolation(t *testing.T) {
 	if run := lastRun(st); !strings.Contains(run, "--resume "+carols) {
 		t.Fatalf("carol's group session not resumed: %s", run)
 	}
+}
+
+// MEL-746, one per harness through its real bridge and the real app path:
+// the second ask in the same conversation by the same person continues the
+// first ask's saved native session; dropping the resume fails this test.
+func TestEachHarnessResumesInAgentConversation(t *testing.T) {
+	const help = "--print -p --no-session --extension --session-dir --continue --output-format --no-session-persistence --permission-mode --add-dir --input-format --verbose --replay-user-messages --include-partial-messages --session-id --resume --auto-approve --mode"
+	for _, name := range []string{"claude", "pi", "omp"} {
+		t.Run(name, func(t *testing.T) {
+			st := installStub(t, "answer")
+			old := Harnesses[name]
+			h := old
+			h.bin = filepath.Join(t.TempDir(), name)
+			Harnesses[name] = h
+			t.Cleanup(func() { Harnesses[name] = old })
+			script := "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then echo '" + help + "'; exit 0; fi\necho \"run args=$*\" >> \"$STUB_LOG\"\nexport AGENTNET_NATIVE_STUB_PROMPT=\"$STUB_LOG.stdin\"\n" +
+				nativeAnswerLauncher(t, name, "native answer\n\nemotion: calm\n")
+			if err := os.WriteFile(h.bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			w, conv, lids, _ := agentWorld(t)
+			setResponder(t, w.bob, name, st.dir, time.Minute)
+			pid := participate(t, w, conv, lids[:1], nil)
+			q1 := convAsk(t, w.alice, conv, pid, "first")
+			ref := sessionOf(t, w.bob, q1)
+			if ref == nil || ref.Harness != name || ref.ID == "" {
+				t.Fatalf("no saved %s session: %+v %v", name, ref, st.runs())
+			}
+			q2 := convAsk(t, w.alice, conv, pid, "second")
+			runs := st.runs()
+			if len(runs) != 2 {
+				t.Fatalf("runs %v", runs)
+			}
+			first, second := runs[0], runs[1]
+			switch name {
+			case "claude":
+				if !strings.Contains(first, "--session-id "+ref.ID) || !strings.Contains(second, "--resume "+ref.ID) || strings.Contains(second, sessionOneShot) {
+					t.Fatalf("claude did not resume: %s | %s", first, second)
+				}
+			default:
+				dir := filepath.Join("native-sessions", name, ref.ID) + " --continue"
+				if !strings.Contains(first, dir) || !strings.Contains(second, dir) || strings.Contains(first, "--no-session") || strings.Contains(second, "--no-session") {
+					t.Fatalf("%s did not continue its session directory: %s | %s", name, first, second)
+				}
+			}
+			if r2 := sessionOf(t, w.bob, q2); r2 == nil || r2.ID != ref.ID {
+				t.Fatalf("second job's session %+v", r2)
+			}
+		})
+	}
+	t.Run("agy", func(t *testing.T) {
+		log, dir := agyFixture(t, "answer")
+		w, conv, lids, _ := agentWorld(t)
+		setResponder(t, w.bob, "agy", dir, time.Minute)
+		pid := participate(t, w, conv, lids[:1], nil)
+		q1 := convAsk(t, w.alice, conv, pid, "first")
+		ref := sessionOf(t, w.bob, q1)
+		if ref == nil || ref.Harness != "agy" || len(ref.ID) != 36 {
+			t.Fatalf("no saved agy session: %+v", ref)
+		}
+		q2 := convAsk(t, w.alice, conv, pid, "second")
+		runs := agyRuns(t, log)
+		if len(runs) != 2 || slices.Contains(runs[0].Args, "--conversation") || !slices.Equal(runs[1].Args[len(runs[1].Args)-2:], []string{"--conversation", ref.ID}) {
+			t.Fatalf("agy did not resume: %+v", runs)
+		}
+		if r2 := sessionOf(t, w.bob, q2); r2 == nil || r2.ID != ref.ID {
+			t.Fatalf("second job's session %+v", r2)
+		}
+	})
 }

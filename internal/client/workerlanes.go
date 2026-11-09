@@ -232,7 +232,7 @@ func independentSession(j job, stamp *ExecutorStamp) bool {
 		args = h.task
 	}
 	known := h.bin == stamp.Responder.Harness && (stamp.Responder.Harness == "claude" && h.sessions == claudeSessions && slices.Contains(args, sessionOneShot) ||
-		(stamp.Responder.Harness == "pi" || stamp.Responder.Harness == "omp") && h.sessions == noSessions && slices.Contains(args, "--no-session"))
+		(stamp.Responder.Harness == "pi" || stamp.Responder.Harness == "omp") && h.sessions == dirSessions && slices.Contains(args, "--no-session"))
 	if !known {
 		return false
 	}

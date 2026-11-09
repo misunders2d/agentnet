@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Background sessions: for harnesses that can save and resume a headless
@@ -30,6 +31,8 @@ import (
 // directory and preset (flags plus the harness binary's identity).
 // Otherwise it starts a new session and says why; it never falls back to an
 // older one further up.
+//
+// Pi and OMP save a session in a directory the worker owns (dirSessions).
 //
 // A request to a conversation's agent (a participation, MEL-746) has no
 // reply chain: its session is the latest one in the same conversation,
@@ -48,6 +51,7 @@ const (
 	claudeSessions                     // --session-id UUID creates, --resume UUID continues
 	codexSessions                      // app-server thread/start and exact owned thread/resume
 	agySessions                        // stream-json reports conversation_id; --conversation ID continues
+	dirSessions                        // pi/omp: --session-dir OWNED_DIR --continue creates, then continues
 )
 
 // sessionRef is recorded on the received question or task whose job ran
@@ -137,12 +141,44 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 		note = "the earlier session of this conversation was not reused: another job is running in it"
 	default:
 		want.ID = prev.ID
-		return sessionPlan{args: resumeArgs(h, mode, base, prev.ID), ref: &want, resume: true}, nil
+		args := resumeArgs(h, mode, base, prev.ID)
+		if h.sessions == dirSessions {
+			if args, err = a.dirSessionArgs(r.Harness, base, prev.ID); err != nil {
+				return sessionPlan{}, err
+			}
+		}
+		return sessionPlan{args: args, ref: &want, resume: true}, nil
 	}
-	if h.sessions == claudeSessions {
+	if h.sessions == claudeSessions || h.sessions == dirSessions {
 		want.ID = newUUID()
 	}
-	return sessionPlan{args: createArgs(h, base, want.ID), ref: &want, note: note}, nil
+	args := createArgs(h, base, want.ID)
+	if h.sessions == dirSessions {
+		if args, err = a.dirSessionArgs(r.Harness, base, want.ID); err != nil {
+			return sessionPlan{}, err
+		}
+	}
+	return sessionPlan{args: args, ref: &want, note: note}, nil
+}
+
+// dirSessionArgs saves a Pi/OMP session in a directory the worker owns, one
+// per session: empty, --continue starts the session there; afterwards the
+// same directory continues it. Reused from Heimdall aac5a1d
+// (internal/harness/harness.go sessionArgs, style sessionDir); both CLIs
+// list --session-dir and --continue in --help (pi 1.5.0, omp 18.16.0).
+func (a *Agent) dirSessionArgs(harness string, base []string, id string) ([]string, error) {
+	if !protocol.ValidID(strings.ReplaceAll(id, "-", "")) {
+		return nil, fmt.Errorf("invalid %s session id %q", harness, id)
+	}
+	home, err := filepath.Abs(a.home)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(home, "native-sessions", harness, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return append(withoutFlags(base, "--no-session"), "--session-dir", dir, "--continue"), nil
 }
 
 // createArgs starts a new saved session.
