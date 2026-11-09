@@ -496,7 +496,8 @@ export function participants(t: T.DMThread | null, o: T.Overview | null, agentNa
   }
   for (const a of t.agents || []) {
     if (a.state === "dismissed" || a.state === "declined") continue;
-    const name = agentName(a.agent_id, agentNames, a.host, me);
+    // Whose, which and where (owner, 2026-11-09): two agents of one person never read alike.
+    const name = agentName(a.agent_id, agentNames, a.host, me) + (a.agent_id && agentNames[a.agent_id] ? " · " + niceDevice(a.host.address) : "");
     out.push({
       key: "a:" + a.pid, kind: "guest-agent", name,
       subtitle: owner(a.host, me) + " agent · " + niceDevice(a.host.address),

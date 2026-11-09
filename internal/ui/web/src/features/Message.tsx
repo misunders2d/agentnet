@@ -17,7 +17,7 @@ import {
 } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useApp, useHoverPointer, useWide } from "../context";
-import { deliveryWord, deviceName, firstLine, fullStamp, owner, personName, plain, reminderOf, stampOf } from "../model";
+import { agentName, deliveryWord, deviceName, firstLine, fullStamp, owner, personName, plain, reminderOf, stampOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
@@ -494,7 +494,7 @@ function askChip(text: string, m: AnyMsg, ctx: Ctx): string {
   if (!a) return text;
   // The names the sender may have used: the agent's own, or whose agent it is (older pages said "assistant").
   const whose = [owner(a.host, ctx.overview?.person), "Your", personName(a.host) + "’s"];
-  const names = [agentLabel(a, ctx), ...whose.flatMap((w) => [w + " agent", w + " assistant"])]
+  const names = [agentLabel(a, ctx), agentName(a.agent_id, ctx.names, a.host, ctx.overview?.person), ...whose.flatMap((w) => [w + " agent", w + " assistant"])]
     .filter((n, i, l) => n && l.indexOf(n) === i && /^[^\[\]\r\n]{1,80}$/.test(n))
     .sort((x, y) => y.length - x.length);
   const re = new RegExp("(^|\\s)@(" + names.map(escape).join("|") + ")(?=$|[\\s.,:;!?])");

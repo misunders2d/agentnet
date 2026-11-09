@@ -822,6 +822,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if x, e := a.participation(conv, m.PID); e == nil && x.Role != protocol.RoleHuman && x.Invite != "" {
 			request := m.Target != nil && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask)
 			output := m.Target == nil && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult || m.Kind == envelope.KindMessage && m.status == envelope.StatusProgress)
+			if request && m.human != nil && m.human.AgentAuthor() {
+				request, output = false, false // an agent's ask (agenttags.go) carries its own captured audience
+			}
 			if request || output {
 				authorPID := ""
 				if request {
@@ -884,6 +887,10 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if info.External {
 			return a.sendExternalParticipation(ctx, root, raw, info, m)
 		}
+	}
+	var agentAsk *envelope.HumanTurn // an agent's ask in a DM names its exact author (agenttags.go)
+	if m.human != nil && m.human.AgentAuthor() && m.Target != nil {
+		agentAsk = m.human
 	}
 	receiverStored := false
 	defer func() {
@@ -949,6 +956,12 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		} else if m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult {
 			// Authorization above still checks the exact held physical request.
 			// Every recipient must then see the same logical reply reference.
+			m.ReplyTo, err = groupReplyLID(a.store.db, conv, m.ReplyTo)
+			if err != nil {
+				return ConvSent{}, err
+			}
+		} else if m.human != nil && m.human.AgentAuthor() && m.Target != nil {
+			// An agent's ask is a captured-audience turn: its cause by logical id.
 			m.ReplyTo, err = groupReplyLID(a.store.db, conv, m.ReplyTo)
 			if err != nil {
 				return ConvSent{}, err
@@ -1073,7 +1086,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
 			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Followup: m.Followup, SendGroup: m.SendGroup, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
-			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
+			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID, Human: agentAsk}
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
 		}
@@ -1131,7 +1144,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		jobKey = me.info.Fingerprint
 	}
 	local := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Followup: m.Followup, Topic: m.Topic, TopicEvent: m.TopicEvent, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
+		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Followup: m.Followup, Topic: m.Topic, TopicEvent: m.TopicEvent, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID, Human: agentAsk}
 	if binding != nil && m.Target == nil {
 		binding.person = peerID
 	}

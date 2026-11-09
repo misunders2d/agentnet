@@ -2867,3 +2867,77 @@ An earlier run under concurrent heavy race jobs failed at 1062 ms cold
 feedback. The passing tables qualify the stated local scenarios, not arbitrary
 CPU saturation; the broad race matrix remains failing/incomplete. No release
 qualification is claimed.
+
+### Agent labels name owner, agent and device — November 9
+
+Owner report, 2026-11-09: two agents of one person both showed as "Your Pi",
+so "@Your Pi, can't you see @Your Pi's messages?" was ambiguous. Every agent
+label in a conversation (mention chips, request "To …", headers, picker
+candidates) now reads whose agent, which agent and its device, "Your Pi ·
+Linux laptop" (`agentLabel`, `participants`); an unnamed agent keeps its
+existing "… agent history on Device". Older request texts typed as "@Your Pi"
+still become the agent's chip (`askChip` also matches the device-less name).
+Display only: routing still goes by the exact participation ID, and no
+control, action or state is added or removed, so local-feedback timing is
+unchanged.
+
+Counterpart reused: Slack's and Telegram's mention entity shows the display
+name the directory resolves for the exact ID, not the typed text; the existing
+Comic mention renderer already resolves by ID and only its label changes.
+
+Rendered evidence (Comic, 1280 and 390 px), multi-agent fixture with two
+agents of one host, chips must carry ` · Device`:
+
+```
+AGENTNET_PLAYWRIGHT=<playwright-core> AGENTNET_SCREENSHOTS=<dir> AGENTNET_TEST_SKINS=comic AGENTNET_MULTI_AGENT_REGRESSION=1 node internal/ui/testdata/group_guest_controls_rendered.cjs
+```
+
+Passes with the rebuilt skin; with the previous `entry.mjs` it fails as
+reported: `["@Brin’s Analyst","@Brin’s Analyst"]`. Other installed skins
+(agentnet-skins) are not run here; they rebuild from Comic source at the
+release skins gate.
+
+### An agent's tag of another agent is a request — November 9
+
+Owner, 2026-11-09: "make sure agents can tag each other and delegate tasks,
+cooperate and communicate without me passing over every message." When an
+agent's reply carries the exact mention of another agent present in its chat
+(`[@…](agentnet:agent/PID)`, from the run's "Who is here" list), that reply
+goes to the tagged agent as the tagging agent's own request, and the tagging
+run waits (the MEL-540 helper wait) and runs again with the answer before it
+answers its requester (`agenttags.go`). Everyone in the chat sees the
+handoff and the answer as ordinary agent turns. It is a task for the
+requester's own agents when the requester may task this agent (the room-ask
+chain rule); otherwise it is a question. Another person's agent runs only
+under its host's own question or task grant, or a one-time accept. An agent
+already in the request's tree of asks (upstream, or asked downstream by tag or
+`room ask`, whose relayed answers carry its mention) is never asked again from it, and a
+rerun's repeated tag is the same ask, so two agents tagging each other stop
+after one exchange. There are no count or nesting limits (ROOM_V1 §4.3). No
+control is added. The only new visible state is the existing "waiting for
+other agents" request state.
+
+Counterpart reused:
+- Telegram keeps bots from seeing other bots' messages unless a bot opts in
+  to Bot-to-Bot Communication Mode, to prevent loops
+  (core.telegram.org/bots/faq, core.telegram.org/api/bots/bot-to-bot,
+  checked 2026-11-09).
+- Slack delivers `app_mention` to the mentioned app in conversations it is
+  in. Integrations filter bot-authored events to avoid loops
+  (api.slack.com/events/app_mention). Whether bot-to-bot mentions are
+  delivered was not confirmed from Slack's own docs.
+
+AgentNet takes the explicit-mention trigger and puts the loop guard in the
+platform, not in each agent.
+
+Evidence (real binaries, stand-in agents, the owner's laptop and linked phone
+plus another person in a DM):
+
+```
+go test ./itest -run TestCLIAgentsTagEachOther
+go test ./internal/client -run 'TestOwnAgentTagHandsTaskToOwnAgent|TestAgentTagsNeverLoop|TestForeignAgentTagWaitsForItsHost|TestGroupAgentTagAsksTaggedAgent|^TestRoomBusyAncestorCallback$'
+```
+
+The itest fails ("timed out waiting for the lead's report") with the routing
+hook disabled. No browser check: the browser shows these as existing agent
+request and answer turns. Not run: rendered skins with such an exchange.

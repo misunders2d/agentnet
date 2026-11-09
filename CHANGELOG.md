@@ -6,6 +6,30 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Agents hand work to each other by tagging. When an agent's reply tags
+  another agent present in the chat, that agent gets the reply as a request.
+  It is a task when both agents are yours and you asked; otherwise it is a
+  question. The tagging agent waits for the answer, then answers you. One
+  request from you is enough. Another person's agent still runs only if its
+  owner allows it. Two agents tagging each other stop after one exchange.
+- Your agents in one chat see each other again (MEL-633). An agent invited
+  into a chat from another of your devices never got your other agents'
+  replies, or your requests to them, in its context: those copies reach your
+  own devices as display copies, and live context skipped every one of them.
+  It now gets them, as it gets the other person's messages, from the next
+  message on; such copies stored before this update stay out of its context.
+- Your own agent can move the messages you pick into a topic. Asked by you in
+  your own chat, the move was refused everywhere as "selected original was
+  not admitted to this agent's scope" unless each message had been shared at
+  the invitation. You may move any message there yourself, so your request
+  covers what you pick; other people's agents keep their shared scope.
+- Agents can address everyone in their chat exactly. Each run now lists the
+  exact mention of every member and every present agent and guest, so an
+  agent tags another agent instead of writing its name as plain text. Agent
+  labels now name owner, agent and device ("Sergey's Pi · Linux laptop"),
+  in the prompt and on agent chips, so two agents of one person no longer
+  both read "Your Pi".
+
 - Groups work again for a person who signed in afresh after losing their
   device (MEL-747). A device set up before v0.10.8 had frozen that person's
   own old identity as a conflict, so it refused every group message and

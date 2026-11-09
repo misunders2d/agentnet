@@ -5271,11 +5271,15 @@ export class Engine {
     const originalTarget=r.proof?.target||original?.target;
     if(!historical&&(members.group? !originalTarget?.group_admission||members.epochs.get(r.author)!==originalTarget.group_admission : !!originalTarget?.group_admission))throw new Hold("invalid","The original human group admission changed.");
     if(info.topic!=null&&topic!==info.topic)throw new Hold("invalid","Original request is outside admitted topic.");
+    // The host's own person asking their own agent may move any message of
+    // the chat themselves, so their request covers what they select (client
+    // topicOrganizationAdmission, owner rule 2026-11-09).
+    const owner=!!info.host&&members.has(info.host.person)&&!!members.get(info.host.person)?.devices?.some(d=>d.address===requester&&d.fingerprint===r.author);
     for(const move of n.topic_event.moves){
       const rows=await this.authorityRows({conv:c.id,lid:move.lid},checks),target=rows.find(row=>!row.sub&&!row.control&&!row.aside&&!row.topic_event&&(row.to?this.fp:row.fp||row.claimed_key)===move.author);
       if(!target)throw new Hold("proof_pending","Organization waits for exact selected original.");
       if(info.topic!=null&&(target.topic||"")!==info.topic)throw new Hold("invalid","Selected original is outside admitted topic.");
-      const visible=move.lid===r.lid&&move.author===r.author||(info.grant||[]).some(g=>g.lid===move.lid&&g.fingerprint===move.author)||info.member&&target.human?.audience.some(s=>s.pid===info.pid&&s.invite===info.invite&&s.decision===info.decision);
+      const visible=owner||move.lid===r.lid&&move.author===r.author||(info.grant||[]).some(g=>g.lid===move.lid&&g.fingerprint===move.author)||info.member&&target.human?.audience.some(s=>s.pid===info.pid&&s.invite===info.invite&&s.decision===info.decision);
       if(!visible)throw new Hold("invalid","Selected original was not admitted to this agent's scope.");
     }
     return info;

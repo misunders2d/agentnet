@@ -153,6 +153,9 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 		if output || r.State == stateAccepted {
 			return verdictRun, "", nil
 		}
+		if runs, err := dmAgentAskRuns(q, r, v.m, info); err != nil || runs { // a tag in a DM (agenttags.go)
+			return verdictRun, "", err
+		}
 		return verdictAsk, "an agent in the room asks your agent: accept it to run it once (agentnet accept ID)", nil
 	}
 	if !r.Local && !v.m.device(r.Sender, r.Key) {
@@ -664,6 +667,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		b.WriteString(proposePrompt(asker))
 	}
 	b.WriteString(clarificationPrompt(host, mention))
+	b.WriteString(a.mentionRoster(contexts, j, info, m))
 	if h, err := storedHuman(a.store.db, "in", j.ID); err != nil {
 		return "", err
 	} else if h != nil && h.AgentAuthor() && info.Member {
@@ -764,17 +768,10 @@ func (a *Agent) requestAsker(j job, info ParticipationInfo, m dmMembers, author 
 				return "", "", err
 			}
 			asker = roomPromptName("verified asking group agent", source.Host) + " (participation " + source.PID + ")"
-			mention = mentionAnchor("agent", source.PID, agentMentionLabel(source.Host.Label))
+			mention = mentionAnchor("agent", source.PID, agentMentionLabel(source.Host, ""))
 		}
 	}
 	return asker, mention, nil
-}
-
-func agentMentionLabel(owner string) string {
-	if owner = strings.TrimSpace(owner); owner == "" {
-		return "agent"
-	}
-	return owner + "'s agent"
 }
 
 // answerMention is the exact mention an answer in a group, or in a chat with
@@ -1462,7 +1459,7 @@ func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit 
 			} else {
 				c.Unrelated++
 			}
-		case (roomRefs[ref] || msg.liveContext) && msg.Sub == "" && (!msg.Replica || info.Member) && !msg.History && msg.ExcerptPID == "":
+		case (roomRefs[ref] || msg.liveContext) && msg.Sub == "" && !msg.History && msg.ExcerptPID == "": // a live own-device replica too (room.go)
 			c.Addressed++
 			authorPID := msg.PID
 			if msg.Human != nil && msg.Human.AgentAuthor() {

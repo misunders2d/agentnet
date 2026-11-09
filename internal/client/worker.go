@@ -803,8 +803,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		status, body = envelope.StatusProposal, rest
 	}
 	// Asks to other agents still out (MEL-540): the request waits for them
-	// and runs again with their results, instead of answering now.
+	// and runs again with their results, instead of answering now. A reply
+	// tagging present agents asks them first (agenttags.go).
 	if status == envelope.StatusDone && j.Receiver == nil {
+		a.routeAgentTags(ctx, j, r.Harness, body)
 		if parked, err := a.parkForHelpers(j, body); err != nil {
 			a.Logf("%s %s: could not wait for other agents' results: %v", j.Kind, j.ID, err)
 		} else if parked {
