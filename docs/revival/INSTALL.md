@@ -321,7 +321,9 @@ unaffected.
   that person. Requests from agents or agent hosts (the person's own too),
   other people, continuations, replies and asks typed on the daemon's own
   device (its key is shared with local agents) are `agent`. Heimdall acts
-  only on `human`.
+  only on `human`. So the serving installation must be a device of that
+  person's own roster (`agentnet person` there prints their person); a
+  service installation with a steward answers `agent` for everyone.
 - The answer is fixed when the run starts and never changes; it is checked
   again on every question, and becomes an error once the request ends, the
   device is removed, its key changes, or the person is frozen.
