@@ -61,7 +61,8 @@ export function Toolbar({ m, ctx, can, acts, mine, menuOpen, onMenuOpen }: { m: 
       )}
       {can.reply && <button type="button" aria-label="Reply" title="Reply" onClick={acts.reply} className={btn}><IconArrowBackUp size={20} /></button>}
       <Menu.Root modal={false} open={menuOpen} onOpenChange={(open, details) => {
-        if (!open && details.reason === "focus-out" && performance.now() - personInput > 1000) return;
+        // Cancelled, not only ignored: an ignored close still runs the menu's own close.
+        if (!open && details.reason === "focus-out" && performance.now() - personInput > 1000) { details.cancel(); return; }
         onMenuOpen(open);
       }}>
         <Menu.Trigger aria-label="More actions" title="More actions" className={btn + " data-[popup-open]:bg-sunken"}><IconDots size={20} /></Menu.Trigger>
