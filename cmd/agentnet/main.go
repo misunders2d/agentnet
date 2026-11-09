@@ -249,11 +249,12 @@ func run(args []string) error {
 		fs.StringVar(&opts.Listen, "listen", "", "accept direct deliveries on this address (e.g. :7443); off by default")
 		fs.StringVar(&opts.Advertise, "advertise", "", "https://host:port peers can reach (default https://LISTEN)")
 		uiAddr := fs.String("ui", "", "serve the messenger page on this loopback address (e.g. 127.0.0.1:0); off by default")
+		fs.BoolVar(&opts.RunOrigin, "run-origin", false, "serve HOME/run-origin.sock (Linux): vouch to local root/same-user programs which runs this daemon started, for whom; off by default")
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: daemon [start] [--listen ADDR] [--advertise URL] [--ui ADDR] | daemon status [--agent ID] [--json]")
+			return errors.New("usage: daemon [start] [--listen ADDR] [--advertise URL] [--ui ADDR] [--run-origin] | daemon status [--agent ID] [--json]")
 		}
 		a.Logf = log.Printf
 		// The program file as started: an update replaces it, and only an

@@ -45,6 +45,7 @@ type Agent struct {
 	Logf    func(format string, args ...any)
 
 	readerAwayCtx atomic.Pointer[context.Context] // this run's, for work leaving the stream's reader
+	runOrigin     atomic.Pointer[runOrigins]      // this run's vouched runs, with --run-origin (runorigin.go)
 	readerAway    sync.WaitGroup                  // that work, waited for when the run ends
 
 	deliveryLocks    keyedLocks // envelope ID, shared by immediate sends and retry passes
