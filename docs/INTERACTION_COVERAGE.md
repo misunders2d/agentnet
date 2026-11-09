@@ -2866,7 +2866,8 @@ handoff and the answer as ordinary agent turns. It is a task for the
 requester's own agents when the requester may task this agent (the room-ask
 chain rule); otherwise it is a question. Another person's agent runs only
 under its host's own question or task grant, or a one-time accept. An agent
-already in the request's chain of asks is never asked again from it, and a
+already in the request's tree of asks (upstream, or asked downstream by tag or
+`room ask`, whose relayed answers carry its mention) is never asked again from it, and a
 rerun's repeated tag is the same ask, so two agents tagging each other stop
 after one exchange. There are no count or nesting limits (ROOM_V1 §4.3). No
 control is added. The only new visible state is the existing "waiting for
@@ -2890,7 +2891,7 @@ plus another person in a DM):
 
 ```
 go test ./itest -run TestCLIAgentsTagEachOther
-go test ./internal/client -run 'TestOwnAgentTagHandsTaskToOwnAgent|TestAgentTagsNeverLoop|TestForeignAgentTagWaitsForItsHost'
+go test ./internal/client -run 'TestOwnAgentTagHandsTaskToOwnAgent|TestAgentTagsNeverLoop|TestForeignAgentTagWaitsForItsHost|TestGroupAgentTagAsksTaggedAgent|^TestRoomBusyAncestorCallback$'
 ```
 
 The itest fails ("timed out waiting for the lead's report") with the routing

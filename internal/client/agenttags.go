@@ -26,10 +26,13 @@ import (
 // normal question or task grant, or a one-time accept (agentVerdict).
 //
 // Loop safety, as for room asks (ROOM_V1 §4.3: no count or nesting
-// limits; actual cycles stop): an agent already in this request's chain of
+// limits; actual cycles stop): an agent already in this request's tree of
 // agent asks, as asker or asked, this run's own agent included, is never
 // asked again from it, and a rerun's repeated tag is the same ask (one per
-// target per request). The chain is what this host holds; another
+// target per request). The tree is the chain upstream and the asks this
+// request started downstream, by tag or `room ask`: a reply relaying their
+// answers carries those agents' mentions (a group answer opens with its
+// asker's), which are not a new request (TestRoomBusyAncestorCallback). The chain is what this host holds; another
 // person's host checks its own grants for every ask regardless.
 
 const agentTagPromptText = "Writing an agent's exact mention from this list in your reply hands your reply to that agent as a request: a task for your owner's own agents when your requester may give you tasks, otherwise a question. Your reply is then held, and you run again with its answer before you answer here. Tag an agent only when you want it to act or answer; a plain name is not a tag.\n"
@@ -73,6 +76,10 @@ func (a *Agent) routeAgentTags(ctx context.Context, j job, harness, body string)
 	}
 	chain, err := a.agentAskChain(j.Conv, j.ID)
 	if err != nil {
+		a.Logf("%s %s: tagged agents not asked: %v", j.Kind, j.ID, err)
+		return
+	}
+	if err := a.agentAskDescendants(j.Conv, j.ID, chain); err != nil {
 		a.Logf("%s %s: tagged agents not asked: %v", j.Kind, j.ID, err)
 		return
 	}
@@ -141,6 +148,48 @@ func (a *Agent) agentAskChain(conv, id string) (map[string]bool, error) {
 		id = reply
 	}
 	return chain, nil
+}
+
+// agentAskDescendants adds to tree the agents in the asks request id
+// started in conv, and in theirs, as held here: each ask replying to one
+// of them (by physical or logical ID) whose captured audience names an
+// agent author adds its author and the agent it asks.
+func (a *Agent) agentAskDescendants(conv, id string, tree map[string]bool) error {
+	frontier := []string{id}
+	if lid := a.jobContextRef(job{ID: id}).LID; lid != id {
+		frontier = append(frontier, lid)
+	}
+	seen := map[string]bool{}
+	for len(frontier) > 0 {
+		ref := frontier[0]
+		frontier = frontier[1:]
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		rows, err := a.store.db.Query(`SELECT id,coalesce(lid,''),coalesce(pid,''),coalesce(human,'') FROM inbox WHERE conv=? AND reply_to=? AND coalesce(sub,'')='' AND kind IN ('question','task')
+			UNION ALL SELECT id,coalesce(lid,''),coalesce(pid,''),coalesce(human,'') FROM outbox WHERE conv=? AND reply_to=? AND coalesce(sub,'')='' AND kind IN ('question','task')`, conv, ref, conv, ref)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var cid, clid, pid, raw string
+			if err := rows.Scan(&cid, &clid, &pid, &raw); err != nil {
+				rows.Close()
+				return err
+			}
+			var h envelope.HumanTurn
+			if raw == "" || json.Unmarshal([]byte(raw), &h) != nil || !h.AgentAuthor() {
+				continue
+			}
+			tree[h.AuthorPID], tree[pid] = true, true
+			frontier = append(frontier, cid, clid)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dmAgentAskRuns: may an agent's ask r in a DM run without a one-time accept?

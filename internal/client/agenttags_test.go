@@ -49,6 +49,24 @@ func installTagScript(t *testing.T, self, peer, lead string, loop bool) string {
 	return os.Getenv("AGENT_LOG")
 }
 
+// tagReport is replyAt with room for three agent runs in sequence, which
+// can pass 15 seconds under the race detector on a loaded runner.
+func tagReport(t *testing.T, a *Agent, conv, id string) ConvMessage {
+	t.Helper()
+	for deadline := time.Now().Add(90 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		lid, _ := groupReplyLID(a.store.db, conv, id)
+		r, n := convMsg(t, a, conv, func(m ConvMessage) bool {
+			return (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && (m.ReplyTo == id || lid != "" && m.ReplyTo == lid)
+		})
+		if n == 1 {
+			return r
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the reply to %s at %s", id, a.Address)
+		}
+	}
+}
+
 func tagRuns(t *testing.T, log, mode string) int {
 	t.Helper()
 	data, _ := os.ReadFile(log)
@@ -67,7 +85,7 @@ func TestOwnAgentTagHandsTaskToOwnAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := replyAt(t, w.alice, conv, ask.ID)
+	report := tagReport(t, w.alice, conv, ask.ID)
 	if !strings.Contains(report.Body, "LEAD_REPORT") {
 		t.Fatalf("the laptop agent answered the owner without the other agent's result: %q", report.Body)
 	}
@@ -100,7 +118,7 @@ func TestAgentTagsNeverLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := replyAt(t, w.alice, conv, ask.ID)
+	report := tagReport(t, w.alice, conv, ask.ID)
 	if !strings.Contains(report.Body, "LEAD_REPORT") {
 		t.Fatalf("report %q", report.Body)
 	}
@@ -136,5 +154,47 @@ func TestForeignAgentTagWaitsForItsHost(t *testing.T) {
 	time.Sleep(time.Second)
 	if got := tagRuns(t, log, ""); got != 1 {
 		t.Errorf("runs = %d, want 1 (only the lead; bob's agent waits for bob)", got)
+	}
+}
+
+// Owner, 2026-11-09: agents tag and delegate to each other in groups too.
+// In a group, alice's agent tags bob's agent; the tag reaches it as alice's
+// agent's question through the room path (roomChain at bob's host, under
+// bob's approval of alice), and alice's agent reports its answer.
+func TestGroupAgentTagAsksTaggedAgent(t *testing.T) {
+	installAgentStub(t)
+	w, _, packet, _ := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	lead := p6Member(t, w.alice, w.alice, conv)
+	peer := p6Member(t, w.alice, w.bob, conv)
+	eventually(t, "lead agent known at the peer's host", func() bool { return stateAt(t, w.bob, lead.PID).Claimable() })
+	for _, pair := range []struct{ host, peer *Agent }{{w.alice, w.bob}, {w.bob, w.alice}} {
+		if err := pair.host.Approve(pair.peer.Address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := installTagScript(t, peer.PID, peer.PID, lead.PID, false)
+	for _, host := range []*Agent{w.alice, w.bob} {
+		if err := host.SetResponder(&Responder{Harness: "agentstub", Dir: t.TempDir(), Timeout: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask, err := w.alice.AskAgent(tctx(t), lead.PID, envelope.KindQuestion, "OWNER_ASKS: get the disk checked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := tagReport(t, w.alice, conv, ask.ID)
+	if !strings.Contains(report.Body, "LEAD_REPORT") {
+		t.Fatalf("the lead answered without the tagged agent's answer: %q", report.Body)
+	}
+	handed, n := convMsg(t, w.bob, conv, func(m ConvMessage) bool { return strings.Contains(m.Body, "TAGGED_WORK") })
+	if n != 1 || handed.Kind != envelope.KindQuestion || handed.PID != peer.PID {
+		t.Fatalf("tag became %d message(s), last kind %q for %q; want one question to bob's agent", n, handed.Kind, handed.PID)
+	}
+	if _, n := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return strings.Contains(m.Body, "TAGGED_DONE") && m.PID == peer.PID }); n != 1 {
+		t.Fatalf("answers from bob's agent at alice: %d", n)
+	}
+	if got := tagRuns(t, log, ""); got != 3 {
+		t.Errorf("runs = %d, want 3 (lead, tagged, lead again)", got)
 	}
 }
