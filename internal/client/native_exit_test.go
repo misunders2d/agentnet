@@ -76,6 +76,9 @@ func testNativeProcessExitClassification(t *testing.T) {
 						t.Fatal(err)
 					}
 					runAgent(t, w.alice)
+					// Each process's own exit is classified here: no warm
+					// worker (warm_unix_test.go covers a warm one lost mid-turn).
+					w.bob.warmLimits.off = true
 					runAgent(t, w.bob)
 					sent, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "synthetic native exit classification", Kind: envelope.KindQuestion})
 					if err != nil {
