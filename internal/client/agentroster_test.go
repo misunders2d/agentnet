@@ -51,6 +51,18 @@ func TestAgentPromptListsExactMentionsOfEveryoneHere(t *testing.T) {
 			t.Errorf("prompt lacks %q:\n%s", want, prompt[strings.Index(prompt, "## Who is here"):])
 		}
 	}
+	// Owner, 2026-11-10: an agent posted "[@Sergey\x27s agent](…)". Every
+	// label this prompt gives is "owner's agent · device" with a literal
+	// apostrophe, never a shell or JS escape of it.
+	roster := prompt[strings.Index(prompt, "## Who is here"):]
+	if want := "[@" + alice.Label + "'s "; !strings.Contains(roster, want) {
+		t.Errorf("roster lacks the literal apostrophe label %q:\n%s", want, roster)
+	}
+	for _, escaped := range []string{`\x27`, `\'`, `\u0027`, `&#39;`} {
+		if strings.Contains(roster, escaped) {
+			t.Errorf("roster escapes an apostrophe as %s:\n%s", escaped, roster)
+		}
+	}
 }
 
 func TestAgentMentionLabelNamesOwnerAgentAndDevice(t *testing.T) {
