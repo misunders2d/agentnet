@@ -192,6 +192,9 @@ func TestWarmWorkerIdleTimeoutAndLRU(t *testing.T) {
 	if runs := st.runs(); len(runs) != 2 || !strings.Contains(runs[1], "--resume "+ref.ID) {
 		t.Fatalf("after idle expiry the session was not resumed cold: %v", runs)
 	}
+	// That worker was kept with the same short idle limit: let it expire too,
+	// so the next ask starts the worker the eviction below is about.
+	eventually(t, "the second idle worker to expire", func() bool { pool.mu.Lock(); defer pool.mu.Unlock(); return len(pool.live) == 0 })
 
 	pool.setLimits(warmLimits{max: 1})
 	convAsk(t, w.alice, conv, pid, "alice again")
