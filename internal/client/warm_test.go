@@ -18,6 +18,17 @@ import (
 // with a cold-start delay, and a conversation with bob's agent in it.
 func warmFixture(t *testing.T, name string, startMS string) (st *stub, w *world, conv, pid string) {
 	t.Helper()
+	st = installWarmHarness(t, name, startMS)
+	var lids []string
+	w, conv, lids, _ = agentWorld(t)
+	setResponder(t, w.bob, name, st.dir, time.Minute)
+	pid = participate(t, w, conv, lids[:1], nil)
+	return st, w, conv, pid
+}
+
+// installWarmHarness installs harness name as the existing native fixture.
+func installWarmHarness(t *testing.T, name string, startMS string) (st *stub) {
+	t.Helper()
 	const help = "--print -p --no-session --extension --session-dir --continue --output-format --no-session-persistence --permission-mode --add-dir --input-format --verbose --replay-user-messages --include-partial-messages --session-id --resume --auto-approve --mode"
 	st = installStub(t, "answer")
 	old := Harnesses[name]
@@ -43,11 +54,7 @@ func warmFixture(t *testing.T, name string, startMS string) (st *stub, w *world,
 	}
 	Harnesses[name] = h
 	t.Cleanup(func() { Harnesses[name] = old })
-	var lids []string
-	w, conv, lids, _ = agentWorld(t)
-	setResponder(t, w.bob, name, st.dir, time.Minute)
-	pid = participate(t, w, conv, lids[:1], nil)
-	return st, w, conv, pid
+	return st
 }
 
 func mustAtoi(t *testing.T, s string) int {
@@ -115,6 +122,40 @@ func TestWarmWorkerContinuesSameSession(t *testing.T) {
 			}
 			t.Logf("%s: cold %v, warm %v", name, cold, warm)
 		})
+	}
+}
+
+// The owner's direct chat with their own agent (a device conversation: the
+// session is the verified sender's reply chain) keeps its process warm too.
+func TestWarmWorkerDeviceConversation(t *testing.T) {
+	st := installWarmHarness(t, "claude", "0")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "claude", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	pool := warmPoolOf(t, w.bob)
+	q1, a1 := ask(t, w, "")
+	ref := sessionOf(t, w.bob, q1)
+	if ref == nil || ref.ID == "" || ref.Person != "" {
+		t.Fatalf("not a device-conversation session: %+v", ref)
+	}
+	eventually(t, "the worker kept warm", func() bool { return pool.idleCount() == 1 })
+	q2, _ := ask(t, w, a1)
+	if runs := st.runs(); len(runs) != 1 || pool.spawns.Load() != 1 {
+		t.Fatalf("the device conversation's next ask started another process: %v (spawns %d)", runs, pool.spawns.Load())
+	}
+	if r2 := sessionOf(t, w.bob, q2); r2 == nil || r2.ID != ref.ID {
+		t.Fatalf("second ask's session %+v, want %s", r2, ref.ID)
+	}
+	pool.mu.Lock()
+	var key warmKey
+	for k := range pool.idle {
+		key = k
+	}
+	pool.mu.Unlock()
+	if key.person != w.alice.Address || key.session != ref.ID {
+		t.Fatalf("warm key %+v", key)
 	}
 }
 

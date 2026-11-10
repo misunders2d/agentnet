@@ -440,7 +440,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	// A conversation agent's turn of a saved native session may run in a
 	// warm worker (warm.go): its process is not bound to this run's context.
 	pool := a.warm.Load()
-	warmOK := pool != nil && launchErr == nil && warmHarness(r.Harness) && plan.ref != nil && j.Receiver == nil && j.PID != "" && len(j.run.args(h)) == 0 && outPath == ""
+	warmOK := pool != nil && launchErr == nil && warmHarness(r.Harness) && plan.ref != nil && j.Receiver == nil && len(j.run.args(h)) == 0 && outPath == ""
 	var cmd *exec.Cmd
 	if warmOK {
 		cmd = exec.Command(launch.Path, args...)
@@ -495,13 +495,21 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var key warmKey
 	if plan.ref != nil {
 		key = warmKey{session: plan.ref.ID, person: plan.ref.Person, harness: r.Harness}
+		if key.person == "" {
+			// A device conversation's session is its verified sender's
+			// reply chain (sessionAncestor): that sender is the asker.
+			key.person = j.From
+		}
 	}
 	handle := ""
 	if warmOK {
 		var names []string
 		for _, kv := range perJob {
-			if kv[0] != ProgressPeerEnv {
+			switch {
+			case kv[0] != ProgressPeerEnv:
 				names = append(names, kv[0])
+			case j.PID == "":
+				names = append(names, kv[0]+"="+kv[1]) // the key's own asker: one value
 			}
 		}
 		fp := warmFingerprint(r.Harness, plan.ref.Mode, plan.ref.Preset, r.Dir, launch.Path, append(slices.Clone(lookup.args), j.run.args(h)...), cmd.Env, names)
@@ -523,7 +531,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		for _, kv := range perJob {
 			switch kv[0] {
-			case ProgressPeerEnv: // no reader; a warm process serves several requesters' devices
+			case ProgressPeerEnv:
+				// A device conversation's requester is its key's asker, the
+				// same for every turn (the prompt names it for progress). A
+				// conversation agent's warm process may serve several
+				// devices of one person; no program reads it there.
+				if j.PID == "" {
+					cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])
+				}
 			case AgentAttemptEnv:
 				cmd.Env = append(cmd.Env, kv[0]+"=0")
 			default:

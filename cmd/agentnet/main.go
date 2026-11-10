@@ -422,6 +422,14 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	if !reply && *progress && *replyTo == "" {
 		return errors.New("--progress requires --reply-to ID")
 	}
+	if !reply && inRun() && *replyTo != "" {
+		if id, _, warm := a.RunCause(*replyTo); warm { // a warm session's current turn
+			if id == "" {
+				return client.ErrNoWarmTurn
+			}
+			*replyTo = id
+		}
+	}
 	if !reply && !*progress && !receiverRun() && (*replyTo == "" || !a.InDeviceThread(*replyTo)) { // MEL-713: no new version 1 thread
 		if *fallback {
 			return errors.New("--fallback belonged to the old device messages")
