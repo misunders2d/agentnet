@@ -34,9 +34,13 @@ skin-contract change):
 - At the asker's device it is a normal arrival: unread, counted in the badge
   and chat-row numbers, and a chat alert where alerts allow it (another
   person's agent). An own agent's reply from another of the owner's devices
-  is listed as sent, so a reply of their own agent that tags the owner
-  (`ownAgentTagsOwner`) counts as an arrival; their own messages and untagged
-  agent replies stay read. Own devices get no chat alert (an own device is
+  is listed as sent, so the needs_human reply (status `needs_human`) of their
+  own agent that tags the owner (`ownAgentTagsOwner`) counts as an arrival;
+  their own messages, untagged replies and every other own-agent answer stay
+  read. Those were always listed as sent, so no device read them or holds a
+  read mark for them: counting them brought weeks of seen answers back unread
+  on every device at once in v0.11.1
+  (`TestOwnAgentPastAnswerStaysReadAfterUpgrade`). Own devices get no chat alert (an own device is
   not an alert sender); the review notice still covers them.
 - Without a conversation (device thread), or for a cut-off proposal or a
   harness's own attention, the result stays on the host and is unread like

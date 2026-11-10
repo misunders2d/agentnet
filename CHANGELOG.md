@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Answers you had already seen no longer come back unread. v0.11.1 counted
+  every past answer of your own agent on another of your devices that tagged
+  you as a new arrival, so after the update old answers, some weeks old,
+  showed unread again on all your devices. Only an agent's question back to
+  you (its needs_human reply) counts now, and reading it anywhere clears it
+  everywhere.
 - Agents hand work to each other by tagging. When an agent's reply tags
   another agent present in the chat, that agent gets the reply as a request.
   It is a task when both agents are yours and you asked; otherwise it is a

@@ -161,23 +161,74 @@ func headless(t *testing.T, a *Agent, human string) {
 }
 
 // The owner asks their own agent on another of their devices: that device's
-// rows are listed as sent (own device), yet the agent's reply tagging the
-// owner is an arrival for them. Their own untagged messages stay read.
+// rows are listed as sent (own device), yet the agent's needs_human reply
+// tagging the owner is an arrival for them. Their own messages, untagged
+// replies and ordinary (final) answers stay read.
 func TestOwnAgentReplyTaggingOwnerIsUnread(t *testing.T) {
 	const owner = "0123456789abcdef0123456789abcdef"
 	tagged := mentionAnchor("person", owner, "Alice") + "\n\nWhich carrier should I book?"
-	m := ConvMessage{Via: "admin/bezos", PID: "p", Origin: envelope.OriginAgentPrefix + "pi", Kind: envelope.KindAnswer, Body: tagged, Unread: true}
+	m := ConvMessage{Via: "admin/bezos", PID: "p", Origin: envelope.OriginAgentPrefix + "pi", Kind: envelope.KindAnswer, Body: tagged, Unread: true, status: envelope.StatusNeedsHuman}
 	if !ownAgentTagsOwner(m, owner) {
-		t.Fatal("own agent's reply tagging the owner is not an arrival")
+		t.Fatal("own agent's needs_human reply tagging the owner is not an arrival")
 	}
 	for name, other := range map[string]ConvMessage{
-		"untagged":    {Via: m.Via, PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: "Done."},
-		"own message": {Via: m.Via, Origin: envelope.OriginUI, Kind: envelope.KindMessage, Body: tagged},
-		"other tag":   {Via: m.Via, PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: mentionAnchor("person", "someone-else", "Bob")},
-		"not own":     {PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: tagged},
+		"untagged":     {Via: m.Via, PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: "Done.", status: m.status},
+		"own message":  {Via: m.Via, Origin: envelope.OriginUI, Kind: envelope.KindMessage, Body: tagged, status: m.status},
+		"other tag":    {Via: m.Via, PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: mentionAnchor("person", "someone-else", "Bob"), status: m.status},
+		"not own":      {PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: tagged, status: m.status},
+		"final answer": {Via: m.Via, PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: tagged, status: envelope.StatusDone},
+		"no status":    {Via: m.Via, PID: m.PID, Origin: m.Origin, Kind: m.Kind, Body: tagged},
 	} {
 		if ownAgentTagsOwner(other, owner) {
 			t.Errorf("%s became an arrival", name)
 		}
+	}
+}
+
+// v0.11.2 regression (owner report 2026-11-10): v0.11.1 began counting every
+// past answer of the person's own agent on another of their devices that
+// tagged them as unread. Those rows had always been listed as sent, so no
+// device had ever read them or held a read mark for them: on upgrade, weeks
+// of already-seen answers came back unread on every device at once. Only the
+// posted needs_human result is an arrival; it clears by reading and the read
+// becomes a mark the person's other devices apply.
+func TestOwnAgentPastAnswerStaysReadAfterUpgrade(t *testing.T) {
+	w, phone, conv, _ := historyCatchupFixture(t, 0)
+	a := w.alice
+	me, _, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged := mentionAnchor("person", me.info.Person, "Alice") + "\n\nDone: the shipment is booked."
+	own := func(status string) string {
+		id, lid := protocol.NewID(), protocol.NewID()
+		now := time.Now()
+		if _, err := a.store.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,received_ms,conv,lid,verified_by,origin,pid,status)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, phone.Address, now.Unix(), envelope.KindAnswer, tagged, now.Unix(), now.UnixMilli(), conv, lid,
+			phone.Self().Fingerprint(), envelope.OriginAgentPrefix+"pi", protocol.NewID(), status); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	past := own(envelope.StatusDone)
+	if m := attentionMessage(t, a, conv, past); m.Dir != "out" || m.Via != phone.Address {
+		t.Fatalf("fixture: own device's answer is not listed as sent from it: dir=%s via=%s", m.Dir, m.Via)
+	} else if m.Unread {
+		t.Fatal("an own agent's past answer tagging the owner came back unread")
+	}
+	asked := own(envelope.StatusNeedsHuman)
+	m := attentionMessage(t, a, conv, asked)
+	if !m.Unread {
+		t.Fatal("an own agent's needs_human reply tagging the owner is not unread")
+	}
+	if err := a.MarkRead([]string{asked}); err != nil {
+		t.Fatal(err)
+	}
+	if attentionMessage(t, a, conv, asked).Unread {
+		t.Fatal("reading the needs_human reply did not clear it")
+	}
+	var marks int
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM read_marks WHERE conv=? AND fingerprint=? AND lid=?`, conv, phone.Self().Fingerprint(), m.LID).Scan(&marks); err != nil || marks != 1 {
+		t.Fatalf("the read is not a mark the person's other devices apply: %d %v", marks, err)
 	}
 }

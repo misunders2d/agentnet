@@ -496,14 +496,16 @@ func (a *Agent) projectConvAttention(conv string, msgs []ConvMessage) error {
 	return nil
 }
 
-// ownAgentTagsOwner: a reply of this person's own agent, from another of
-// their devices, that tags this person (an agent's needs_human result is
-// posted that way, finishAgentNeedsHuman) is an arrival for them like any
-// agent reply tagging them, though convMessages lists own devices' rows as
-// sent. Their own messages from another device, and untagged agent replies,
-// stay read.
+// ownAgentTagsOwner: an agent's needs_human result posted as its reply
+// (finishAgentNeedsHuman, status needs_human) by this person's own agent on
+// another of their devices, tagging this person, is an arrival for them like
+// any agent reply tagging them, though convMessages lists own devices' rows
+// as sent. Every other own-device row stays read: such rows were always
+// listed as sent, so no device ever read them and no read mark exists for
+// them. Counting an ordinary own-agent answer would resurrect all of that
+// already-seen history as unread on every device at once (v0.11.1).
 func ownAgentTagsOwner(m ConvMessage, owner string) bool {
-	return owner != "" && m.Via != "" && m.PID != "" && envelope.AgentOrigin(m.Origin) &&
+	return owner != "" && m.Via != "" && m.PID != "" && envelope.AgentOrigin(m.Origin) && m.status == envelope.StatusNeedsHuman &&
 		(m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && strings.Contains(m.Body, "](agentnet:person/"+owner+")")
 }
 func (a *Agent) projectDirectAttention(msgs []ConversationMessage) error {
