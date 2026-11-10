@@ -50,6 +50,10 @@ func runDaemonStatus(ctx context.Context, home string, args []string, out io.Wri
 			}
 		}
 	}
+	if *agentID != "" && result.Daemon == nil {
+		// Without the daemon's readiness no exact agent can be confirmed.
+		return fmt.Errorf("agent %s cannot be checked: daemon %s: %s", *agentID, result.State, result.Problem)
+	}
 	if *asJSON {
 		return json.NewEncoder(out).Encode(result)
 	}
