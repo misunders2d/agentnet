@@ -528,6 +528,10 @@ func (a *Agent) MessagingConversationMessages(conv string) ([]ConvMessage, error
 	if len(rows) == 0 {
 		rows = []ConversationInfo{{ID: conv}}
 	}
+	target, terr := a.queuedConversation(conv)
+	if terr != nil {
+		target = "" // no current DM here yet: no shown message is in its scope
+	}
 	var out []ConvMessage
 	seen := map[string]bool{}
 	for _, row := range rows {
@@ -541,6 +545,7 @@ func (a *Agent) MessagingConversationMessages(conv string) ([]ConvMessage, error
 		for _, m := range msgs {
 			if !envelope.TopicMetadata(m.TopicEvent) && !seen[m.ID] {
 				seen[m.ID] = true
+				m.OtherDM = row.ID != target
 				out = append(out, m)
 			}
 		}

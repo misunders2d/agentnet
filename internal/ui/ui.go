@@ -490,7 +490,8 @@ type DMMessage struct {
 	Unread            bool                          `json:"unread,omitempty"`
 	Attention         *protocol.AttentionGeneration `json:"attention,omitempty"`
 	Replica           bool                          `json:"replica,omitempty"`
-	PID               string                        `json:"pid,omitempty"` // the agent participation it is for, from or about
+	OtherDM           bool                          `json:"other_dm,omitempty"` // from another DM with the same person (continuity): outside this DM's scope, never shared by an invitation
+	PID               string                        `json:"pid,omitempty"`      // the agent participation it is for, from or about
 	Attachments       []FileView                    `json:"attachments,omitempty"`
 	// QueuedSend: accepted here and not yet stored for sending. Not a delivery state.
 	QueuedSend *QueuedSendView `json:"queued_send,omitempty"`

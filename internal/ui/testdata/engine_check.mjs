@@ -150,6 +150,7 @@ async function handle(req) {
     let strict=false;try{await e.logicalReply(roots[1].id,lid,true,"Conversation");}catch(_){strict=true;}assert(strict,"native context crossed roots");
     const read=await e.readView(roots[0].id),rows=await e.messagingMessages(roots[0].id,read.inbox,read.outbox,read);
     assert(rows.some(r=>r.id===original&&r.read)&&rows.some(r=>r.id===other&&!r.read),"read state lost");
+    assert(await e.localCurrentDM(roots[0].id)===roots[1].id,"chat actions act on the current DM");assert(rows.some(r=>r.other_dm)&&rows.some(r=>!r.other_dm&&r.sub!=="continuity"),"only the current DM's messages are shareable");
     const family=await e.continuityDMs(roots[0].id);await e.continuityNotices(family[0].id,family);assert((await mem.all("inbox")).filter(r=>r.sub==="continuity").length===1,"notice duplicated");
     const reopened=new Engine({store:mem,base:e.base});reopened.me=e.me;assert((await reopened.logicalPersons()).get(old.person)===next.person,"restart split");
     await mem.write([{s:"persons",k:next.person,v:{...next,state:"conflict",email_claim:true}}]);

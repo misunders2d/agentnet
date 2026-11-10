@@ -277,6 +277,7 @@ export interface DMMessage {
   unread?: boolean;
   attention?: AttentionGeneration;
   replica?: boolean;
+  other_dm?: boolean;
   pid?: string;
   attachments?: FileView[];
   queued_send?: QueuedSendView;

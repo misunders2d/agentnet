@@ -68,6 +68,8 @@ assert.equal(inviteRights.canBringIn(topicGuest,''),false,'guest cannot broaden 
 assert.equal(inviteRights.canBringIn({...topicGuest,frozen:'conflict'},'warehouse'),false,'frozen guest has no invite action');
 assert.equal(inviteRights.canBringIn({...topicGuest,guests:[{...topicGuest.guests[0],state:'dismissed',can_send:false}]},'warehouse'),false,'ended guest has no invite action');
 assert.deepEqual(Array.from(inviteRights.shareable(topicGuest).map(m=>m.id)),['selected'],'guest may choose its admitted selected excerpt only within its accepted topic');
+const continued={...roomThread,role:'',messages:[{id:'old',lid:'old',kind:'message',body:'Before recovery',other_dm:true},{id:'new',lid:'new',kind:'message',body:'After recovery'}]};
+assert.deepEqual(Array.from(inviteRights.shareable(continued).map(m=>m.id)),['new'],'a message shown from another DM with the same person is outside this DM and never offered to share');
 const inviteSource=stripTypeScriptTypes((await readFile(new URL('../web/src/features/InviteSheet.candidates.ts',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'')).replace(/^export /gm,'');
 const candidateModel=runInNewContext(inviteSource+'\n({catalogHosts,pool})',{...model,...inviteRights,collectiveRef,parseCollective});
 const guestOverview={...o,agents:true,person:{...o.person,devices:[{address:host},{address:'owner/second-laptop'}]},people:[{person:'outside',address:'outside/laptop',state:'pinned',devices:[{address:'outside/laptop'}]}]};

@@ -19,6 +19,9 @@ type HumanSupport struct {
 // cannot veto an invitation; incompatible copies wait independently.
 // Offline is separate from support: the last session still advertises readers.
 func (a *Agent) HumanInviteSupport(ctx context.Context, conv, host string) ([]HumanSupport, error) {
+	if current, err := a.queuedConversation(conv); err == nil {
+		conv = current // the DM an invitation goes to (inviteParticipation)
+	}
 	m, err := a.dmMembers(conv)
 	if err != nil {
 		return nil, err

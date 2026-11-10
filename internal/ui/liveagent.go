@@ -207,7 +207,7 @@ func (l *Live) people(peer client.PersonInfo) dmPeople {
 }
 
 func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
-	infos, _ := l.a.Participations(c.ID)
+	infos, _ := l.a.MessagingParticipations(c.ID)
 	return l.conversationPeopleForParticipations(c, infos)
 }
 
@@ -599,7 +599,16 @@ func (l *Live) agentResult(info client.ParticipationInfo, err error) (AgentView,
 
 // InviteAgent implements Participants.
 func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
-	_, msgs, _, err := l.dmOf(d.Conv)
+	// Shared messages must be in the DM the invitation goes to: the person's
+	// current DM when the chat continues an earlier one (client.currentDM).
+	conv, terr := l.a.MessagingTarget(d.Conv)
+	if terr != nil {
+		if len(d.Share) > 0 {
+			return AgentView{}, Refuse("A message chosen to share is not an earlier message of this DM.")
+		}
+		conv = d.Conv
+	}
+	_, msgs, _, err := l.dmOf(conv)
 	if err != nil {
 		return AgentView{}, err
 	}
