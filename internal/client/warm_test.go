@@ -75,19 +75,19 @@ func (s *stub) prompt() string { data, _ := os.ReadFile(s.log + ".stdin"); retur
 func TestWarmWorkerContinuesSameSession(t *testing.T) {
 	for _, name := range []string{"claude", "pi", "omp", "codex"} {
 		t.Run(name, func(t *testing.T) {
-			st, w, conv, pid := warmFixture(t, name, "4000")
+			st, w, conv, pid := warmFixture(t, name, "1500")
 			pool := warmPoolOf(t, w.bob)
-			start := time.Now()
 			q1 := convAsk(t, w.alice, conv, pid, "first")
-			cold := time.Since(start)
+			// Launch to answer: AgentNet's own setup before it is the same
+			// for both turns and is not measured.
+			cold := time.Duration(pool.lastTurn.Load())
 			ref := sessionOf(t, w.bob, q1)
 			if ref == nil || ref.ID == "" {
 				t.Fatalf("no saved session: %+v", ref)
 			}
 			eventually(t, "the worker kept warm", func() bool { return pool.idleCount() == 1 })
-			start = time.Now()
 			q2 := convAsk(t, w.alice, conv, pid, "second")
-			warm := time.Since(start)
+			warm := time.Duration(pool.lastTurn.Load())
 			if runs := st.runs(); len(runs) != 1 || pool.spawns.Load() != 1 {
 				t.Fatalf("the second message started another process: %v (spawns %d)", runs, pool.spawns.Load())
 			}
@@ -107,10 +107,10 @@ func TestWarmWorkerContinuesSameSession(t *testing.T) {
 					t.Fatalf("the warm turn opened its thread again: %s", rpc)
 				}
 			}
-			if cold < 4000*time.Millisecond {
+			if cold < 1500*time.Millisecond {
 				t.Fatalf("the fixture's cold start was not paid: %v", cold)
 			}
-			if warm >= cold {
+			if warm >= cold/2 {
 				t.Fatalf("warm turn %v not faster than cold %v", warm, cold)
 			}
 			t.Logf("%s: cold %v, warm %v", name, cold, warm)

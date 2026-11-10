@@ -159,6 +159,7 @@ type warmPool struct {
 	live   map[*warmProc]struct{}
 	closed bool
 	spawns atomic.Int64 // processes started (tests)
+	lastTurn atomic.Int64 // the last turn's launch-to-answer time, ns (tests)
 }
 
 func newWarmPool(a *Agent, l warmLimits) *warmPool {

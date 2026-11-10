@@ -766,6 +766,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			case <-wp.exited:
 			case <-runCtx.Done():
 			}
+			pool.lastTurn.Store(int64(time.Since(launchAt)))
 			switch {
 			case runCtx.Err() != nil:
 				// Stopped, cancelled or timed out: the native interrupt, then
