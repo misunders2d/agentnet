@@ -146,7 +146,7 @@ func guestMemberOf(c client.ConversationInfo) bool {
 }
 
 func (l *Live) guestViews(conv string) ([]GuestView, error) {
-	infos, err := l.a.Participations(conv)
+	infos, err := l.a.MessagingParticipations(conv)
 	if err != nil {
 		return nil, err
 	}

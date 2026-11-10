@@ -899,3 +899,32 @@ func (a *Agent) MessagingGroupMembership(conv, person string) (protocol.GroupMem
 	}
 	return logicalGroupMember(a.store, p, person)
 }
+
+// MessagingTarget is the DM that actions in a chat act on: for a person who
+// signed in again, their current DM here (as sending uses), else conv. It
+// never creates a conversation.
+func (a *Agent) MessagingTarget(conv string) (string, error) {
+	return a.queuedConversation(conv)
+}
+
+// MessagingParticipations lists the participations of every DM a chat
+// shows (continuity), so an agent brought into the current DM is listed in
+// the chat opened under an earlier DM's id.
+func (a *Agent) MessagingParticipations(conv string) ([]ParticipationInfo, error) {
+	rows, err := a.continuityDMs(conv)
+	if err != nil || len(rows) == 0 {
+		if err != nil {
+			return nil, err
+		}
+		return a.Participations(conv)
+	}
+	var out []ParticipationInfo
+	for _, r := range rows {
+		infos, err := a.Participations(r.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, infos...)
+	}
+	return out, nil
+}

@@ -3702,6 +3702,19 @@ export class Engine {
     return convs.filter(r=>r.id===id||recovered&&r.kind!=="group"&&(aliases.get(r.peer)||r.peer)===peer).sort((a,b)=>a.created-b.created||a.id.localeCompare(b.id));
   }
 
+  // The DM a chat's actions act on: a person who signed in again keeps one
+  // chat under an earlier DM's id; their current DM here, or "" when none.
+  async localCurrentDM(id, convs=null) {
+    const family=await this.continuityDMs(id,convs);if(family.length<2)return id;
+    const aliases=await this.logicalPersons(),peer=aliases.get(family[0].peer)||family[0].peer;
+    return family.find(c=>c.peer===peer)?.id||"";
+  }
+  // Participations of every DM a chat shows, so an agent brought into the
+  // current DM is listed in a chat opened under an earlier DM's id.
+  async messagingParticipationsOf(c, view=null) {
+    const family=await this.continuityDMs(c.id,view?.convs);if(family.length<2)return this.participationsOf(c,view);
+    const out=[];for(const f of family)out.push(...await this.participationsOf(f,view));return out;
+  }
   async currentDM(id) {
     const family=await this.continuityDMs(id);if(!family.length)return id;
     const aliases=await this.logicalPersons(),peer=aliases.get(family[0].peer)||family[0].peer;
@@ -3734,9 +3747,9 @@ export class Engine {
   }
 
   async messagingMessages(id,inbox,outbox,read) {
-    const family=await this.continuityDMs(id,read?.convs), rows=[];
+    const family=await this.continuityDMs(id,read?.convs), rows=[], target=await this.localCurrentDM(id,read?.convs);
     rows.push(...await this.continuityNotices(family[0]?.id||id,family));
-    for(const c of family.length?family:[{id}])rows.push(...(await this.convMessages(c.id,inbox,outbox,read)).map(m=>c.id===id?m:{...m,other_dm:true}));
+    for(const c of family.length?family:[{id}])rows.push(...(await this.convMessages(c.id,inbox,outbox,read)).map(m=>c.id===target?m:{...m,other_dm:true})); // only the current DM's messages can be shared by an invitation
     return [...new Map(rows.map(m=>[m.id,m])).values()].sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
   }
 
@@ -10545,7 +10558,7 @@ export class Engine {
       const continuation=await this.handledOf(this.continuationOf(m,here?this.fp:m.fp,e));
       return e ? { exec: e, stop:await this.stopOf(m,here?this.fp:m.fp,e), ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
-    const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c, read)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
+    const hostLabels = new Map(rel0(ctls) ? (await this.messagingParticipationsOf(c, read)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
     const ctlView = async (m, here) => {
       const { targetFp, mine } = controlsOf(m, here);
       const targetPerson = await this.personOfFp(targetFp, read);
@@ -10557,21 +10570,21 @@ export class Engine {
     const member = !!wire.rootMember(wire.parseRoot(c.root), this.me?.person);
     // A guest sees its own participation, and others only once accepted: a
     // shared invitation alone stays inert proof (livehuman.go guestViews).
-    const guests = (await this.participationsOf(c, read)).filter(p => p.role === "human" && (member || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))).map(p => this.guestView(p, member));
-    const assistants = new Set((await this.agentsOf(c, read)).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
+    const guests = (await this.messagingParticipationsOf(c, read)).filter(p => p.role === "human" && (member || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))).map(p => this.guestView(p, member));
+    const assistants = new Set((await (await this.messagingParticipationsOf(c, read)).filter(p => p.role !== "human")).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
     if (!member && guests.some(g => g.host_here)) msgs = msgs.filter(m => m.sub !== "event" || guests.some(g => g.pid === m.pid) || assistants.has(m.pid)); // shared records of an unaccepted participation stay out of a guest's timeline
     const guestActive = !member && guests.some(g => g.host_here && g.state === "active" && !g.held);
     const words = await this.peerWordsFn(read); // sentences name a person and device, never the address
     // A guest or visitor sees both verified original people (client.Conversations Members).
     const originals = member ? [] : [...(await this.dmMembers(c, null, [], null, null, read)).values()];
-    const parts = new Map((await this.participationsOf(c, read)).map(p => [p.pid, p]));
+    const parts = new Map((await this.messagingParticipationsOf(c, read)).map(p => [p.pid, p]));
     const humans = new Map([...parts].filter(([, p]) => p.role === "human"));
     msgs = await this.oneRowPerRecord(msgs, humans);
     const shownReply = linkReplies(msgs, this.fp);
     const pinned = (read.persons).filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
     return { id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : guests.some(p => p.host_here) ? "human_guest" : "visitor", guests, audience_pending: guests.some(p => p.audience_pending), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
-      agents: (await this.agentsOf(c, read)).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
+      agents: (await (await this.messagingParticipationsOf(c, read)).filter(p => p.role !== "human")).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
       messages: await Promise.all(msgs.map(async (m) => {
         const here = !m.fp && !m.excerpt_pid, out = here || !!m.own; // claimed excerpts have no verified original author key
         const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
@@ -11234,6 +11247,7 @@ export class Engine {
   async shownCopies(copies) { const people=[this.me,...await this.store.all("persons")].filter(Boolean);return (copies||[]).map(c=>({...c,person:c.own?"You":people.find(p=>p.person===c.person||p.devices.some(d=>d.address===c.to))?.label||"Someone"})); }
 
   async inviteHuman({ conv, host, share = [], note = "", topic = null }) {
+    if((await this.continuityDMs(conv)).length>1)conv=await this.currentDM(conv);
     const c = await this.store.get("convs", conv) || await this.groupRecord(conv);
     if (!c) throw Error("No conversation here.");
     const members=await this.dmMembers(c);
@@ -12266,6 +12280,7 @@ export class Engine {
   // browser, which runs none. The earlier messages it may be shown and the
   // member keys it takes tasks from without asking are chosen by the person.
   async inviteAgent({ conv, host, share = [], tasks_from: tasks = [], note = "", agent_id = "", topic = null }) {
+    if((await this.continuityDMs(conv)).length>1)conv=await this.currentDM(conv); // like sending: a person who signed in again is reached in their current DM
     const c = await this.store.get("convs", conv) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
     if (!this.me) throw new Error("Set up your person first.");

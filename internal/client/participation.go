@@ -688,6 +688,13 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 	if topic != nil && *topic != "" && !protocol.ValidID(*topic) {
 		return ParticipationInfo{}, errors.New("invalid participation topic")
 	}
+	// A chat with a person who signed in again is shown under an earlier
+	// DM's id; like sending, an invitation goes to their current DM.
+	routed, err := a.currentDM(ctx, conv)
+	if err != nil {
+		return ParticipationInfo{}, err
+	}
+	conv = routed
 	m, err := a.dmMembers(conv)
 	if err != nil {
 		return ParticipationInfo{}, err

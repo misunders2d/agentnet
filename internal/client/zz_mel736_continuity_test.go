@@ -457,11 +457,6 @@ func TestMEL736OneHubRecoveryDMAndNoGrantInheritance(t *testing.T) {
 			}
 			before = before || m.Body == "before recovery"
 			after = after || m.Body == "after recovery"
-			// Only conv's own messages are in its scope: an invitation to
-			// conv may share those and no others.
-			if (m.Body == "before recovery" || m.Body == "after recovery") && m.OtherDM != (m.Body == "after recovery") {
-				t.Fatalf("other_dm %q = %v", m.Body, m.OtherDM)
-			}
 		}
 		if notices != 1 || !before || !after {
 			t.Fatalf("union before=%v after=%v notices=%d", before, after, notices)

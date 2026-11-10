@@ -85,7 +85,7 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 		if view, ok := parts[conv]; ok {
 			return view.infos, view.err
 		}
-		infos, err := l.a.Participations(conv)
+		infos, err := l.a.MessagingParticipations(conv)
 		parts[conv] = participationView{infos, err}
 		if err == nil { // one that could not resolve is asked again
 			chat(chats, conv).infos, chat(chats, conv).partsKept = infos, true
@@ -575,7 +575,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		}
 		// These projections describe the same GET. Reuse its selected chat,
 		// fresh participations and messages; actions still resolve authority.
-		infos, err := l.a.Participations(id)
+		infos, err := l.a.MessagingParticipations(id)
 		if err != nil {
 			return DMThread{}, err
 		}
