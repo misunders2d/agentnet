@@ -3736,7 +3736,7 @@ export class Engine {
   async messagingMessages(id,inbox,outbox,read) {
     const family=await this.continuityDMs(id,read?.convs), rows=[];
     rows.push(...await this.continuityNotices(family[0]?.id||id,family));
-    for(const c of family.length?family:[{id}])rows.push(...await this.convMessages(c.id,inbox,outbox,read));
+    for(const c of family.length?family:[{id}])rows.push(...(await this.convMessages(c.id,inbox,outbox,read)).map(m=>c.id===id?m:{...m,other_dm:true}));
     return [...new Map(rows.map(m=>[m.id,m])).values()].sort((a,b)=>a.at-b.at||a.id.localeCompare(b.id));
   }
 
@@ -10582,7 +10582,7 @@ export class Engine {
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           send_group:m.send_group_conflict?"":m.send_group||"", send_group_author:here?this.fp:m.fp||m.claimed_key||"", origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
           job_detail: this.needsYouText(m, privateReports),
-          state, detail: m.detail || "", ...this.cancellationView(m), at: iso(m.at), ...this.attentionFields(m,read,out), replica: !!m.replica,
+          state, detail: m.detail || "", ...this.cancellationView(m), at: iso(m.at), ...this.attentionFields(m,read,out), replica: !!m.replica, ...(m.other_dm ? { other_dm: true } : {}),
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? await this.shownCopies(m.copies) : undefined,
           ...(m.excerpt_pid ? { excerpt_pid: m.excerpt_pid, claimed_key: m.claimed_key } : {}),
           synced_from: m.history ? m.synced_from : "",

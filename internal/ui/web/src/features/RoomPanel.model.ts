@@ -65,8 +65,8 @@ export const lineOf = (m: T.DMMessage) => unmark(firstLine(m.text ?? m.body, 140
 /** The conversation's messages, without participation records. */
 const timeline = (t: T.DMThread) => (t.messages || []).filter((m) => !m.event && !m.deleted && lineOf(m) !== "");
 
-/** Messages a person could be shown: real messages here, not copies shared with this computer. */
-export const shareable = (t: T.DMThread) => timeline(t).filter((m) => t.role === "human_guest" ? !!guestParent(t, m.topic || "") : !m.excerpt_pid && !m.replica);
+/** Messages a person could be shown: real messages of this conversation, not copies shared with this computer or messages of an earlier DM with the same person. */
+export const shareable = (t: T.DMThread) => timeline(t).filter((m) => t.role === "human_guest" ? !!guestParent(t, m.topic || "") : !m.excerpt_pid && !m.replica && !m.other_dm);
 
 // ---- the room -----------------------------------------------------------------
 

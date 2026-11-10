@@ -607,7 +607,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
-				Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, JobDetail: m.JobDetail, At: time.Unix(m.At, 0), Unread: m.Unread, Attention: m.Attention, Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
+				Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, JobDetail: m.JobDetail, At: time.Unix(m.At, 0), Unread: m.Unread, Attention: m.Attention, Replica: m.Replica, OtherDM: m.OtherDM, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
 			if envelope.TopicOrganization(m.TopicEvent) {
 				title := ""
 				for _, topic := range topics {
