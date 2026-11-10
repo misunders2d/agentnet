@@ -23,6 +23,9 @@ func runRoom(ctx context.Context, a *client.Agent, args []string, out io.Writer)
 		}
 		cause := os.Getenv(client.AgentRequestEnv)
 		attempt, err := strconv.Atoi(os.Getenv(client.AgentAttemptEnv))
+		if id, n, warm := a.RunCause(cause); warm { // a warm session's current turn
+			cause, attempt, err = id, n, nil
+		}
 		if err != nil || cause == "" {
 			return errors.New("topic organization belongs to the current admitted native agent request")
 		}
@@ -104,6 +107,9 @@ func runRoom(ctx context.Context, a *client.Agent, args []string, out io.Writer)
 		return nil
 	}
 	cause := os.Getenv(client.RoomRequestEnv)
+	if id, _, warm := a.RunCause(cause); warm { // a warm session's current turn
+		cause = id
+	}
 	if cause == "" {
 		return errors.New("room asks and waits belong to a running group agent request")
 	}
