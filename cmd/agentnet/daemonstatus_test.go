@@ -104,6 +104,16 @@ func TestDaemonStatusUsesRunningProcessAndDoesNotChangeCallerPath(t *testing.T) 
 	}
 }
 
+// An exact agent is confirmed only from a daemon's readiness: a stopped or
+// unreadable daemon (Windows CI: readiness socket i/o timeout) never accepts it.
+func TestDaemonStatusUnknownAgentWithoutReadiness(t *testing.T) {
+	_, home := diagnosticAgent(t)
+	var out bytes.Buffer
+	if err := runDaemonStatus(context.Background(), home, []string{"--agent", "missing", "--json"}, &out); err == nil {
+		t.Fatalf("agent accepted without daemon readiness: %s", out.String())
+	}
+}
+
 func TestDaemonStatusDoesNotOpenOrMigrateOlderHome(t *testing.T) {
 	home := t.TempDir()
 	id, err := identity.Generate()
