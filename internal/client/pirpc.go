@@ -34,6 +34,12 @@ type piRPCBridge struct {
 	answer               string
 	pending              map[string]*piSteer
 	seen                 map[string]string
+	prompt, reqID        string
+	settled              chan struct{}
+	settleOnce           sync.Once
+	// warm: a later turn of a retained process (warm.go); output before its
+	// own agent_start is the earlier turn's, never this request's answer.
+	warm bool
 }
 type piSteer struct {
 	ctx    context.Context
@@ -47,26 +53,50 @@ func newPiRPCBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io
 	if err != nil {
 		return nil, err
 	}
-	b := &piRPCBridge{ctx: ctx, input: input, output: output, ready: make(chan struct{}), pending: map[string]*piSteer{}, seen: map[string]string{}, closed: make(chan struct{}), omp: len(harness) > 0 && harness[0] == "omp"}
-	// Keep lookup extensions and the native launch setup; RPC replaces only print mode.
-	cmd.Args = append(withoutFlags(cmd.Args, "-p"), "--mode", "rpc")
+	prepPiRPCLaunch(cmd)
+	b := attachPiRPCBridge(ctx, input, prompt, output, harness...)
 	cmd.Stdout = b
+	b.begin()
+	return b, nil
+}
+
+// prepPiRPCLaunch keeps lookup extensions and the native launch setup; RPC
+// replaces only print mode.
+func prepPiRPCLaunch(cmd *exec.Cmd) { cmd.Args = append(withoutFlags(cmd.Args, "-p"), "--mode", "rpc") }
+
+// attachPiRPCBridge decodes one request over input; begin sends it. A warm
+// worker (warm.go) attaches a new bridge per turn to its running process.
+func attachPiRPCBridge(ctx context.Context, input io.WriteCloser, prompt string, output io.Writer, harness ...string) *piRPCBridge {
+	return &piRPCBridge{ctx: ctx, input: input, output: output, prompt: prompt, reqID: "agentnet-initial", ready: make(chan struct{}), settled: make(chan struct{}), pending: map[string]*piSteer{}, seen: map[string]string{}, closed: make(chan struct{}), omp: len(harness) > 0 && harness[0] == "omp"}
+}
+
+func (b *piRPCBridge) begin() {
 	b.writes.Add(1)
 	go func() {
 		defer b.writes.Done()
-		if b.send(ctx, "", nil, map[string]any{"id": "agentnet-initial", "type": "prompt", "message": prompt}) != nil {
+		if b.send(b.ctx, "", nil, map[string]any{"id": b.requestID(), "type": "prompt", "message": b.prompt}) != nil {
 			b.fail(b.nativeName() + " did not accept the request input")
 		}
 	}()
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-b.ctx.Done():
 			b.close()
 		case <-b.closed:
 		}
 	}()
-	return b, nil
 }
+
+// requestID correlates this request's own prompt response and result.
+func (b *piRPCBridge) requestID() string {
+	if b.reqID == "" {
+		return "agentnet-initial"
+	}
+	return b.reqID
+}
+
+// settledCh is closed once this request has ended, answered or not.
+func (b *piRPCBridge) settledCh() <-chan struct{} { return b.settled }
 func (b *piRPCBridge) followupReady() <-chan struct{} { return b.ready }
 func (b *piRPCBridge) send(ctx context.Context, id string, pending *piSteer, v any) error {
 	b.writeMu.Lock()
@@ -126,6 +156,11 @@ func (b *piRPCBridge) failureText() string {
 }
 func (b *piRPCBridge) endLocked() {
 	b.done = true
+	b.settleOnce.Do(func() {
+		if b.settled != nil {
+			close(b.settled)
+		}
+	})
 	b.active = false
 	b.thinking = nativeThinkingBuffer{}
 	b.activityMessageID = ""
@@ -278,7 +313,7 @@ func (b *piRPCBridge) event(raw []byte) {
 			delete(b.pending, id)
 		}
 	case "response":
-		if e.ID == "agentnet-initial" && !e.Success {
+		if e.ID == b.requestID() && !e.Success {
 			why := b.nativeName() + " refused the request"
 			if msg := clip([]byte(e.Error)); msg != "" {
 				why += ": " + msg
@@ -331,7 +366,7 @@ func (b *piRPCBridge) event(raw []byte) {
 			b.activityMessageID = ""
 		}
 		role, text, stop, tool := piMessageText(e.Message)
-		if role == "assistant" && !tool {
+		if role == "assistant" && !tool && (!b.warm || b.active) {
 			if stop == "error" || stop == "aborted" {
 				why := b.nativeName() + " stopped with " + strconv.Quote(stop)
 				var m struct {
@@ -355,7 +390,7 @@ func (b *piRPCBridge) event(raw []byte) {
 			b.humanLocked("A native " + b.nativeName() + " extension needs interactive input; no approval or response was invented")
 		}
 	case "prompt_result":
-		if !b.omp || e.ID != "agentnet-initial" {
+		if !b.omp || e.ID != b.requestID() {
 			return
 		}
 		if e.Status != "completed" {

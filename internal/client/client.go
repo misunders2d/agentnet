@@ -46,6 +46,8 @@ type Agent struct {
 
 	readerAwayCtx atomic.Pointer[context.Context] // this run's, for work leaving the stream's reader
 	runOrigin     atomic.Pointer[runOrigins]      // this run's vouched runs, with --run-origin (runorigin.go)
+	warm          atomic.Pointer[warmPool]        // this daemon run's warm native workers (warm.go)
+	warmLimits    warmLimits                      // their bounds; zero values are the defaults
 	readerAway    sync.WaitGroup                  // that work, waited for when the run ends
 
 	deliveryLocks    keyedLocks // envelope ID, shared by immediate sends and retry passes

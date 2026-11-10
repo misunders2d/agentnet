@@ -84,7 +84,18 @@ func (j job) proposalEligible() bool {
 
 func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 	var runs sync.WaitGroup
-	defer runs.Wait() // stop waits for every harness, exact child and cleanup
+	var pool *warmPool
+	if !a.warmLimits.off {
+		pool = newWarmPool(a, a.warmLimits)
+		a.warm.Store(pool)
+	}
+	defer func() {
+		runs.Wait() // stop waits for every harness, exact child and cleanup
+		if pool != nil {
+			a.warm.CompareAndSwap(pool, nil)
+			pool.close() // then for every warm worker
+		}
+	}()
 	dispatch := func(run func()) {
 		runs.Add(1)
 		go func() { defer runs.Done(); run() }()
@@ -100,6 +111,9 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 		a.notifyRelease()
 		a.maybeAutoUpdate(ctx) // after a trigger, once no job runs (autoupdate.go)
 		if r := a.updatePending(); r != nil && a.executorsIdle() && a.UpdateSwitching() == nil {
+			if pool != nil {
+				pool.discardIdle("the daemon switches to an update") // idle workers are not jobs
+			}
 			a.switchForUpdate(ctx, *r) // no job runs now: its result is stored
 		}
 		select {
@@ -423,7 +437,16 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		args = append(args, "--", prompt)
 	}
 	launch, launchErr := resolveNativeLaunch(h.bin)
-	cmd := exec.CommandContext(runCtx, launch.Path, args...)
+	// A conversation agent's turn of a saved native session may run in a
+	// warm worker (warm.go): its process is not bound to this run's context.
+	pool := a.warm.Load()
+	warmOK := pool != nil && launchErr == nil && warmHarness(r.Harness) && plan.ref != nil && j.Receiver == nil && j.PID != "" && len(j.run.args(h)) == 0 && outPath == ""
+	var cmd *exec.Cmd
+	if warmOK {
+		cmd = exec.Command(launch.Path, args...)
+	} else {
+		cmd = exec.CommandContext(runCtx, launch.Path, args...)
+	}
 	cmd.Dir = r.Dir
 	// cmd.Environ, after Dir, keeps the PWD=Dir that exec sets when Env is
 	// nil; AgentNet's own hooks stay out of this session.
@@ -439,10 +462,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		return slices.ContainsFunc(runEnvNames, func(n string) bool { return strings.EqualFold(n, name) }) // Windows names ignore case
 	})
 	cmd.Env = append(cmd.Env, BackgroundEnv+"=1", "AGENTNET_HOME="+home)
+	// Per-job values: a warm worker's process gets its stable handle instead,
+	// which the CLI resolves to the turn running now (RunCause).
+	var perJob [][2]string
+	agentAttempt := j.nativeAttempt
 	if j.Receiver != nil {
 		cmd.Env = append(cmd.Env, receiverBindingEnv+"="+j.Receiver.ID)
 	} else if j.progressEligible() {
-		cmd.Env = append(cmd.Env, ProgressRequestEnv+"="+j.ID, ProgressPeerEnv+"="+j.From)
+		perJob = append(perJob, [2]string{ProgressRequestEnv, j.ID}, [2]string{ProgressPeerEnv, j.From})
 	}
 	if j.Receiver == nil && j.PID != "" {
 		info, e := a.Participation(j.PID)
@@ -451,7 +478,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 		if info.Member && info.HostHere && info.Claimable() {
-			cmd.Env = append(cmd.Env, RoomRequestEnv+"="+j.ID)
+			perJob = append(perJob, [2]string{RoomRequestEnv, j.ID})
 		}
 		if info.HostHere && info.Claimable() {
 			var attempt int
@@ -459,10 +486,61 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				a.endJob(j.ID, stateNotRun, "the admitted request is no longer running", j.nativeAttempt)
 				return
 			}
-			cmd.Env = append(cmd.Env, AgentRequestEnv+"="+j.ID, AgentAttemptEnv+"="+strconv.Itoa(attempt))
+			perJob = append(perJob, [2]string{AgentRequestEnv, j.ID}, [2]string{AgentAttemptEnv, strconv.Itoa(attempt)})
+			agentAttempt = int64(attempt)
 		}
 	}
-	if h.stdin {
+	var wp *warmProc // this turn's warm worker
+	reused := false
+	var key warmKey
+	if plan.ref != nil {
+		key = warmKey{session: plan.ref.ID, person: plan.ref.Person, harness: r.Harness}
+	}
+	handle := ""
+	if warmOK {
+		var names []string
+		for _, kv := range perJob {
+			if kv[0] != ProgressPeerEnv {
+				names = append(names, kv[0])
+			}
+		}
+		fp := warmFingerprint(r.Harness, plan.ref.Mode, plan.ref.Preset, r.Dir, launch.Path, append(slices.Clone(lookup.args), j.run.args(h)...), cmd.Env, names)
+		if plan.resume {
+			if old := pool.take(key); old != nil {
+				if ok, why := pool.fits(old, fp, r.Timeout); ok {
+					wp, reused = old, true
+				} else {
+					old.discard(why) // exited before this session starts again
+				}
+			}
+		}
+		handle = protocol.NewID()
+		if reused {
+			handle = wp.handle
+		} else if wp, err = pool.spawn(cmd, r.Harness, fp, handle); err != nil {
+			a.endJob(j.ID, stateJobFailed, "native "+r.Harness+" transport unavailable: "+err.Error(), j.nativeAttempt)
+			return
+		}
+		for _, kv := range perJob {
+			switch kv[0] {
+			case ProgressPeerEnv: // no reader; a warm process serves several requesters' devices
+			case AgentAttemptEnv:
+				cmd.Env = append(cmd.Env, kv[0]+"=0")
+			default:
+				cmd.Env = append(cmd.Env, kv[0]+"="+handle)
+			}
+		}
+	} else {
+		if pool != nil && plan.resume {
+			if old := pool.take(key); old != nil {
+				old.discard("this turn starts its own process") // never two processes on one session
+			}
+		}
+		for _, kv := range perJob {
+			cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])
+		}
+	}
+	if h.stdin && wp == nil {
 		input := prompt
 		if h.sessions == agySessions {
 			input = agyInput(prompt)
@@ -501,7 +579,17 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if roomCodex {
 			roomCall = func(ctx context.Context, raw json.RawMessage) (string, error) { return a.codexRoomTool(ctx, j.ID, raw) }
 		}
-		roomBridge, err = newCodexRoomBridge(runCtx, cmd, prompt, cmd.Stdout, roomCall, plan)
+		if wp != nil {
+			if !reused {
+				prepCodexLaunch(cmd)
+			}
+			roomBridge = attachCodexRoomBridge(runCtx, wp.input(), r.Dir, prompt, cmd.Stdout, roomCall, plan)
+			if reused {
+				roomBridge.continueThread(wp.thread, wp.model, wp.turns)
+			}
+		} else {
+			roomBridge, err = newCodexRoomBridge(runCtx, cmd, prompt, cmd.Stdout, roomCall, plan)
+		}
 		if err != nil {
 			a.endJob(j.ID, stateJobFailed, "native transport unavailable: "+err.Error(), j.nativeAttempt)
 			return
@@ -537,7 +625,16 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		followupBridge = roomBridge
 	}
 	if (r.Harness == "pi" || r.Harness == "omp") && launchErr == nil {
-		piBridge, err = newPiRPCBridge(runCtx, cmd, prompt, cmd.Stdout, r.Harness)
+		if wp != nil {
+			if !reused {
+				prepPiRPCLaunch(cmd)
+			}
+			piBridge = attachPiRPCBridge(runCtx, wp.input(), prompt, cmd.Stdout, r.Harness)
+			piBridge.warm = reused
+			piBridge.reqID = "agentnet-initial-" + strconv.Itoa(wp.turns)
+		} else {
+			piBridge, err = newPiRPCBridge(runCtx, cmd, prompt, cmd.Stdout, r.Harness)
+		}
 		if err != nil {
 			a.endJob(j.ID, stateJobFailed, "native "+r.Harness+" transport unavailable: "+err.Error(), j.nativeAttempt)
 			return
@@ -553,7 +650,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if plan.ref != nil {
 			expected = plan.ref.ID
 		}
-		claudeBridge, err = newClaudeStreamBridge(runCtx, cmd, prompt, cmd.Stdout, expected)
+		if wp != nil {
+			if !reused {
+				prepClaudeStreamLaunch(runCtx, cmd)
+			}
+			claudeBridge = attachClaudeStreamBridge(runCtx, wp.input(), prompt, cmd.Stdout, expected)
+		} else {
+			claudeBridge, err = newClaudeStreamBridge(runCtx, cmd, prompt, cmd.Stdout, expected)
+		}
 		if err != nil {
 			a.endJob(j.ID, stateJobFailed, "native Claude transport unavailable: "+err.Error(), j.nativeAttempt)
 			return
@@ -582,28 +686,129 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
+	if wp != nil {
+		cmd.Cancel = nil // a warm process outlives this run's context (warm.go ends it)
+	}
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
 	setupMS := time.Since(selectedAt).Milliseconds()
 	launchAt := time.Now()
 	runErr := launchErr
-	if runErr == nil {
-		runErr = cmd.Start()
-	}
-	if runErr != nil {
-		a.Logf("%s %s: launch failed: setup_ms=%d start_ms=%d (%v)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds(), runErr)
-	} else {
-		a.Logf("%s %s: process started: setup_ms=%d start_ms=%d", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds())
-		// Its process group, for a later daemon to stop if this one dies
-		// while it runs (stopSurvivors).
-		if pgid := runGroup(cmd); pgid > 0 {
-			if err := a.store.setRunGroup(j.ID, pgid, procStart(pgid)); err != nil {
-				a.Logf("%s %s: process group not recorded: %v", j.Kind, j.ID, err)
-			}
-			defer a.store.setRunGroup(j.ID, 0, "")
+	// endWarm ends this turn's hold on its warm worker: retained after a
+	// clean answer (keep), otherwise discarded. It runs once.
+	warmEnded := false
+	var releaseWarmVouch func()
+	endWarm := func(keep bool) {
+		if wp == nil || warmEnded {
+			return
 		}
-		release := a.vouchRun(j, cmd.Process.Pid) // run origin, while it runs
-		runErr = cmd.Wait()
-		release()
+		warmEnded = true
+		if releaseWarmVouch != nil {
+			releaseWarmVouch()
+		}
+		if err := a.setWarmBinding(wp.handle, "", 0); err != nil {
+			keep = false
+		}
+		wp.out.set(nil)
+		wp.errOut.set(nil)
+		if keep && wp.alive() {
+			wp.turns++
+			if roomBridge != nil {
+				wp.thread, wp.model = roomBridge.thread, roomBridge.modelReport()
+				key.session = plan.ref.ID
+			}
+			if pool.release(wp, key) {
+				a.Logf("%s %s: %s session %s kept warm for its next turn", j.Kind, j.ID, r.Harness, key.session)
+			}
+			return
+		}
+		go wp.discard("its turn did not end with a clean answer")
+	}
+	defer endWarm(false)
+	if wp != nil {
+		var settled <-chan struct{}
+		var begin func()
+		switch {
+		case roomBridge != nil:
+			settled, begin = roomBridge.settledCh(), roomBridge.begin
+		case piBridge != nil:
+			settled, begin = piBridge.settledCh(), piBridge.begin
+		case claudeBridge != nil:
+			settled, begin = claudeBridge.settledCh(), claudeBridge.begin
+		}
+		// Output reaches only this turn's decoder, from before its input.
+		wp.out.set(cmd.Stdout)
+		wp.errOut.set(cmd.Stderr)
+		if !reused {
+			cmd.Stdout, cmd.Stderr = &wp.out, &wp.errOut
+			runErr = wp.start()
+		}
+		if runErr == nil {
+			runErr = a.setWarmBinding(wp.handle, j.ID, agentAttempt)
+		}
+		if runErr != nil {
+			a.Logf("%s %s: launch failed: setup_ms=%d start_ms=%d (%v)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds(), runErr)
+		} else {
+			if reused {
+				a.Logf("%s %s: warm %s session %s continued: setup_ms=%d turn=%d", j.Kind, j.ID, r.Harness, key.session, setupMS, wp.turns+1)
+			} else {
+				a.Logf("%s %s: process started: setup_ms=%d start_ms=%d (warm)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds())
+			}
+			if pgid := runGroup(wp.cmd); pgid > 0 {
+				if err := a.store.setRunGroup(j.ID, pgid, procStart(pgid)); err != nil {
+					a.Logf("%s %s: process group not recorded: %v", j.Kind, j.ID, err)
+				}
+				defer a.store.setRunGroup(j.ID, 0, "")
+			}
+			releaseWarmVouch = a.vouchRun(j, wp.cmd.Process.Pid) // this turn's run origin
+			begin()
+			select {
+			case <-settled:
+			case <-wp.exited:
+			case <-runCtx.Done():
+			}
+			switch {
+			case runCtx.Err() != nil:
+				// Stopped, cancelled or timed out: the native interrupt, then
+				// the process ends. Nothing it does later is this turn's.
+				thread, turn := "", ""
+				if roomBridge != nil {
+					roomBridge.stateMu.Lock()
+					thread, turn = roomBridge.thread, roomBridge.turn
+					roomBridge.stateMu.Unlock()
+				}
+				warmEnded = true
+				releaseWarmVouch()
+				_ = a.setWarmBinding(wp.handle, "", 0)
+				go wp.stop("its turn was stopped", nativeInterrupt(r.Harness, thread, turn))
+				runErr = runCtx.Err()
+			case !isClosed(settled):
+				// Lost while working: reported below, never run again.
+				runErr = wp.waitErr
+				if runErr == nil {
+					runErr = errors.New("the warm native process exited during the turn")
+				}
+			}
+		}
+	} else {
+		if runErr == nil {
+			runErr = cmd.Start()
+		}
+		if runErr != nil {
+			a.Logf("%s %s: launch failed: setup_ms=%d start_ms=%d (%v)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds(), runErr)
+		} else {
+			a.Logf("%s %s: process started: setup_ms=%d start_ms=%d", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds())
+			// Its process group, for a later daemon to stop if this one dies
+			// while it runs (stopSurvivors).
+			if pgid := runGroup(cmd); pgid > 0 {
+				if err := a.store.setRunGroup(j.ID, pgid, procStart(pgid)); err != nil {
+					a.Logf("%s %s: process group not recorded: %v", j.Kind, j.ID, err)
+				}
+				defer a.store.setRunGroup(j.ID, 0, "")
+			}
+			release := a.vouchRun(j, cmd.Process.Pid) // run origin, while it runs
+			runErr = cmd.Wait()
+			release()
+		}
 	}
 	// nativeFailure is a bridge's exact technical reason for a run that ended
 	// without a native outcome. It fails the run; it is never a human decision.
@@ -641,7 +846,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			runErr = nil
 		}
 	}
-	if j.run.outPath() != "" {
+	if j.run.outPath() != "" && wp == nil {
 		// Nothing the run started may change its outbox, or the copies sent
 		// from it, once it has ended: what is left of its process group is
 		// stopped before the outbox is read (finish).
@@ -817,6 +1022,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 	}
+	// Only a clean, complete native answer keeps its warm worker, before the
+	// reply is stored, so the next turn of this session finds it.
+	endWarm((status == envelope.StatusDone || status == envelope.StatusProposal) && !stdout.truncated && nativeFailure == "" && runErr == nil && !cancelled.Load() && stopWhy == "" && ctx.Err() == nil)
 	switch {
 	case j.Receiver != nil:
 		a.finishReplyReceiver(j, status, body)
@@ -1250,6 +1458,9 @@ func proposePrompt(asker string) string {
 func (a *Agent) PauseForAppUpdate() (func(), error) {
 	if !a.appUpdateMu.TryLock() {
 		return nil, errors.New("A job is running. Wait for it to finish, then update again.")
+	}
+	if pool := a.warm.Load(); pool != nil {
+		pool.discardIdle("the app is updating") // idle warm workers never block an update
 	}
 	return func() { a.appUpdateMu.Unlock(); a.wakeWorker() }, nil
 }

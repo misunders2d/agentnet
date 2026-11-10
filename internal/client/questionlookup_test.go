@@ -365,60 +365,78 @@ func TestNativeFixtureAnswerProcess(t *testing.T) {
 	if name == "" {
 		t.Skip("owned synthetic subprocess only")
 	}
+	// A cold start's cost, for warm-worker latency (MEL-746).
+	if ms, _ := strconv.Atoi(os.Getenv("AGENTNET_NATIVE_STUB_START_MS")); ms > 0 {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
-	var request struct {
-		ID, Type string
-		Message  json.RawMessage
-	}
-	if dec.Decode(&request) != nil {
-		os.Exit(2)
-	}
 	answer := os.Getenv("AGENTNET_NATIVE_STUB_ANSWER")
-	var prompt string
-	if name == "claude" {
-		var message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+	// One-shot Claude chooses a fresh session when no saved ID is requested.
+	session := newUUID()
+	for i := 1; i+1 < len(os.Args); i++ {
+		if os.Args[i] == "--session-id" || os.Args[i] == "--resume" {
+			session = os.Args[i+1]
 		}
-		if request.Type != "user" || json.Unmarshal(request.Message, &message) != nil || message.Role != "user" {
-			os.Exit(3)
+	}
+	// Each request is one turn. Terminal native output makes a cold worker
+	// close its input (never require EOF first); a warm worker (MEL-746) may
+	// instead send the next turn's own request. Anything else exits 8.
+	for turn := 1; ; turn++ {
+		var request struct {
+			ID, Type string
+			Message  json.RawMessage
 		}
-		prompt = message.Content
-		// One-shot Claude chooses a fresh session when no saved ID is requested.
-		session := newUUID()
-		for i := 1; i+1 < len(os.Args); i++ {
-			if os.Args[i] == "--session-id" || os.Args[i] == "--resume" {
-				session = os.Args[i+1]
+		if err := dec.Decode(&request); err != nil {
+			if turn == 1 {
+				os.Exit(2)
+			}
+			os.Exit(0)
+		}
+		var prompt string
+		if name == "claude" {
+			var message struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}
+			if request.Type != "user" || json.Unmarshal(request.Message, &message) != nil || message.Role != "user" {
+				os.Exit(map[bool]int{true: 3, false: 8}[turn == 1])
+			}
+			prompt = message.Content
+			if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
+				os.Exit(5)
+			}
+			if turn == 1 {
+				_ = enc.Encode(map[string]string{"type": "system", "subtype": "init", "session_id": session})
+			}
+			_ = enc.Encode(map[string]any{"type": "user", "uuid": protocol.NewID(), "isReplay": true, "parent_tool_use_id": nil, "session_id": session, "message": message})
+			nativeFixtureHang(prompt)
+			_ = enc.Encode(map[string]string{"type": "result", "session_id": session, "result": answer})
+		} else {
+			if name != "omp" && name != "pi" || request.Type != "prompt" || request.ID == "" || json.Unmarshal(request.Message, &prompt) != nil {
+				os.Exit(map[bool]int{true: 6, false: 8}[turn == 1])
+			}
+			if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
+				os.Exit(7)
+			}
+			_ = enc.Encode(map[string]string{"type": "agent_start"})
+			nativeFixtureHang(prompt)
+			_ = enc.Encode(map[string]any{"type": "message_end", "message": map[string]string{"role": "assistant", "content": answer, "stopReason": "stop"}})
+			_ = enc.Encode(map[string]string{"type": "agent_end"})
+			if name == "pi" {
+				_ = enc.Encode(map[string]string{"type": "agent_settled"})
+			} else {
+				_ = enc.Encode(map[string]any{"type": "prompt_result", "id": request.ID, "status": "completed", "sessionSettled": true})
 			}
 		}
-		if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
-			os.Exit(5)
-		}
-		_ = enc.Encode(map[string]string{"type": "system", "subtype": "init", "session_id": session})
-		_ = enc.Encode(map[string]any{"type": "user", "uuid": protocol.NewID(), "isReplay": true, "parent_tool_use_id": nil, "session_id": session, "message": message})
-		_ = enc.Encode(map[string]string{"type": "result", "session_id": session, "result": answer})
-	} else {
-		if name != "omp" && name != "pi" || request.Type != "prompt" || request.ID == "" || json.Unmarshal(request.Message, &prompt) != nil {
-			os.Exit(6)
-		}
-		if err := os.WriteFile(os.Getenv("AGENTNET_NATIVE_STUB_PROMPT"), []byte(prompt), 0600); err != nil {
-			os.Exit(7)
-		}
-		_ = enc.Encode(map[string]string{"type": "agent_start"})
-		_ = enc.Encode(map[string]any{"type": "message_end", "message": map[string]string{"role": "assistant", "content": answer, "stopReason": "stop"}})
-		_ = enc.Encode(map[string]string{"type": "agent_end"})
-		if name == "pi" {
-			_ = enc.Encode(map[string]string{"type": "agent_settled"})
-		} else {
-			_ = enc.Encode(map[string]any{"type": "prompt_result", "id": request.ID, "status": "completed", "sessionSettled": true})
-		}
 	}
-	// Terminal native output makes the worker close its input; never require EOF first.
-	var unexpected any
-	if dec.Decode(&unexpected) == nil {
-		os.Exit(8)
+}
+
+// nativeFixtureHang keeps a turn whose prompt has the opt-in marker running,
+// after its input was accepted, until the process is killed.
+func nativeFixtureHang(prompt string) {
+	if mark := os.Getenv("AGENTNET_NATIVE_STUB_HANG"); mark != "" && strings.Contains(prompt, mark) {
+		select {}
 	}
-	os.Exit(0)
 }
 
 func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {

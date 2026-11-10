@@ -44,6 +44,12 @@ func roomAskFrom(a *client.Agent, target, fromAgent string) (roomAsk, bool, erro
 		if cause == "" {
 			return r, false, nil
 		}
+		if id, _, warm := a.RunCause(cause); warm { // a warm session's current turn
+			if id == "" {
+				return r, false, client.ErrNoWarmTurn
+			}
+			cause = id
+		}
 	}
 	harness, session := client.SessionHarness(os.Getenv)
 	if handle := os.Getenv("AGENTNET_REPLY_SESSION"); cause == "" && harness == "" && handle != "" {

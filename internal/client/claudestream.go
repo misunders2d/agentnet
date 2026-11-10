@@ -33,6 +33,8 @@ type claudeStreamBridge struct {
 	answer               string
 	pending              map[string]*piSteer
 	seen                 map[string]string
+	settled              chan struct{}
+	settleOnce           sync.Once
 }
 
 func newClaudeStreamBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io.Writer, expected string) (*claudeStreamBridge, error) {
@@ -41,7 +43,15 @@ func newClaudeStreamBridge(ctx context.Context, cmd *exec.Cmd, prompt string, ou
 	if err != nil {
 		return nil, err
 	}
-	b := &claudeStreamBridge{ctx: ctx, input: input, output: output, ready: make(chan struct{}), pending: map[string]*piSteer{}, seen: map[string]string{}, closed: make(chan struct{}), prompt: prompt, session: expected}
+	prepClaudeStreamLaunch(ctx, cmd)
+	b := attachClaudeStreamBridge(ctx, input, prompt, output, expected)
+	cmd.Stdout = b
+	b.begin()
+	return b, nil
+}
+
+// prepClaudeStreamLaunch selects the stream-json transport on the native launch.
+func prepClaudeStreamLaunch(ctx context.Context, cmd *exec.Cmd) {
 	for i := 1; i+1 < len(cmd.Args); i++ {
 		if cmd.Args[i] == "--output-format" {
 			cmd.Args[i+1] = "stream-json"
@@ -51,23 +61,34 @@ func newClaudeStreamBridge(ctx context.Context, cmd *exec.Cmd, prompt string, ou
 	if claudePartialMessagesSupported(ctx, cmd) {
 		cmd.Args = append(cmd.Args, "--include-partial-messages")
 	}
-	cmd.Stdout = b
+}
+
+// attachClaudeStreamBridge decodes one request of session expected over
+// input; begin sends it. A warm worker (warm.go) attaches a new bridge per
+// turn: it becomes active only on the exact replay of its own prompt.
+func attachClaudeStreamBridge(ctx context.Context, input io.WriteCloser, prompt string, output io.Writer, expected string) *claudeStreamBridge {
+	return &claudeStreamBridge{ctx: ctx, input: input, output: output, ready: make(chan struct{}), settled: make(chan struct{}), pending: map[string]*piSteer{}, seen: map[string]string{}, closed: make(chan struct{}), prompt: prompt, session: expected}
+}
+
+func (b *claudeStreamBridge) begin() {
 	b.writes.Add(1)
 	go func() {
 		defer b.writes.Done()
-		if b.send(ctx, "", nil, map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": prompt}}) != nil {
+		if b.send(b.ctx, "", nil, map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": b.prompt}}) != nil {
 			b.fail("Claude did not accept the request input")
 		}
 	}()
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-b.ctx.Done():
 			b.close()
 		case <-b.closed:
 		}
 	}()
-	return b, nil
 }
+
+// settledCh is closed once this request has ended, answered or not.
+func (b *claudeStreamBridge) settledCh() <-chan struct{} { return b.settled }
 
 // Optional output telemetry must not change whether the native work launch is
 // supported. Inspect only --help on the same selected launcher/environment;
@@ -154,6 +175,11 @@ func (b *claudeStreamBridge) failureText() string {
 }
 func (b *claudeStreamBridge) endLocked() {
 	b.done = true
+	b.settleOnce.Do(func() {
+		if b.settled != nil {
+			close(b.settled)
+		}
+	})
 	b.active = false
 	b.thinking = nativeThinkingBuffer{}
 	for id, p := range b.pending {

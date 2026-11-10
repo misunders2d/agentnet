@@ -214,6 +214,7 @@ type codexRoomBridge struct {
 	ephemeral            bool
 	buf                  []byte
 	thread, turn, answer string
+	turnReq              string // a warm turn's own turn/start id; "" is the cold request 3
 	calls                map[string]bool
 	done                 bool
 	// failure is the exact technical reason the run ended without a native
@@ -235,7 +236,19 @@ func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, outpu
 	if err != nil {
 		return nil, err
 	}
-	b := &codexRoomBridge{prompt: prompt, cwd: cmd.Dir, ctx: ctx, input: out, output: output, call: call, calls: map[string]bool{}, ready: make(chan struct{}), nativeEnd: make(chan struct{}), steering: map[string]chan codexSteerResult{}}
+	b := attachCodexRoomBridge(ctx, out, cmd.Dir, prompt, output, call, plans...)
+	prepCodexLaunch(cmd)
+	cmd.Stdout = b
+	b.begin()
+	return b, nil
+}
+
+// prepCodexLaunch runs the stdio app-server of the native launch.
+func prepCodexLaunch(cmd *exec.Cmd) { cmd.Args = []string{cmd.Path, "app-server"} }
+
+// attachCodexRoomBridge decodes one request over input; begin sends it.
+func attachCodexRoomBridge(ctx context.Context, input io.WriteCloser, cwd, prompt string, output io.Writer, call func(context.Context, json.RawMessage) (string, error), plans ...sessionPlan) *codexRoomBridge {
+	b := &codexRoomBridge{prompt: prompt, cwd: cwd, ctx: ctx, input: input, output: output, call: call, calls: map[string]bool{}, ready: make(chan struct{}), nativeEnd: make(chan struct{}), steering: map[string]chan codexSteerResult{}}
 	b.ephemeral = true
 	if len(plans) > 0 && plans[0].ref != nil {
 		b.ephemeral = false
@@ -243,15 +256,47 @@ func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, outpu
 			b.resume = plans[0].ref.ID
 		}
 	}
-	cmd.Args = []string{cmd.Path, "app-server"}
-	cmd.Stdout = b
-	go func() {
-		b.send(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"clientInfo": map[string]any{"name": "agentnet", "version": protocol.Version}, "capabilities": map[string]any{"experimentalApi": true}}})
-	}()
-	// Prompt is retained only for this invocation, never in command arguments.
-	go func() { <-ctx.Done(); b.close() }()
-	return b, nil
+	return b
 }
+
+// continueThread makes this request the next turn of a retained warm
+// app-server (warm.go) that already owns thread: no handshake, a fresh turn
+// request id, the thread's last reported model.
+func (b *codexRoomBridge) continueThread(thread string, model modelObservation, turn int) {
+	b.thread, b.resume, b.model = thread, thread, model
+	b.turnReq = strconv.Quote("agentnet-turn-" + strconv.Itoa(turn))
+}
+
+func (b *codexRoomBridge) begin() {
+	if b.turnReq == "" {
+		go func() {
+			b.send(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"clientInfo": map[string]any{"name": "agentnet", "version": protocol.Version}, "capabilities": map[string]any{"experimentalApi": true}}})
+		}()
+	} else {
+		go func() {
+			b.stateMu.Lock()
+			if b.done {
+				b.stateMu.Unlock()
+				return
+			}
+			if b.threadAvailable != nil && !b.threadAvailable(b.thread) {
+				b.humanLocked("The native session is already owned by another active request, or its reservation could not be confirmed. No turn input was sent; check the existing work before explicitly continuing.")
+				b.stateMu.Unlock()
+				return
+			}
+			b.stateMu.Unlock()
+			var id any
+			_ = json.Unmarshal([]byte(b.turnReq), &id)
+			b.send(map[string]any{"id": id, "method": "turn/start", "params": map[string]any{"threadId": b.thread, "cwd": b.cwd, "input": []any{map[string]any{"type": "text", "text": b.prompt}}}})
+		}()
+	}
+	// Prompt is retained only for this invocation, never in command arguments.
+	go func() { <-b.ctx.Done(); b.close() }()
+}
+
+// settledCh is closed once this request has ended, answered or not.
+func (b *codexRoomBridge) settledCh() <-chan struct{} { return b.nativeEnd }
+
 func (b *codexRoomBridge) close() {
 	b.closeOnce.Do(func() {
 		if b.nativeEnd != nil {
@@ -420,7 +465,15 @@ func (b *codexRoomBridge) event(raw []byte) {
 		return
 	}
 	if m.Method == "" {
-		switch string(m.ID) {
+		id := string(m.ID)
+		if b.turnReq != "" {
+			// A warm turn sent no handshake: only its own turn request answers.
+			if id != b.turnReq {
+				return
+			}
+			id = "3"
+		}
+		switch id {
 		case "1":
 			b.send(map[string]any{"method": "initialized"})
 			spec := map[string]any{"type": "function", "name": "agentnet_room", "description": "Bound to this admitted native run: ask a question or task of group agents and wait for replies; tasks require recipient consent. Organize only supplied messages on the human request; react to an admitted ordinary canonical mention; send as this exact agent. Current admission, native permissions, removal and cancellation apply.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action"}, "properties": map[string]any{"action": map[string]any{"type": "string", "enum": []string{"ask", "wait", "organize", "react", "send"}}, "kind": map[string]any{"type": "string", "enum": []string{"question", "task"}}, "pid": map[string]string{"type": "string"}, "text": map[string]string{"type": "string"}, "id": map[string]string{"type": "string"}, "ids": map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "maxItems": envelope.MaxTopicMoves}, "topic": map[string]string{"type": "string"}, "new": map[string]string{"type": "boolean"}, "title": map[string]string{"type": "string"}, "author": map[string]string{"type": "string"}, "emoji": map[string]string{"type": "string"}, "remove": map[string]string{"type": "boolean"}}}}
