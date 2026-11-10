@@ -96,7 +96,7 @@ func (b *piRPCBridge) requestID() string {
 }
 
 // settledCh is closed once this request has ended, answered or not.
-func (b *piRPCBridge) settledCh() <-chan struct{} { return b.settled }
+func (b *piRPCBridge) settledCh() <-chan struct{}     { return b.settled }
 func (b *piRPCBridge) followupReady() <-chan struct{} { return b.ready }
 func (b *piRPCBridge) send(ctx context.Context, id string, pending *piSteer, v any) error {
 	b.writeMu.Lock()
