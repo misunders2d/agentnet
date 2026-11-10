@@ -613,6 +613,9 @@ func TestEachHarnessResumesInAgentConversation(t *testing.T) {
 			if ref == nil || ref.Harness != name || ref.ID == "" {
 				t.Fatalf("no saved %s session: %+v %v", name, ref, st.runs())
 			}
+			// The cold path (Part A): with no warm worker left, as after its
+			// idle timeout, the next ask resumes the saved session.
+			warmPoolOf(t, w.bob).discardIdle("test: cold resume")
 			q2 := convAsk(t, w.alice, conv, pid, "second")
 			runs := st.runs()
 			if len(runs) != 2 {
