@@ -117,6 +117,10 @@ func TestNeedsHumanResultPostedToAsker(t *testing.T) {
 	if !ans.Unread {
 		t.Fatal("the agent's needs_human reply is not unread at the asker's device")
 	}
+	// ownAgentTagsOwner keys on this status: it must arrive with the reply.
+	if ans.Status() != envelope.StatusNeedsHuman {
+		t.Fatalf("the posted needs_human reply arrived with status %q", ans.Status())
+	}
 	if n := inboxlessCount(t, w.alice, "alerts"); n != 1 {
 		t.Fatalf("asker's device queued %d chat alerts, want 1", n)
 	}
