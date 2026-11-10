@@ -272,7 +272,13 @@ func joinedOrganizationFixture(t *testing.T) *joinedOrganization {
 			t.Fatal("narrow native context disclosed omitted history", hidden)
 		}
 	}
-	if err = f.db.QueryRow(`SELECT json_array(state,attempts,executor,session_ref,result_id) FROM inbox WHERE id=? AND lid=?`, evidence.Request, request.LID).Scan(&f.work); err != nil || !strings.Contains(f.work, `"answered",1,`) {
+	query, args := `SELECT json_array(state,attempts,executor,session_ref,result_id) FROM inbox WHERE id=? AND lid=?`, []any{evidence.Request, request.LID}
+	if _, _, warm := f.b.RunCause(evidence.Request); warm {
+		// A warm worker's process holds its stable handle, not one request's
+		// ID (client.RunCause): the request is its exact LID.
+		query, args = `SELECT json_array(state,attempts,executor,session_ref,result_id) FROM inbox WHERE lid=? AND kind='question'`, []any{request.LID}
+	}
+	if err = f.db.QueryRow(query, args...).Scan(&f.work); err != nil || !strings.Contains(f.work, `"answered",1,`) {
 		t.Fatal("native request did not complete exactly once", f.work, err)
 	}
 	f.requirePreserved(t)
