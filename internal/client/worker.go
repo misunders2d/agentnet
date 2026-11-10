@@ -505,11 +505,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if warmOK {
 		var names []string
 		for _, kv := range perJob {
-			switch {
-			case kv[0] != ProgressPeerEnv:
+			if kv[0] == ProgressPeerEnv {
+				names = append(names, kv[0]+"="+kv[1]) // another asking device starts its own process
+			} else {
 				names = append(names, kv[0])
-			case j.PID == "":
-				names = append(names, kv[0]+"="+kv[1]) // the key's own asker: one value
 			}
 		}
 		fp := warmFingerprint(r.Harness, plan.ref.Mode, plan.ref.Preset, r.Dir, launch.Path, append(slices.Clone(lookup.args), j.run.args(h)...), cmd.Env, names)
@@ -532,13 +531,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		for _, kv := range perJob {
 			switch kv[0] {
 			case ProgressPeerEnv:
-				// A device conversation's requester is its key's asker, the
-				// same for every turn (the prompt names it for progress). A
-				// conversation agent's warm process may serve several
-				// devices of one person; no program reads it there.
-				if j.PID == "" {
-					cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])
-				}
+				// The asking device, part of the fingerprint: progress goes
+				// to it, so a turn from another device never reuses it.
+				cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])
 			case AgentAttemptEnv:
 				cmd.Env = append(cmd.Env, kv[0]+"=0")
 			default:
