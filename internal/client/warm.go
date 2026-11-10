@@ -152,13 +152,13 @@ func (p *warmProc) alive() bool {
 // warmPool belongs to one daemon run (worker): it is created when the
 // worker starts and closed, with every process it holds, when it stops.
 type warmPool struct {
-	a      *Agent
-	limits warmLimits
-	mu     sync.Mutex
-	idle   map[warmKey]*warmProc
-	live   map[*warmProc]struct{}
-	closed bool
-	spawns atomic.Int64 // processes started (tests)
+	a        *Agent
+	limits   warmLimits
+	mu       sync.Mutex
+	idle     map[warmKey]*warmProc
+	live     map[*warmProc]struct{}
+	closed   bool
+	spawns   atomic.Int64 // processes started (tests)
 	lastTurn atomic.Int64 // the last turn's launch-to-answer time, ns (tests)
 }
 
