@@ -236,3 +236,28 @@ func TestOwnAgentPastAnswerStaysReadAfterUpgrade(t *testing.T) {
 		t.Fatalf("the read is not a mark the person's other devices apply: %d %v", marks, err)
 	}
 }
+
+// MEL-772: the agent's question to its person carries the agent's own
+// emotion, and its emotion line never shows as message text.
+func TestNeedsHumanReplyCarriesAgentEmotion(t *testing.T) {
+	st := installAgentStub(t)
+	st.mode("needsfeel")
+	w, conv, lids, _ := agentWorld(t)
+	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:1], nil)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "book the shipment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans := replyAt(t, w.alice, conv, q.ID)
+	if strings.Contains(strings.ToLower(ans.Body), "emotion:") || !strings.HasSuffix(ans.Body, "Which carrier should I book?") {
+		t.Fatalf("the emotion line shows as text: %q", ans.Body)
+	}
+	if ans.Emotion != "focused" {
+		t.Fatalf("reply emotion %q, want the agent's focused", ans.Emotion)
+	}
+	var detail string
+	if err := w.bob.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=? AND state=?`, q.ID, stateNeedHuman).Scan(&detail); err != nil || detail != "Which carrier should I book?" {
+		t.Fatalf("recorded question %q %v", detail, err)
+	}
+}

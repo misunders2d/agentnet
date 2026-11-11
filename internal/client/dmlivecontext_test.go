@@ -337,3 +337,28 @@ func TestDMLiveExternalPeerContext(t *testing.T) {
 		t.Fatalf("captured queued replies lost request validation: held=%d wrapped=%d %v", held, wrapped, err)
 	}
 }
+
+// Owner, 2026-11-11: a message held here as a copy (an own agent's reply,
+// an own other device's message) that its owner chose to share when
+// bringing in an own agent is that agent's context, not a left-out copy.
+func TestGrantedCopyIsOwnHelperContext(t *testing.T) {
+	w, conv, lids, _ := agentWorld(t)
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET replica=1 WHERE conv=? AND lid=?`, conv, lids[0]); err != nil {
+		t.Fatal(err)
+	}
+	p, err := w.bob.InviteAgent(tctx(t), conv, w.bob.Address, []string{lids[0]}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := w.bob.ParticipationContext(p.PID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range c.Messages {
+		found = found || m.LID == lids[0]
+	}
+	if !found || c.Missing != 0 || c.Replicas != 0 {
+		t.Fatalf("the shared copy is not context: found=%v missing=%d replicas=%d", found, c.Missing, c.Replicas)
+	}
+}

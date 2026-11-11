@@ -271,9 +271,10 @@ func (a *Agent) requestFollowupPrompt(j job) (string, error) {
 	if err != nil || ref == nil {
 		return "", err
 	}
-	if ref.Attempt > 0 {
-		return "", errors.New("explicit steering can only enter its exact current run; it cannot launch separate work")
-	}
+	// A steer that missed its exact run (it ended, or its bridge could not
+	// take input) is the person's next turn, with the recorded context below:
+	// a message to a busy agent always reaches it (MEL-745). It never
+	// dead-ends as a decision, and nothing already run is repeated.
 	r, err := a.followupOriginal(a.store.db, j.Conv, ref.Ref)
 	if err != nil {
 		return "", fmt.Errorf("follow-up waits for its exact original request: %w", err)

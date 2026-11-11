@@ -986,7 +986,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
+	cleanTurn := !stdout.truncated && nativeFailure == "" && runErr == nil && !cancelled.Load() && stopWhy == "" && ctx.Err() == nil
 	if outcome == outcomeNeedsHuman && status == envelope.StatusDone {
+		// The agent's own question to its person ended its turn cleanly: its
+		// warm worker stays for the answer (MEL-746). AgentNet's own
+		// needs_human words (a native approval, an owned session) do not.
+		endWarm(cleanTurn && rest != "" && !strings.HasPrefix(rest, nativeStatusPrefix))
 		if rest == "" {
 			rest = r.Harness + " said this needs your decision but gave no reason"
 		}
@@ -1035,7 +1040,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	// Only a clean, complete native answer keeps its warm worker, before the
 	// reply is stored, so the next turn of this session finds it.
-	endWarm((status == envelope.StatusDone || status == envelope.StatusProposal) && !stdout.truncated && nativeFailure == "" && runErr == nil && !cancelled.Load() && stopWhy == "" && ctx.Err() == nil)
+	endWarm((status == envelope.StatusDone || status == envelope.StatusProposal) && cleanTurn)
 	switch {
 	case j.Receiver != nil:
 		a.finishReplyReceiver(j, status, body)

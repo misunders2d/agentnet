@@ -59,7 +59,7 @@ func TestContinueRequestDirectWorker(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			for _, want := range []string{"original bound work", "which budget applies?", "use release budget", "fresh-context continuation", "do not replay successful effects"} {
+			for _, want := range []string{"original bound work", "which budget applies?", "use release budget", "continuation of the same original request", "do not replay successful effects"} {
 				if !strings.Contains(string(prompt), want) {
 					t.Fatalf("missing %q in %s", want, prompt)
 				}
@@ -307,7 +307,10 @@ func TestContinueRequestOwnPhoneDecision(t *testing.T) {
 	}
 }
 
-func TestContinueRequestCodexSavedBackgroundStaysFresh(t *testing.T) {
+// The agent's own question ended its turn cleanly, so the person's answer
+// continues that saved native session (owner, 2026-11-11; MEL-746), not a
+// fresh thread.
+func TestContinueRequestCodexResumesAgentQuestionSession(t *testing.T) {
 	st := sessionStub(t)
 	h := Harnesses["xstyle"]
 	h.question = append([]string(nil), Harnesses["codex"].question...)
@@ -334,20 +337,16 @@ func TestContinueRequestCodexSavedBackgroundStaysFresh(t *testing.T) {
 		t.Fatal(e)
 	}
 	waitState(t, w.bob, q.ID, stateAnswered)
-	next := sessionOf(t, w.bob, q.ID)
-	if next == nil || next.ID != "new-worker-thread" {
-		t.Fatal(next)
-	}
 	runs := st.runs()
-	if len(runs) != 2 || strings.Contains(runs[1], "resume") || strings.Contains(runs[1], "--sandbox") || strings.Contains(runs[1], "approval_policy") {
+	if len(runs) != 2 || strings.Contains(runs[1], "--sandbox") || strings.Contains(runs[1], "approval_policy") {
 		t.Fatal(runs)
 	}
 	rpc, e := os.ReadFile(st.log + ".rpc")
-	if e != nil || strings.Count(string(rpc), "thread/start") != 2 || strings.Contains(string(rpc), "thread/resume") {
-		t.Fatalf("continuation resumed native session: %s %v", rpc, e)
+	if e != nil || strings.Count(string(rpc), "thread/start") != 1 || !strings.Contains(string(rpc), "thread/resume") || !strings.Contains(string(rpc), "prior-worker-thread") {
+		t.Fatalf("continuation did not resume the agent's session: %s %v", rpc, e)
 	}
 	prompt, e := os.ReadFile(st.log + ".prompt")
-	if e != nil || !strings.Contains(string(prompt), "fresh-context continuation") || !strings.Contains(string(prompt), "release branch") {
+	if e != nil || !strings.Contains(string(prompt), "continuation of the same original request") || !strings.Contains(string(prompt), "release branch") {
 		t.Fatalf("%s %v", prompt, e)
 	}
 }

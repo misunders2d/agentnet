@@ -206,3 +206,55 @@ func TestOwnHumanStopSurvivesReopen(t *testing.T) {
 		})
 	}
 }
+
+// Owner, 2026-11-11: "stop button does nothing". The request's run had
+// ended and it was parked waiting for helper agents' results
+// (helpers_waiting); the owner's Stop, sent for the running attempt it saw,
+// was refused as "no longer as you saw it". The same attempt, parked, now
+// stops at once; another attempt still does not.
+func TestOwnHumanStopParkedForHelpers(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	if _, err := w.alice.CreatePerson(tctx(t), "Owner"); err != nil {
+		t.Fatal(err)
+	}
+	setResponder(t, w.alice, "stub", st.dir, time.Minute)
+	runAgent(t, w.alice)
+	link := func(ctx context.Context, id string) error { return w.alice.DecideLink(ctx, id, true) }
+	phone := linkedVia(t, w.alice, "phone", link)
+	tablet := linkedVia(t, w.alice, "tablet", link)
+	q, err := phone.SendMessage(tctx(t), Outgoing{To: w.alice.Address, Kind: envelope.KindQuestion, Body: "ask the helpers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.alice, q.ID, stateAnswered)
+	eventually(t, "the run fully finished", func() bool { _, ok := findReply(phone, q.ID); return ok })
+	// Its run ended; it waits for other agents' results (helperwait.go).
+	// One ask to another agent is still out, with no answer or status yet.
+	child := protocol.NewID()
+	if _, err = w.alice.store.db.Exec(`INSERT INTO outbox(id,recipient,body,envelope,state,created_at,conv,lid) VALUES(?,?,'part','',?,unixepoch(),?,?)`, child, w.bob.Address, "queued", protocol.NewID(), child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.alice.store.db.Exec(`INSERT INTO request_waits(request,child,attempt) VALUES(?,?,1)`, q.ID, child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.alice.store.db.Exec(`UPDATE inbox SET state=?,attempts=1 WHERE id=?`, stateHelpersWaiting, q.ID); err != nil {
+		t.Fatal(err)
+	}
+	stop := func(attempt int64) {
+		t.Helper()
+		if _, err := tablet.Decide(WithQueuedSend(tctx(t), protocol.NewID()), w.alice.Address, q.ID, phone.Self().Fingerprint(), "cancel", stateRunning, attempt, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop(2)
+	time.Sleep(500 * time.Millisecond)
+	if s := jobState(t, w.alice, q.ID); s != stateHelpersWaiting {
+		t.Fatalf("a Stop for another attempt changed the parked request: %s", s)
+	}
+	stop(1)
+	waitState(t, w.alice, q.ID, stateCancelled)
+	if st.count() != 1 {
+		t.Fatal("request rerun")
+	}
+}
