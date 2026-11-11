@@ -71,6 +71,13 @@ on:
         default: false
 permissions:
   contents: read
+# A newer push to a pull request cancels that PR's older run. Each run holds
+# about 40 jobs while the account's runner pool is 20, so stale runs only
+# delay the current one. Push and manual runs get a group per run and are
+# never cancelled: main keeps a result for every commit.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('go-pr-{0}', github.event.pull_request.number) || format('go-run-{0}', github.run_id) }}
+  cancel-in-progress: true
 jobs:
   native:
     if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.race_shards && !inputs.windows_client_partitions }}
