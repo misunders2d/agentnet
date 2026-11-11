@@ -2,20 +2,22 @@
 # One shard of the race suite, for CI's parallel race jobs. "others" runs all
 # non-client packages, splitting cmd/agentnet in two and internal/ui in three
 # sequential partitions so each invocation keeps the existing 600-second bound.
-# "ui-0"/"ui-1"/"ui-2" rerun those UI partitions. "client-K" is every COUNT-th
+# "ui-0"/"ui-1"/"ui-2" rerun those UI partitions. CI runs "others" as two
+# parallel jobs: "others-0" (the other packages and both cmd partitions) and
+# "others-1" (the three UI partitions); together they are exactly "others". "client-K" is every COUNT-th
 # client test starting at K (0-based). cmd-0/cmd-1 select CLI partitions.
 # UI always uses three partitions and cmd always two; COUNT is
 # client-only. The full others and client shards run every test once, with each
 # race invocation bounded at 600 seconds per package.
 # CI runs client-0 … client-23 with COUNT 24 (owner-approved November 9, 2026).
-# Usage: scripts/race-shard.sh others|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [COUNT]
+# Usage: scripts/race-shard.sh others|others-0|others-1|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [COUNT]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 shard=${1:-}
 count=${2:-24}
 if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] ||
-   ! [[ "$shard" = others || "$shard" =~ ^(client|cmd|ui)-[0-9]+$ ]]; then
-	echo 'usage: race-shard.sh others|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [positive client COUNT]' >&2
+   ! [[ "$shard" =~ ^others(-[01])?$ || "$shard" =~ ^(client|cmd|ui)-[0-9]+$ ]]; then
+	echo 'usage: race-shard.sh others|others-0|others-1|client-K|cmd-0|cmd-1|ui-0|ui-1|ui-2 [positive client COUNT]' >&2
 	exit 2
 fi
 
@@ -87,14 +89,18 @@ run_partition() {
 		go test -race -json -count=1 -timeout 600s -run "^($(echo "$tests" | paste -sd'|'))\$" "$package"
 }
 
-if [ "$shard" = others ]; then
+if [[ "$shard" = others || "$shard" = others-0 ]]; then
 	packages=$(go list ./... | awk '!/\/internal\/(client|ui)$/ && !/\/cmd\/agentnet$/')
 	go test -race -count=1 -timeout 600s $packages
 	run_partition ./cmd/agentnet 0 2 cmd-0
 	run_partition ./cmd/agentnet 1 2 cmd-1
+fi
+if [[ "$shard" = others || "$shard" = others-1 ]]; then
 	run_partition ./internal/ui 0 3 ui-0
 	run_partition ./internal/ui 1 3 ui-1
 	run_partition ./internal/ui 2 3 ui-2
+fi
+if [[ "$shard" = others* ]]; then
 	exit
 fi
 k=${shard#*-}
