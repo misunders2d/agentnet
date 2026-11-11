@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -154,6 +155,117 @@ func TestWarmWorkerDeviceConversation(t *testing.T) {
 	pool.mu.Unlock()
 	if key.person != w.alice.Address || key.session != ref.ID {
 		t.Fatalf("warm key %+v", key)
+	}
+}
+
+// Owner field case, 2026-11-11: the agent asks its person to decide
+// (needs_human, posted as its chat reply). That clean turn keeps its warm
+// worker, so the person's answer goes into the same live process.
+func TestWarmWorkerKeptAfterAgentAsksPerson(t *testing.T) {
+	st, w, conv, pid := warmFixture(t, "claude", "0")
+	t.Setenv("AGENTNET_NATIVE_STUB_ANSWER", needsHumanMarker+"\nApprove the deploy?\n\nemotion: focused\n")
+	pool := warmPoolOf(t, w.bob)
+	q1 := convAsk(t, w.alice, conv, pid, "ship it")
+	eventually(t, "the request waits for its person", func() bool { return inboxRow(t, w.bob, q1).State == stateNeedHuman })
+	eventually(t, "the worker kept warm after its question", func() bool { return pool.idleCount() == 1 })
+	convAsk(t, w.alice, conv, pid, "yes, deploy")
+	if n := len(st.runs()); n != 1 || pool.spawns.Load() != 1 {
+		t.Fatalf("the answer started another process: %d runs, %d spawns", n, pool.spawns.Load())
+	}
+	if !strings.Contains(st.prompt(), "yes, deploy") {
+		t.Fatalf("the live process did not get the answer: %q", st.prompt())
+	}
+}
+
+// The same, answered through the question's own Continue action: the
+// request runs again in its kept session and live process.
+func TestWarmWorkerKeptThroughContinueAnswer(t *testing.T) {
+	st, w, conv, pid := warmFixture(t, "claude", "0")
+	t.Setenv("AGENTNET_NATIVE_STUB_ANSWER", needsHumanMarker+"\nApprove the deploy?\n\nemotion: focused\n")
+	pool := warmPoolOf(t, w.bob)
+	q1 := convAsk(t, w.alice, conv, pid, "ship it")
+	eventually(t, "the request waits for its person", func() bool { return inboxRow(t, w.bob, q1).State == stateNeedHuman })
+	eventually(t, "the worker kept warm after its question", func() bool { return pool.idleCount() == 1 })
+	ref := sessionOf(t, w.bob, q1)
+	if ref == nil || ref.ID == "" {
+		t.Fatalf("no saved session: %+v", ref)
+	}
+	// The stub asks again (same launch settings, so the worker is reusable).
+	if e := w.bob.ContinueRequest(q1, protocol.NewID(), 1, "yes, deploy"); e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, "the continued request ran", func() bool {
+		var n int
+		w.bob.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=? AND state=?`, q1, stateNeedHuman).Scan(&n)
+		return n == 2
+	})
+	if n := len(st.runs()); n != 1 || pool.spawns.Load() != 1 {
+		t.Fatalf("the answer started another process: %d runs, %d spawns", n, pool.spawns.Load())
+	}
+	if r2 := sessionOf(t, w.bob, q1); r2 == nil || r2.ID != ref.ID {
+		t.Fatalf("continued session %+v, want %s", r2, ref.ID)
+	}
+	if !strings.Contains(st.prompt(), "yes, deploy") {
+		t.Fatalf("the live process did not get the answer: %q", st.prompt())
+	}
+}
+
+// The same, answered by the person's exact linked reply to the request (the
+// composer's tagged follow-up, MEL-497): it continues the kept session in
+// the live process.
+func TestWarmWorkerKeptThroughLinkedReply(t *testing.T) {
+	st, w, conv, pid := warmFixture(t, "claude", "0")
+	t.Setenv("AGENTNET_NATIVE_STUB_ANSWER", needsHumanMarker+"\nApprove the deploy?\n\nemotion: focused\n")
+	pool := warmPoolOf(t, w.bob)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "ship it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, w.alice, conv, q.ID)
+	eventually(t, "the request waits for its person", func() bool { return inboxRow(t, w.bob, q.ID).State == stateNeedHuman })
+	eventually(t, "the worker kept warm after its question", func() bool { return pool.idleCount() == 1 })
+	ref := sessionOf(t, w.bob, q.ID)
+	if ref == nil || ref.ID == "" {
+		t.Fatalf("no saved session: %+v", ref)
+	}
+	follow := &envelope.FollowupRef{Ref: envelope.Ref{ID: q.LID, Fingerprint: w.alice.Self().Fingerprint()}}
+	asked, _ := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.ID == q.ID })
+	a, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindQuestion, Body: "yes, deploy", ReplyTo: q.LID, PID: pid, Target: asked.Target, Followup: follow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, w.alice, conv, a.ID)
+	if n := len(st.runs()); n != 1 || pool.spawns.Load() != 1 {
+		t.Fatalf("the linked answer started another process: %d runs, %d spawns", n, pool.spawns.Load())
+	}
+	if r2 := sessionOf(t, w.bob, a.ID); r2 == nil || r2.ID != ref.ID {
+		t.Fatalf("linked answer's session %+v, want %s", r2, ref.ID)
+	}
+	if !strings.Contains(st.prompt(), "yes, deploy") {
+		t.Fatalf("the live process did not get the answer: %q", st.prompt())
+	}
+}
+
+// AgentNet's own stop (its words, not the agent's question) is not a
+// clean turn to keep: no warm worker, and the next message does not
+// resume that uncertain session.
+func TestWarmWorkerNotKeptForAgentNetStop(t *testing.T) {
+	st, w, conv, pid := warmFixture(t, "claude", "0")
+	t.Setenv("AGENTNET_NATIVE_STUB_ANSWER", needsHumanMarker+"\n"+nativeStatusPrefix+"the harness asked for a native approval\n")
+	pool := warmPoolOf(t, w.bob)
+	q1 := convAsk(t, w.alice, conv, pid, "ship it")
+	eventually(t, "the request waits for its person", func() bool { return inboxRow(t, w.bob, q1).State == stateNeedHuman })
+	time.Sleep(200 * time.Millisecond)
+	if n := pool.idleCount(); n != 0 {
+		t.Fatalf("AgentNet's own stop kept %d warm workers", n)
+	}
+	ref := sessionOf(t, w.bob, q1)
+	q2 := convAsk(t, w.alice, conv, pid, "next")
+	if n := len(st.runs()); n != 2 {
+		t.Fatalf("runs %d, want a new process", n)
+	}
+	if r2 := sessionOf(t, w.bob, q2); ref != nil && r2 != nil && r2.ID == ref.ID {
+		t.Fatalf("the uncertain session %s was resumed", ref.ID)
 	}
 }
 

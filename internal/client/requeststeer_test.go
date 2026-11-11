@@ -71,7 +71,10 @@ type refusedFollowup struct {
 
 func (b refusedFollowup) followupReady() <-chan struct{}               { return b.ready }
 func (b refusedFollowup) steer(context.Context, string, string) string { return b.outcome }
-func TestStrictSteerRefusalNeverRestoresQueue(t *testing.T) {
+// MEL-745: a steer the run did not take (queued or unsupported) stays queued
+// as the person's next turn, never a needs_human dead end; one whose native
+// acceptance is unknown may have been consumed and is never replayed.
+func TestStrictSteerRefusalQueuesNextTurn(t *testing.T) {
 	for _, outcome := range []string{steerQueued, steerUnsupported, steerUnknown} {
 		t.Run(outcome, func(t *testing.T) {
 			a, parent, id := strictCorrection(t)
@@ -79,11 +82,20 @@ func TestStrictSteerRefusalNeverRestoresQueue(t *testing.T) {
 			close(ready)
 			a.watchNativeFollowups(t.Context(), parent, refusedFollowup{ready, outcome}, nil)
 			state, err := a.store.jobState(id)
-			if err != nil || state != stateNeedHuman {
-				t.Fatal(state, err)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
-				t.Fatal("uncertain/refused replay", found, err)
+			if outcome == steerUnknown {
+				if state != stateNeedHuman {
+					t.Fatal("uncertain steer not held", state)
+				}
+				if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+					t.Fatal("uncertain replay", found, err)
+				}
+				return
+			}
+			if state == stateNeedHuman || state == stateRunning {
+				t.Fatal("a steer the run did not take is not queued", state)
 			}
 		})
 	}

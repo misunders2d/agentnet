@@ -67,6 +67,10 @@ type sessionRef struct {
 	Scope    string   `json:"scope,omitempty"`    // conversation/participation/topic of a chat's agent
 	Person   string   `json:"person,omitempty"`   // the verified asker within Scope
 	Audience []string `json:"audience,omitempty"` // who sees its answers, sorted
+	// Asked: the job's turn ended cleanly with the agent's own question to
+	// its person (markAgentAsked). The person's answer continues this
+	// session (MEL-746); nothing else that stopped a job does.
+	Asked bool `json:"asked,omitempty"`
 }
 
 // sessionPlan is how one job runs.
@@ -119,7 +123,7 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 	var note string
 	switch {
 	case at == "":
-	case at == j.ID:
+	case at == j.ID && !(prev.Asked && a.store.continuesAnswer(j.ID)):
 		note = "this job is being run again, so the session of its earlier attempt was not reused"
 	case j.Receiver == nil && prev.Agent != want.Agent:
 		note = "the earlier session of this conversation was not reused: it belonged to another agent"
@@ -133,7 +137,10 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: it was a %s-mode session and this is a %s", prev.Mode, want.Mode)
 	case prev.Dir != want.Dir || prev.Preset != want.Preset:
 		note = "the earlier session of this conversation was not reused: the responder's directory, flags or program changed since"
-	case state != stateAnswered && state != stateSummary && state != stateContinued:
+	// The agent's own question to its person ends a completed native turn:
+	// the person's answer (a new message, or the linked reply that resolves
+	// it) continues that session (MEL-746). AgentNet's own stops do not.
+	case at != j.ID && state != stateAnswered && state != stateSummary && state != stateContinued && !((state == stateNeedHuman || state == stateResolved) && prev.Asked):
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: its last job ended as %q, so its state is uncertain", state)
 	case a.store.sessionHead(prev) != at:
 		note = "the earlier session of this conversation was not reused: a later job has run in it since, or its latest job is unknown"
@@ -306,9 +313,8 @@ func (s *store) scopeSessionAncestor(want sessionRef, current string) (ref sessi
 	if err != nil {
 		return ref, "", "", err
 	}
-	if id == current {
-		return ref, "", id, nil // this job is being run again
-	}
+	// id == current: this job is being run again; its own session is
+	// returned for the caller's rerun rule (a continuation may resume it).
 	var raw sql.NullString
 	err = s.db.QueryRow(`SELECT session_ref, state FROM inbox WHERE id = ?`, id).Scan(&raw, &state)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !raw.Valid {
@@ -321,6 +327,20 @@ func (s *store) scopeSessionAncestor(want sessionRef, current string) (ref sessi
 		return sessionRef{}, "unreadable", id, nil // not reusable
 	}
 	return ref, state, id, nil
+}
+
+// markAgentAsked records on job id's saved session that its turn ended
+// cleanly with the agent's own question to its person.
+func (s *store) markAgentAsked(id string) error {
+	_, err := s.db.Exec(`UPDATE inbox SET session_ref = json_set(session_ref, '$.asked', json('true')) WHERE id = ? AND state = ? AND session_ref IS NOT NULL AND json_valid(session_ref)`, id, stateRunning)
+	return err
+}
+
+// continuesAnswer reports whether request id runs again because its person
+// answered its previous attempt (continueRequestIn).
+func (s *store) continuesAnswer(id string) bool {
+	var n int
+	return s.db.QueryRow(`SELECT count(*) FROM request_continuations c JOIN inbox i ON i.id=c.request AND c.attempt=i.attempts-1 WHERE c.request=?`, id).Scan(&n) == nil && n > 0
 }
 
 // withoutFlags returns args without the given value-less flags.

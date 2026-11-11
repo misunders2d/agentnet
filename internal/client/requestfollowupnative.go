@@ -350,12 +350,9 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 				}
 				_ = a.endJob(correction.ID, stateSteered, "Accepted into the exact current native run; its work is not yet proven complete", correction.nativeAttempt)
 			case steerQueued, steerUnsupported:
-				selected, e := storedRequestFollowup(a.store.db, "in", correction.ID)
-				if e != nil || selected != nil && selected.Attempt > 0 {
-					_ = a.endJob(correction.ID, stateNeedHuman, "Not applied to the selected run; explicit steering cannot become queued work", correction.nativeAttempt)
-					return
-				}
-				// Explicitly no handover: restore only our running claim. A concurrent
+				// Not taken by the live run: it stays queued as the person's next
+				// turn once this run ends (MEL-745), never a dead end. Explicitly no
+				// handover: restore only our running claim. A concurrent
 				// cancellation is never undone, and ordinary admission still governs it.
 				_, err = a.store.db.Exec(`UPDATE inbox SET state=?,detail='Queued; not accepted into the native run' WHERE id=? AND state=? AND attempts=?`, correction.queuedState, correction.ID, stateRunning, correction.nativeAttempt)
 				if err == nil {

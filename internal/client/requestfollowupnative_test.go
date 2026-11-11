@@ -645,23 +645,40 @@ func TestDirectNativeFollowupPrewriteFences(t *testing.T) {
 	}
 }
 
-func TestDirectStrictFollowupNeverLaunchesFallback(t *testing.T) {
-	for _, mode := range []string{"ended", "cancelled", "changed", "unsupported", "unknown"} {
-		t.Run(mode, func(t *testing.T) {
+// MEL-745 (owner, 2026-11-03, superseding MEL-591's "no queued fallback"):
+// a person's steer that misses its exact run (the run ended, or its bridge
+// could not take input) reaches the agent as its next turn, run exactly
+// once, never a needs_human dead end. Work the person cancelled is not
+// continued by it, and a steer whose native acceptance is unknown (it may
+// have been consumed) is never replayed.
+func TestDirectMissedSteerRunsOnceAsNextTurn(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		runs int
+		want string
+	}{
+		{"ended", 1, stateAnswered}, {"changed", 1, stateAnswered}, {"unsupported", 1, stateAnswered},
+		{"cancelled", 0, stateNeedHuman}, {"unknown", 0, stateNeedHuman},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
 			st := installStub(t, "answer")
 			a, _, parent, id := directNativeCorrection(t, false, envelope.KindQuestion)
-			if mode == "unsupported" || mode == "unknown" {
+			if tc.mode == "unsupported" || tc.mode == "unknown" {
 				ready := make(chan struct{})
 				close(ready)
 				outcome := steerUnsupported
-				if mode == "unknown" {
+				if tc.mode == "unknown" {
 					outcome = steerUnknown
 				}
 				a.watchNativeFollowups(t.Context(), parent, refusedFollowup{ready, outcome}, nil)
-				waitState(t, a, id, stateNeedHuman)
+				if tc.mode == "unknown" {
+					waitState(t, a, id, stateNeedHuman)
+				} else if s := jobState(t, a, id); s == stateNeedHuman {
+					t.Fatalf("a steer the run could not take dead-ended: %s", s)
+				}
 			}
 			state := stateAnswered
-			if mode == "cancelled" {
+			if tc.mode == "cancelled" {
 				state = stateCancelled
 			}
 			if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=2 WHERE id=?`, state, parent.ID); err != nil {
@@ -674,10 +691,10 @@ func TestDirectStrictFollowupNeverLaunchesFallback(t *testing.T) {
 			if found {
 				a.runJob(tctx(t), child, &Responder{Harness: "stub", Dir: st.dir, Timeout: time.Second}, nil)
 			}
-			if st.count() != 0 {
-				t.Fatal("strict correction launched fresh process", mode, st.count())
+			if st.count() != tc.runs {
+				t.Fatalf("the missed steer ran %d time(s), want %d", st.count(), tc.runs)
 			}
-			waitState(t, a, id, stateNeedHuman)
+			waitState(t, a, id, tc.want)
 		})
 	}
 }

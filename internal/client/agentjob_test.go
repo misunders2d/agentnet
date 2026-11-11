@@ -34,6 +34,7 @@ sleep) touch "$AGENT_LOG.started"; sleep 30 & wait; printf 'late reply\nemotion:
 propose) printf 'AGENTNET: PROPOSE-TASK\nRestart the deploy from step 3.\nemotion: calm\n' ;;
 echo) printf '%s\nemotion: calm\n' "$AGENT_ANSWER" ;;
 needs) printf 'AGENTNET: NEEDS-HUMAN\nWhich carrier should I book?\n' ;;
+needsfeel) printf 'AGENTNET: NEEDS-HUMAN\nWhich carrier should I book?\n\nemotion: focused\n' ;;
 esac
 `
 

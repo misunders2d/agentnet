@@ -897,21 +897,10 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		a.endJob(j.ID, stateJobFailed, body+"\n(nothing was sent to the conversation)", j.nativeAttempt)
 		return
 	}
-	text, emotion, ok := splitEmotion(body)
-	if !ok {
-		// A missing or malformed emotion line is not a decision for a person
-		// (MEL-434): the reply goes out shown neutral, an unreadable emotion
-		// line dropped from it.
-		text, emotion = strings.TrimSpace(body), "neutral"
-		if i := strings.LastIndexByte(text, '\n'); i >= 0 && strings.HasPrefix(strings.ToLower(strings.TrimSpace(text[i+1:])), "emotion:") {
-			text = strings.TrimSpace(text[:i])
-		} else if strings.HasPrefix(strings.ToLower(text), "emotion:") && !strings.Contains(text, "\n") {
-			text = ""
-		}
-		if text == "" {
-			a.endJob(j.ID, stateJobFailed, "the agent produced no reply text", j.nativeAttempt)
-			return
-		}
+	text, emotion := replyEmotion(body)
+	if text == "" {
+		a.endJob(j.ID, stateJobFailed, "the agent produced no reply text", j.nativeAttempt)
+		return
 	}
 	var reacted *reactionChoice
 	if only := reactionOnly(text); only != nil && status == envelope.StatusDone {
@@ -973,7 +962,15 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 // message is the attention (unread, badge, alert where it arrives), so the
 // host adds no attention mark of its own (needsHumanUnread).
 func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, rest string) {
-	text := strings.TrimSpace(rest)
+	// The agent's own trailers are parsed as in finishAgent (MEL-772): its
+	// emotion goes with the reply, its reaction on the asked message, and
+	// neither shows as text. A question never closes its topic.
+	text, emotion := replyEmotion(rest)
+	text, choice, _ := splitTrailers(text, envelope.StatusProposal)
+	if text == "" {
+		text, emotion, choice = strings.TrimSpace(rest), "neutral", nil
+	}
+	rest = text // the recorded clarification is the question itself
 	if mention := a.askerMention(j, text, true); mention != "" {
 		text = mention + "\n\n" + text
 	}
@@ -1001,7 +998,7 @@ func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, 
 		return settleSteeringIn(tx, j.ID)
 	}
 	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: j.ID, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
-		Emotion: "neutral", PID: j.PID, Topic: topic, status: envelope.StatusNeedsHuman, claim: claim}) // not final: the host's needs_human state stays the request's word (convAnswer)
+		Emotion: emotion, PID: j.PID, Topic: topic, status: envelope.StatusNeedsHuman, claim: claim}) // not final: the host's needs_human state stays the request's word (convAnswer)
 	var hb *heldBack
 	switch {
 	case errors.As(err, &hb):
@@ -1013,7 +1010,25 @@ func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, 
 	default:
 		a.Logf("%s %s: needs its asker; asked in its conversation (reply %s %s)", j.Kind, j.ID, res.ID, res.State)
 		a.noteStatus(j.ID)
+		a.sendAssistantReaction(ctx, j, r.Harness, choice) // after the stored reply; failure changes nothing
 	}
+}
+
+// replyEmotion takes the agent's emotion line off its reply. A missing or
+// malformed one is not a decision for a person (MEL-434): the reply is shown
+// neutral, an unreadable emotion line dropped from it. text is empty when
+// nothing else is left.
+func replyEmotion(body string) (text, emotion string) {
+	if text, emotion, ok := splitEmotion(body); ok {
+		return text, emotion
+	}
+	text = strings.TrimSpace(body)
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 && strings.HasPrefix(strings.ToLower(strings.TrimSpace(text[i+1:])), "emotion:") {
+		text = strings.TrimSpace(text[:i])
+	} else if strings.HasPrefix(strings.ToLower(text), "emotion:") && !strings.Contains(text, "\n") {
+		text = ""
+	}
+	return text, "neutral"
 }
 
 // splitEmotion takes the agent's emotion from the last line of its reply,
@@ -1540,7 +1555,7 @@ func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit 
 					line = who + ": " + shown
 				}
 			}
-		case msg.Replica:
+		case msg.Replica && !granted[ref]: // a copy its owner chose to share is context
 			c.Replicas++
 		case msg.Sub != "":
 			c.Events++

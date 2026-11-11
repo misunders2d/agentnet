@@ -337,3 +337,83 @@ func TestDMLiveExternalPeerContext(t *testing.T) {
 		t.Fatalf("captured queued replies lost request validation: held=%d wrapped=%d %v", held, wrapped, err)
 	}
 }
+
+// Owner, 2026-11-11: a message held here as a copy (an own agent's reply,
+// an own other device's message) that its owner chose to share when
+// bringing in an own agent is that agent's context, not a left-out copy.
+func TestGrantedCopyIsOwnHelperContext(t *testing.T) {
+	w, conv, lids, _ := agentWorld(t)
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET replica=1 WHERE conv=? AND lid=?`, conv, lids[0]); err != nil {
+		t.Fatal(err)
+	}
+	p, err := w.bob.InviteAgent(tctx(t), conv, w.bob.Address, []string{lids[0]}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := w.bob.ParticipationContext(p.PID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range c.Messages {
+		found = found || m.LID == lids[0]
+	}
+	if !found || c.Missing != 0 || c.Replicas != 0 {
+		t.Fatalf("the shared copy is not context: found=%v missing=%d replicas=%d", found, c.Missing, c.Replicas)
+	}
+}
+
+// The owner's journey (2026-11-11): a message typed on the person's phone is
+// held on their laptop as a copy. Sharing it from the laptop when bringing in
+// another host's agent gives that agent the message.
+func TestSharedOwnDeviceCopyReachesInvitedAgent(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone, awaited, _ := linkPhone(t, w.alice, "phone")
+	if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil {
+		t.Fatal(out.err)
+	}
+	runAgent(t, phone)
+	conv := newDM(t, w.bob, w.alice)
+	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "peer turn"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the peer turn on the phone", func() bool { return len(convBodies(t, phone, conv)) == 1 })
+	if _, err := phone.SendConv(tctx(t), conv, ConvOutgoing{Body: "SHARED_FROM_PHONE"}); err != nil {
+		t.Fatal(err)
+	}
+	var copy ConvMessage
+	eventually(t, "the laptop holds the phone's message", func() bool {
+		m, n := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.Body == "SHARED_FROM_PHONE" })
+		copy = m
+		return n == 1
+	})
+	if !copy.Replica {
+		t.Logf("fixture note: the phone's message is not held as a replica here (Via %q)", copy.Via)
+	}
+	p, err := w.alice.InviteAgent(tctx(t), conv, w.bob.Address, []string{copy.LID}, nil, "please look")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to see the invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
+	if _, err := w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the shared phone message is the agent's context", func() bool {
+		c, err := w.bob.ParticipationContext(p.PID, 0)
+		if err != nil || c.Missing != 0 {
+			return false
+		}
+		for _, m := range c.Messages {
+			if strings.Contains(m.Body, "SHARED_FROM_PHONE") {
+				return true
+			}
+		}
+		return false
+	})
+}

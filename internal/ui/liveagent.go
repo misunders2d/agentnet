@@ -616,7 +616,7 @@ func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
 	for _, id := range d.Share {
 		lid := ""
 		for _, m := range msgs {
-			if m.ID == id && m.Sub == "" && !m.Replica {
+			if m.ID == id && shareableMessage(m) {
 				lid = m.LID
 			}
 		}
@@ -628,6 +628,16 @@ func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
 	return l.agentResult(l.a.InviteAgentInScope(client.WithQueuedSend(ctx, ""), d.Conv, strings.TrimSpace(d.Host), d.AgentID, lids, d.TasksFrom, strings.TrimSpace(d.Note), d.Topic))
+}
+
+// shareableMessage: a message of this DM that can be shared with an invited
+// agent. Own other devices' and own agents' messages are held here as copies
+// (replicas): they are this DM's messages too (owner, 2026-11-11). Events,
+// deleted messages, excerpts given to another participation and history
+// copies (their authorship is only claimed by the device that synced them)
+// are not.
+func shareableMessage(m client.ConvMessage) bool {
+	return m.Sub == "" && m.ExcerptPID == "" && !m.History && !m.Deleted
 }
 
 // DecideAgent implements Participants.

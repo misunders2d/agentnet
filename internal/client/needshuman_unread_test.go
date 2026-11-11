@@ -236,3 +236,61 @@ func TestOwnAgentPastAnswerStaysReadAfterUpgrade(t *testing.T) {
 		t.Fatalf("the read is not a mark the person's other devices apply: %d %v", marks, err)
 	}
 }
+
+// MEL-772: the agent's question to its person carries the agent's own
+// emotion, and its emotion line never shows as message text.
+func TestNeedsHumanReplyCarriesAgentEmotion(t *testing.T) {
+	st := installAgentStub(t)
+	st.mode("needsfeel")
+	w, conv, lids, _ := agentWorld(t)
+	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:1], nil)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "book the shipment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans := replyAt(t, w.alice, conv, q.ID)
+	if strings.Contains(strings.ToLower(ans.Body), "emotion:") || !strings.HasSuffix(ans.Body, "Which carrier should I book?") {
+		t.Fatalf("the emotion line shows as text: %q", ans.Body)
+	}
+	if ans.Emotion != "focused" {
+		t.Fatalf("reply emotion %q, want the agent's focused", ans.Emotion)
+	}
+	var detail string
+	if err := w.bob.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=? AND state=?`, q.ID, stateNeedHuman).Scan(&detail); err != nil || detail != "Which carrier should I book?" {
+		t.Fatalf("recorded question %q %v", detail, err)
+	}
+}
+
+// MEL-774: the agent's question posted as its chat reply is the only thing
+// the host's person sees about it. The host's own devices get no separate
+// needs-you report repeating it; one not posted in chat still reaches them.
+func TestNeedsHumanInChatNotRepeatedAsOwnReport(t *testing.T) {
+	st := installAgentStub(t)
+	st.mode("needs")
+	w, conv, lids, _ := agentWorld(t)
+	phone := linked(t, w.bob)
+	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:1], nil)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "book the shipment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, w.alice, conv, q.ID)
+	waitState(t, w.bob, q.ID, stateNeedHuman)
+	told := func(id string) int {
+		var n int
+		w.bob.store.db.QueryRow(`SELECT count(*) FROM reported WHERE item=? AND recipient=?`, id, phone.Address).Scan(&n)
+		return n
+	}
+	w.bob.sendReviewNoticeInPass(tctx(t))
+	if n := told(q.ID); n != 0 {
+		t.Fatalf("the question posted in chat was also reported to the host's phone (%d)", n)
+	}
+	// Control: the same question without its chat reply is reported.
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET result_id=NULL WHERE id=?`, q.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.bob.sendReviewNoticeInPass(tctx(t))
+	eventually(t, "the unposted question reported to the phone", func() bool { return told(q.ID) == 1 })
+}

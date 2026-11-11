@@ -740,12 +740,20 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			return "", err
 		}
 		refreshRequest = actualRequest // exact request found after current operator/own-human checks
+		if d.Action == "cancel" && d.Expect == stateRunning && state == stateHelpersWaiting && attempts == d.Attempt {
+			// Stop on the same attempt, now parked waiting for other agents'
+			// results: it has no process, so it stops at once (Cancel).
+			d.Expect = stateHelpersWaiting
+		}
 		if state != d.Expect || attempts != d.Attempt {
 			return fmt.Sprintf("the request is no longer as you saw it (now %s, attempt %d)", state, attempts), nil
 		}
 		expectedOwnState := stateNeedHuman
 		if d.Action == "cancel" {
 			expectedOwnState = stateRunning
+			if d.Expect == stateHelpersWaiting {
+				expectedOwnState = stateHelpersWaiting
+			}
 		}
 		if ownerDecision && (d.Expect != expectedOwnState || d.Attempt < 1 || kind != envelope.KindQuestion && kind != envelope.KindTask) {
 			return "choose the exact waiting request and attempt", nil
@@ -802,8 +810,11 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			change = `UPDATE inbox SET state = ?` + where + ` AND state = ?`
 			args = []any{stateNeedHuman}
 		case "cancel":
-			change = `UPDATE inbox SET state = ?` + where + ` AND state = ?`
-			args = []any{stateRunning}
+			// A running request asks its process to stop; one parked waiting for
+			// other agents' results has none and stops here (helperwait.go).
+			change = `UPDATE inbox SET state = CASE state WHEN '` + stateHelpersWaiting + `' THEN '` + stateCancelled + `' ELSE '` + stateCancelReq + `' END,
+				detail = CASE state WHEN '` + stateHelpersWaiting + `' THEN 'stopped while waiting for other agents'' results' ELSE detail END` + where + ` AND state IN (?, ?)`
+			args = []any{stateRunning, stateHelpersWaiting}
 		case "decline":
 			change = `UPDATE inbox SET state = ?, responder = 'manual'` + where + ` AND conv IS NOT NULL AND pid IS NOT NULL AND replica = 0 AND kind IN (?, ?) AND state = ?`
 			args = []any{envelope.KindQuestion, envelope.KindTask, stateAwaiting}
