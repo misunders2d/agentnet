@@ -991,13 +991,22 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		// The agent's own question to its person ended its turn cleanly: its
 		// warm worker stays for the answer (MEL-746). AgentNet's own
 		// needs_human words (a native approval, an owned session) do not.
-		endWarm(cleanTurn && rest != "" && !strings.HasPrefix(rest, nativeStatusPrefix))
+		asked := cleanTurn && rest != "" && !strings.HasPrefix(rest, nativeStatusPrefix)
+		if asked {
+			if err := a.store.markAgentAsked(j.ID); err != nil {
+				a.Logf("%s %s: its session could not be kept for the answer: %v", j.Kind, j.ID, err)
+			}
+		}
+		endWarm(asked)
 		if rest == "" {
 			rest = r.Harness + " said this needs your decision but gave no reason"
 		}
 		if j.PID != "" && j.Receiver == nil && !j.followUp() {
 			a.finishAgentNeedsHuman(ctx, j, r, rest) // the agent's chat message
 			return
+		}
+		if text, _ := replyEmotion(rest); text != "" {
+			rest = text // the agent's emotion line is not part of its question (MEL-772)
 		}
 		a.endJob(j.ID, stateNeedHuman, rest, j.nativeAttempt)
 		if state, _ := a.store.jobState(j.ID); state == stateNeedHuman {

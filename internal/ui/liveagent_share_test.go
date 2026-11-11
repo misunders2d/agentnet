@@ -19,6 +19,7 @@ func TestShareableMessageIncludesOwnCopies(t *testing.T) {
 		{"own agent's reply held as a copy", client.ConvMessage{Replica: true, VerifiedAgent: true}, true},
 		{"own other device's message", client.ConvMessage{Replica: true}, true},
 		{"excerpt shared with another agent", client.ConvMessage{Replica: true, ExcerptPID: "p"}, false},
+		{"history copy", client.ConvMessage{Replica: true, History: true}, false},
 		{"participation event", client.ConvMessage{Sub: "event"}, false},
 		{"deleted", client.ConvMessage{Controls: client.Controls{Deleted: true}}, false},
 	} {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -203,6 +204,42 @@ func TestWarmWorkerKeptThroughContinueAnswer(t *testing.T) {
 	}
 	if r2 := sessionOf(t, w.bob, q1); r2 == nil || r2.ID != ref.ID {
 		t.Fatalf("continued session %+v, want %s", r2, ref.ID)
+	}
+	if !strings.Contains(st.prompt(), "yes, deploy") {
+		t.Fatalf("the live process did not get the answer: %q", st.prompt())
+	}
+}
+
+// The same, answered by the person's exact linked reply to the request (the
+// composer's tagged follow-up, MEL-497): it continues the kept session in
+// the live process.
+func TestWarmWorkerKeptThroughLinkedReply(t *testing.T) {
+	st, w, conv, pid := warmFixture(t, "claude", "0")
+	t.Setenv("AGENTNET_NATIVE_STUB_ANSWER", needsHumanMarker+"\nApprove the deploy?\n\nemotion: focused\n")
+	pool := warmPoolOf(t, w.bob)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "ship it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, w.alice, conv, q.ID)
+	eventually(t, "the request waits for its person", func() bool { return inboxRow(t, w.bob, q.ID).State == stateNeedHuman })
+	eventually(t, "the worker kept warm after its question", func() bool { return pool.idleCount() == 1 })
+	ref := sessionOf(t, w.bob, q.ID)
+	if ref == nil || ref.ID == "" {
+		t.Fatalf("no saved session: %+v", ref)
+	}
+	follow := &envelope.FollowupRef{Ref: envelope.Ref{ID: q.LID, Fingerprint: w.alice.Self().Fingerprint()}}
+	asked, _ := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.ID == q.ID })
+	a, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindQuestion, Body: "yes, deploy", ReplyTo: q.LID, PID: pid, Target: asked.Target, Followup: follow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, w.alice, conv, a.ID)
+	if n := len(st.runs()); n != 1 || pool.spawns.Load() != 1 {
+		t.Fatalf("the linked answer started another process: %d runs, %d spawns", n, pool.spawns.Load())
+	}
+	if r2 := sessionOf(t, w.bob, a.ID); r2 == nil || r2.ID != ref.ID {
+		t.Fatalf("linked answer's session %+v, want %s", r2, ref.ID)
 	}
 	if !strings.Contains(st.prompt(), "yes, deploy") {
 		t.Fatalf("the live process did not get the answer: %q", st.prompt())

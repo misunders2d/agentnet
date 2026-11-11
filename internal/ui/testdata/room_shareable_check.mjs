@@ -20,6 +20,7 @@ const msgs=[
   {id:'other-agent',body:'David’s Codex answered',origin:'agent:codex'},
   {id:'excerpt',body:'An excerpt shared with a guest',excerpt_pid:'p1',replica:true},
   {id:'old-dm',body:'From an earlier DM',other_dm:true},
+  {id:'synced',body:'A history copy',replica:true,synced_from:'admin/phone'},
   {id:'event',body:'joined',event:'joined'},
   {id:'gone',body:'deleted',deleted:true},
 ];

@@ -1717,7 +1717,7 @@ type ParticipationContext struct {
 	Grant     []protocol.GrantRef `json:"grant"`     // as invited
 	Bytes     int                 `json:"bytes"`     // bytes of the messages as rendered for the agent
 	Limit     int                 `json:"limit"`     // the bound used
-	Replicas  int                 `json:"replicas"`  // history copies left out (never context)
+	Replicas  int                 `json:"replicas"`  // copies not chosen for it, left out
 	Events    int                 `json:"events"`    // event messages left out (records, not context)
 	Unrelated int                 `json:"unrelated"` // other messages of the DM left out (not granted, not addressed)
 

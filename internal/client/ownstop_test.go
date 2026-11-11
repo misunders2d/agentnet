@@ -254,7 +254,13 @@ func TestOwnHumanStopParkedForHelpers(t *testing.T) {
 	}
 	stop(1)
 	waitState(t, w.alice, q.ID, stateCancelled)
-	if st.count() != 1 {
-		t.Fatal("request rerun")
+	// The helper's late result wakes nothing: the stopped request stays stopped.
+	if _, err = w.alice.store.db.Exec(`DELETE FROM outbox WHERE id=?`, child); err != nil {
+		t.Fatal(err)
+	}
+	w.alice.wakeParkedRequests()
+	time.Sleep(500 * time.Millisecond)
+	if s := jobState(t, w.alice, q.ID); s != stateCancelled || st.count() != 1 {
+		t.Fatalf("the stopped request ran again after its helper finished: %s, %d runs", s, st.count())
 	}
 }
