@@ -210,6 +210,10 @@ program, `agentnet`, that is both the laptop client and the Hub.
   three sequential partitions (owner-approved October 22, 2026). Focused UI
   reruns use `scripts/race-shard.sh ui-0`, `ui-1` and `ui-2`; UI always has
   three partitions, independent of the client count.
+  CI runs `others` as two parallel jobs: `others-0` (the remaining packages
+  and both cmd partitions) and `others-1` (the three UI partitions); together
+  they run exactly `others`. CI's native job runs `go test` while
+  `native-rendered` runs the browser-rendered checks on the same three OSes.
   The older four/six/twelve/eighteen partitions outgrew that bound; do not reuse their
   obsolete duration estimates or raise timeouts to make a run fit. Retain passing
   unchanged partitions when correcting a failure. Native Windows client

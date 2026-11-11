@@ -71,6 +71,13 @@ on:
         default: false
 permissions:
   contents: read
+# A newer push to a pull request cancels that PR's older run. Each run holds
+# about 40 jobs while the account's runner pool is 20, so stale runs only
+# delay the current one. Push and manual runs get a group per run and are
+# never cancelled: main keeps a result for every commit.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('go-pr-{0}', github.event.pull_request.number) || format('go-run-{0}', github.run_id) }}
+  cancel-in-progress: true
 jobs:
   native:
     if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.race_shards && !inputs.windows_client_partitions }}
@@ -103,6 +110,55 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           node -e "require('./node_modules/esbuild').transformSync('')"
       - run: go vet ./...
+      # Expanded suite needs time on slow CI disks; individual assertions stay bounded.
+      - name: test (real binaries and processes on this OS)
+        shell: bash
+        env:
+          AGENTNET_TEST_PACKAGES: ${{ inputs.test_packages || './...' }}
+          AGENTNET_TEST_RUN: ${{ inputs.test_run || '.' }}
+          AGENTNET_TEST_COUNT: ${{ inputs.test_count || '1' }}
+          AGENTNET_FULL_NATIVE: ${{ !inputs.test_packages && !inputs.test_run }}
+          AGENTNET_REQUIRE_COMPAT: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
+        run: |
+          read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
+          if [[ "$RUNNER_OS" == Windows && "$AGENTNET_FULL_NATIVE" == true ]]; then
+            # The windows-client matrix owns this package in full qualification.
+            other_packages=$(go list ./... | awk '!/\/internal\/client$/')
+            mapfile -t packages <<< "$other_packages"
+          fi
+          go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
+  # Browser-rendered checks on each OS, in parallel with the native test step
+  # (each half took about 15-20 minutes in one job).
+  native-rendered:
+    if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.race_shards && !inputs.windows_client_partitions && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.native_os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Native checks use published source too: the Linux mixed-version
+      # gate builds a release tag, and browser wire compatibility executes
+      # the published parser on every OS.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Browser wire tests need WebCrypto; Pi extension tests load TypeScript.
+      # Do not let the runner's default Node silently skip these checks.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - name: pinned UI test tooling
+        if: ${{ !inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui') }}
+        working-directory: internal/ui/web
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node -e "require('./node_modules/esbuild').transformSync('')"
       - name: rendered interaction recovery (1 of 2)
         if: ${{ (!inputs.test_run || contains(inputs.test_run, 'Rendered')) && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
@@ -175,23 +231,6 @@ jobs:
           name: macos-message-controls
           path: ${{ runner.temp }}/agentnet-macos-controls.png
           if-no-files-found: ignore
-      # Expanded suite needs time on slow CI disks; individual assertions stay bounded.
-      - name: test (real binaries and processes on this OS)
-        shell: bash
-        env:
-          AGENTNET_TEST_PACKAGES: ${{ inputs.test_packages || './...' }}
-          AGENTNET_TEST_RUN: ${{ inputs.test_run || '.' }}
-          AGENTNET_TEST_COUNT: ${{ inputs.test_count || '1' }}
-          AGENTNET_FULL_NATIVE: ${{ !inputs.test_packages && !inputs.test_run }}
-          AGENTNET_REQUIRE_COMPAT: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
-        run: |
-          read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
-          if [[ "$RUNNER_OS" == Windows && "$AGENTNET_FULL_NATIVE" == true ]]; then
-            # The windows-client matrix owns this package in full qualification.
-            other_packages=$(go list ./... | awk '!/\/internal\/client$/')
-            mapfile -t packages <<< "$other_packages"
-          fi
-          go test -count="$AGENTNET_TEST_COUNT" -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
   # Each Windows client partition owns a runner: simultaneous test binaries on
   # one Windows disk exhausted 1800s even before the responsiveness changes.
   windows-client:
@@ -217,20 +256,21 @@ jobs:
           AGENTNET_NATIVE_PARTITION: ${{ matrix.partition }}
         run: bash scripts/native-client-shard.sh "$AGENTNET_NATIVE_PARTITION" 6
   # The race suite on Linux, split over parallel runners: internal/client's
-  # tests in bounded client shards, every other package in one. Focused
+  # tests in bounded client shards; every other package in others-0 (with the
+  # cmd partitions) and others-1 (the UI partitions), together exactly "others". Focused
   # dispatch retains passing evidence when only some shards need a rerun.
   race:
     if: ${{ !inputs.windows_task_probe && !inputs.platform_only && !inputs.windows_client_partitions && (inputs.race_shards || (!inputs.test_packages && !inputs.test_run)) }}
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","client-12","client-13","client-14","client-15","client-16","client-17","client-18","client-19","client-20","client-21","client-22","client-23","others"]') }}
+        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","client-12","client-13","client-14","client-15","client-16","client-17","client-18","client-19","client-20","client-21","client-22","client-23","others-0","others-1"]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           # UI wire compatibility runs the actual published browser parser.
-          fetch-depth: ${{ (matrix.shard == 'others' || startsWith(matrix.shard, 'cmd-') || startsWith(matrix.shard, 'ui-')) && '0' || '1' }}
+          fetch-depth: ${{ (startsWith(matrix.shard, 'others') || startsWith(matrix.shard, 'cmd-') || startsWith(matrix.shard, 'ui-')) && '0' || '1' }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -239,7 +279,7 @@ jobs:
           node-version: '26'
           package-manager-cache: false
       - name: pinned UI test tooling
-        if: matrix.shard == 'others' || startsWith(matrix.shard, 'cmd-') || startsWith(matrix.shard, 'ui-')
+        if: startsWith(matrix.shard, 'others') || startsWith(matrix.shard, 'cmd-') || startsWith(matrix.shard, 'ui-')
         working-directory: internal/ui/web
         shell: bash
         run: |
@@ -250,7 +290,7 @@ jobs:
           AGENTNET_RACE_SHARD: ${{ matrix.shard }}
         run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 24
       - name: browser storage (real IndexedDB, headless)
-        if: matrix.shard == 'others' || matrix.shard == 'ui-1'
+        if: matrix.shard == 'others' || matrix.shard == 'others-0' || matrix.shard == 'ui-1'
         shell: bash
         run: |
           export AGENTNET_CHROME="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium)"
