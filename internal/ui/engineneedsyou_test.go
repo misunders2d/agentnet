@@ -174,47 +174,41 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	w.until("the laptop's agent active in the browser", func() bool { a := agent(inv.PID); return a != nil && a["can_ask"] == true })
 	askedResult := w.api("/api/dm/agent/ask", map[string]any{"pid": inv.PID, "body": "deploy now?"})
 	asked := askedResult["id"].(string)
-	privateText := "Request: deploy now?\n\nAgent response:\n" + agentText
-	w.until("the laptop's full private needs-human text", func() bool { it := item(client.ReviewNeedsHuman); return it != nil && it["why"] == privateText })
-	it = item(client.ReviewNeedsHuman)
-	phoneKey := w.api("/api/overview", nil)["me"].(map[string]any)["fingerprint"].(string)
-	nativeTurn := goMessage(laptop, conv, "deploy now?")
-	before, err := laptop.ContinuationFor(nativeTurn.ID, "", nil)
-	if err != nil || before == nil || before.Attempt != 1 || before.Host != "" || before.Key != phoneKey {
-		t.Fatalf("host's waiting attempt: %+v %v", before, err)
+	// The agent's question is its chat reply (finishAgentNeedsHuman): the
+	// browser shows that message and no separate needs-you item repeating
+	// it (MEL-774, owner 2026-11-11).
+	reply := func() map[string]any {
+		rows := w.api("/api/dm?id="+conv, nil)["messages"].([]any)
+		for _, value := range rows {
+			row := value.(map[string]any)
+			if row["kind"] != envelope.KindAnswer {
+				continue
+			}
+			for _, q := range rows {
+				if q := q.(map[string]any); q["body"] == "deploy now?" && (row["reply_to"] == q["id"] || row["reply_to"] == q["lid"]) {
+					return row
+				}
+			}
+		}
+		return nil
 	}
+	w.until("the agent's question as its chat reply", func() bool { r := reply(); return r != nil && strings.HasSuffix(r["body"].(string), agentText) })
+	var nativeTurn client.ConvMessage
+	w.until("the request on the laptop", func() bool { nativeTurn = goMessage(laptop, conv, "deploy now?"); return nativeTurn.ID != "" })
 	if askedResult["lid"] != nativeTurn.LID {
 		t.Fatalf("sent logical request differs from its native copy: sent %v native %s", askedResult["lid"], nativeTurn.LID)
 	}
-	// A logical turn has several transport copies. Compare Review with the
-	// exact canonical row this conversation displays, still bound to its author.
-	dm := w.api("/api/dm?id="+conv, nil)
-	var phoneTurn map[string]any
-	for _, value := range dm["messages"].([]any) {
-		row := value.(map[string]any)
-		if row["lid"] == nativeTurn.LID && row["send_group_author"] == phoneKey {
-			if phoneTurn != nil {
-				t.Fatal("the exact logical request has duplicate displayed rows")
-			}
-			phoneTurn = row
-		}
+	before, err := laptop.ContinuationFor(nativeTurn.ID, "", nil)
+	if err != nil || before == nil || before.Attempt != 1 || before.Host != "" {
+		t.Fatalf("host's waiting attempt: %+v %v", before, err)
 	}
-	target, _ := phoneTurn["target"].(map[string]any)
-	if dm["id"] != conv || phoneTurn == nil || phoneTurn["dir"] != "out" || phoneTurn["pid"] != inv.PID || phoneTurn["topic"] != "" || phoneTurn["kind"] != envelope.KindQuestion || phoneTurn["body"] != "deploy now?" || target["address"] != laptop.Address || target["fingerprint"] != laptop.Self().Fingerprint() {
-		t.Fatalf("canonical request lost its exact author, logical identity or scope: %v", phoneTurn)
-	}
-	wantContinuation := map[string]any{"id": nativeTurn.LID, "key": phoneKey, "host": laptop.Address, "attempt": float64(before.Attempt)}
-	decisionActions, _ := it["actions"].([]any)
-	t.Logf("needs-you identity diagnostic: first transport=%v send LID=%v native ID=%v native LID=%v display ID=%v expected continuation=%v actual continuation=%v", asked, askedResult["lid"], nativeTurn.ID, nativeTurn.LID, it["id"], wantContinuation, it["continuation"])
-	if it["conv"] != conv || it["pid"] != inv.PID || it["id"] != phoneTurn["id"] || it["kind"] != envelope.KindQuestion || it["excerpt"] != "deploy now?" ||
-		it["decide_on"] != laptop.Address || !slices.Equal(decisionActions, []any{DoContinue}) || !reflect.DeepEqual(it["continuation"], wantContinuation) || it["why"] != privateText {
-		t.Fatalf("needs-human in the browser: %v", it)
-	}
-	// The action remains bound to the host's exact request/key/attempt;
-	// displaying it does not run or accept anything on either device.
-	turnActions, hasActions := phoneTurn["actions"].([]any)
-	if phoneTurn == nil || phoneTurn["job_detail"] != privateText || !hasActions || !slices.Equal(turnActions, []any{DoContinue}) || !reflect.DeepEqual(phoneTurn["continuation"], wantContinuation) {
-		t.Fatalf("phone lost full agent turn or gained actions: %v", phoneTurn)
+	// The laptop sends no needs-you report repeating the posted question:
+	// the browser's own status item (hidden by the page, Approvals.tsx) never
+	// carries the agent's text from a report.
+	time.Sleep(2 * time.Second) // a report would have arrived with the reply
+	privateText := "Request: deploy now?\n\nAgent response:\n" + agentText
+	if it := item(client.ReviewNeedsHuman); it != nil && it["why"] == privateText {
+		t.Fatalf("the question posted in chat was repeated by the laptop's report: %v", it)
 	}
 	w.refuses("accepting in the browser", w.call(map[string]any{"op": "api", "path": "/api/act", "body": map[string]any{"do": "accept", "id": asked}}), "Nothing runs in this browser")
 	m := goMessage(laptop, conv, "deploy now?")
