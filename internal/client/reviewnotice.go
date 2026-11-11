@@ -204,17 +204,18 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 	// marked needs_human, except review notices received from others and
 	// a person's DM turns (alertReviewStates: they follow the DM's alerts).
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, CASE WHEN state='running' THEN last_attempt_at ELSE received_at END, attempts, body, conv IS NOT NULL, coalesce(detail,'') FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
+	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, CASE WHEN state='running' THEN last_attempt_at ELSE received_at END, attempts, body, conv IS NOT NULL, coalesce(detail,''), coalesce(result_id,'') FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
 	if err != nil {
 		a.Logf("review notice: %v", err)
 		return
 	}
 	var items []ReportItem
 	agentText := map[string]string{}
+	inChat := map[string]bool{} // the agent's question, posted as its chat reply (finishAgentNeedsHuman)
 	for rows.Next() {
 		var it ReportItem
-		var detail string
-		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt, &it.Conv, &detail); err != nil {
+		var detail, result string
+		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt, &it.Conv, &detail, &result); err != nil {
 			rows.Close()
 			a.Logf("review notice: %v", err)
 			return
@@ -222,6 +223,7 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 		it.Blocker, it.Excerpt = blockerOf(it.Kind, it.State), firstLine(it.Excerpt)
 		if it.State == stateNeedHuman {
 			agentText[it.ID] = detail
+			inChat[it.ID] = it.Conv && result != ""
 		}
 		if it.State == stateRunning {
 			it.Excerpt = detail
@@ -260,7 +262,11 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 	for _, to := range recipients {
 		list := items
 		if isOwner[to] && !isOperator[to] {
-			list = slices.DeleteFunc(slices.Clone(items), func(it ReportItem) bool { return it.State != stateNeedHuman && it.Native == nil })
+			// The agent's question already posted in its chat is that chat's
+			// message there (MEL-774): no second needs-you report repeats it.
+			list = slices.DeleteFunc(slices.Clone(items), func(it ReportItem) bool {
+				return it.State != stateNeedHuman && it.Native == nil || inChat[it.ID] && it.Native == nil
+			})
 		}
 		if isOperator[to] {
 			// An operator device of an older version (v0.6.2) drops a whole
