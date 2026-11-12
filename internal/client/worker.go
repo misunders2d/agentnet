@@ -1478,11 +1478,20 @@ func proposePrompt(asker string) string {
 		"This only proposes that additional work: %s may confirm it as a task under the recipient's existing task policy and native permissions. Proposing unchanged work cannot fix a native permission denial or unavailable environment; use the clarification and permission rules below.\n", proposeMarker, asker)
 }
 
+// appUpdateClaimWait bounds how long an update waits out a claim scan.
+const appUpdateClaimWait = 2 * time.Second
+
 // PauseForAppUpdate refuses active work and fences new claims until resumed.
 // The owning desktop process holds this fence until its checked replacement.
 func (a *Agent) PauseForAppUpdate() (func(), error) {
-	if !a.appUpdateMu.TryLock() {
-		return nil, errors.New("A job is running. Wait for it to finish, then update again.")
+	// The scheduler holds a reader for a moment while it looks for the next
+	// claim (after every finished job too). Only a reserved job refuses.
+	deadline := time.Now().Add(appUpdateClaimWait)
+	for !a.appUpdateMu.TryLock() {
+		if !a.executorsIdle() || time.Now().After(deadline) {
+			return nil, errors.New("A job is running. Wait for it to finish, then update again.")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if pool := a.warm.Load(); pool != nil {
 		pool.discardIdle("the app is updating") // idle warm workers never block an update

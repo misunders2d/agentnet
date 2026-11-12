@@ -45,3 +45,36 @@ func TestAppUpdatePauseRefusesRunningAndFencesQueuedJobs(t *testing.T) {
 		t.Fatal("job claim crossed app update fence")
 	}
 }
+
+// The scheduler's claim scan after a finished job holds a reader for a
+// moment; an update at that moment with no reserved job must proceed, while a
+// reserved job still refuses at once (CI flake of TestWarmWorkerUpdateDiscardsIdle).
+func TestAppUpdatePauseWaitsOutClaimScan(t *testing.T) {
+	w := newWorld(t, "")
+	a := w.bob
+	a.appUpdateMu.RLock() // a claim scan in progress, nothing reserved
+	go func() { time.Sleep(50 * time.Millisecond); a.appUpdateMu.RUnlock() }()
+	resume, err := a.PauseForAppUpdate()
+	if err != nil {
+		t.Fatalf("update refused during a claim scan with no job: %v", err)
+	}
+	resume()
+
+	a.appUpdateMu.RLock()
+	defer a.appUpdateMu.RUnlock()
+	a.workerLanes.Lock()
+	if a.workerLanes.jobs == nil {
+		a.workerLanes.jobs = map[string]executionLane{}
+	}
+	a.workerLanes.jobs["running"] = executionLane{}
+	a.workerLanes.Unlock()
+	defer func() { a.workerLanes.Lock(); delete(a.workerLanes.jobs, "running"); a.workerLanes.Unlock() }()
+	start := time.Now()
+	if resume, err := a.PauseForAppUpdate(); err == nil {
+		resume()
+		t.Fatal("update allowed while a job is reserved")
+	}
+	if d := time.Since(start); d > appUpdateClaimWait/2 {
+		t.Fatalf("a running job's refusal waited %v", d)
+	}
+}
