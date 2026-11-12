@@ -48,7 +48,13 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   const seen = useRef<Set<string> | null>(null);
   const [fresh, setFresh] = useState(0);
   const [far, setFar] = useState(false);
-  const firstUnread = readVisit?.firstUnread;
+  const store = useApp();
+  // A cached copy shows while the fresh one loads (no read visit yet): its own
+  // first unread places the entry now; the visit's value replaces it (MEL-775).
+  const cachedUnread = useMemo(() => readVisit || focus ? undefined :
+    messages.find(m => "unread" in m && m.unread && store.canMarkUnread(m as T.DMMessage | T.Message))?.id, [readVisit, focus, messages]);
+  const firstUnread = readVisit ? readVisit.firstUnread : cachedUnread;
+  const provisional = useRef(false);
 
   const items = useMemo(() => build(messages, ctx, firstUnread), [messages, ctx, firstUnread]);
   const groups = useMemo(() => items.filter((it): it is Extract<Item, { type: "msg" }> => it.type === "msg"), [items]);
@@ -187,7 +193,22 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    if (!focus && !readVisit) return; // cached display cannot choose the entry's anchor
+    if (!focus && !readVisit) {
+      // The cached display cannot settle the entry (no read visit yet), but it
+      // already sits where the entry will: first unread, else the latest.
+      if (provisional.current || seen.current || !messages.length) return;
+      provisional.current = true;
+      const divider = firstUnread ? el.querySelector<HTMLElement>('[aria-label="Unread messages"]') : null;
+      if (divider) {
+        entryAnchor.current = { row: divider, offset: 0, scrollTop: el.scrollTop };
+        placeEntry(el);
+        atBottom.current = false;
+      } else {
+        el.scrollTop = el.scrollHeight;
+        atBottom.current = !hasLater;
+      }
+      return;
+    }
     retained.current = groups.slice(from, to).map(it => it.key);
     const saved = prependAnchor.current;
     prependAnchor.current = null;

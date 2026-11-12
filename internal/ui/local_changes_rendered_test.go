@@ -53,3 +53,16 @@ func TestReadScrollRendered(t *testing.T) {
 	}
 	t.Log(string(output))
 }
+
+// MEL-775: a reopened chat's cached copy already sits at the first unread
+// (or the latest) message while its fresh copy loads.
+func TestChatEntryCachedRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered chat entry checks")
+	}
+	output, err := exec.CommandContext(t.Context(), "node", "testdata/chat_entry_cached_rendered.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rendered chat entry: %v\n%s", err, output)
+	}
+	t.Log(string(output))
+}
