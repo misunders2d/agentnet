@@ -39,6 +39,12 @@ object UpdatePolicy {
         code(version); require(file == asset || file == "SHA256SUMS")
         return "$repository/releases/download/$version/$file"
     }
+    /** A host this network cannot reach: say which one and how to get around it, not the socket error. */
+    fun unreachable(url: String, error: Throwable): String? = when (error) {
+        is java.net.SocketTimeoutException, is java.net.ConnectException, is java.net.NoRouteToHostException, is java.net.UnknownHostException ->
+            "This network can’t reach the release download server (${runCatching { URI(url).host }.getOrNull() ?: "github.com"}). Try another network, such as mobile data, then update again."
+        else -> null
+    }
     fun redirect(url: String): Boolean = runCatching {
         val u = URI(url)
         u.scheme == "https" && u.userInfo == null && u.fragment == null && (u.port == -1 || u.port == 443) &&

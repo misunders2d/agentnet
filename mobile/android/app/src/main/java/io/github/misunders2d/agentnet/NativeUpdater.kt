@@ -30,7 +30,9 @@ class NativeUpdater(private val context: Context) {
             val c = URL(url).openConnection() as HttpURLConnection
             c.instanceFollowRedirects = false; c.connectTimeout = 15_000; c.readTimeout = 20_000
             c.setRequestProperty("Accept", "application/octet-stream"); c.setRequestProperty("User-Agent", "AgentNet-Android")
-            val status = try { c.responseCode } catch (e: Exception) { c.disconnect(); throw e }
+            val status = try { c.responseCode } catch (e: Exception) {
+                c.disconnect(); throw UpdatePolicy.unreachable(url, e)?.let { IllegalStateException(it, e) } ?: e
+            }
             if (status in listOf(301,302,303,307,308)) {
                 val next = c.getHeaderField("Location"); c.disconnect()
                 require(!next.isNullOrEmpty()) { "The release redirect is missing." }
@@ -77,6 +79,8 @@ class NativeUpdater(private val context: Context) {
         return JSONObject().put("version", BuildConfig.UPDATE_VERSION).put("latest", latest)
             .put("state", if (next > current) "available" else if (next == current) "current" else "ahead")
     }
+    /** A new attempt replaces the last attempt's outcome, so an old "updated" never sits beside a new failure. */
+    fun begin() { preferences.edit().remove("result").apply() }
     fun prepare(): Prepared {
         val latest = check().getString("latest")
         require(UpdatePolicy.code(latest) > UpdatePolicy.code(BuildConfig.UPDATE_VERSION)) { "This app already has the latest release." }

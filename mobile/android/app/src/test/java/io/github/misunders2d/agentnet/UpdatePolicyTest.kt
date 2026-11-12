@@ -19,6 +19,17 @@ class UpdatePolicyTest {
         for (u in listOf("http://github.com/misunders2d/agentnet/releases/latest", "https://github.com.evil.test/misunders2d/agentnet/releases/latest", "https://github.com/other/project/releases/latest", "https://github.com@evil.test/", "https://release-assets.githubusercontent.com:444/path", "https://github.com/misunders2d/agentnet/releases/latest#fragment")) assertFalse(u, UpdatePolicy.redirect(u))
         assertTrue(UpdatePolicy.redirect("https://release-assets.githubusercontent.com/github-production-release-asset/abc?sig=value"))
     }
+    @Test fun unreachableDownloadNamesTheHostAndAnotherNetwork() {
+        val url = "https://release-assets.githubusercontent.com/github-production-release-asset/abc?sig=value"
+        for (e in listOf(java.net.SocketTimeoutException("failed to connect after 15000ms"), java.net.ConnectException("refused"),
+                java.net.NoRouteToHostException("no route"), java.net.UnknownHostException("release-assets.githubusercontent.com"))) {
+            val text = UpdatePolicy.unreachable(url, e)!!
+            assertTrue(text, text.contains("(release-assets.githubusercontent.com)") && text.contains("mobile data"))
+            assertFalse(text, text.contains("sig=") || text.contains("15000"))
+        }
+        assertNull(UpdatePolicy.unreachable(url, javax.net.ssl.SSLHandshakeException("bad certificate")))
+        assertNull(UpdatePolicy.unreachable(url, IllegalStateException("other")))
+    }
     @Test fun checksumRequiresOneExactNamedAsset() {
         val digest="a".repeat(64)
         assertEquals(digest,UpdatePolicy.checksum("$digest  AgentNet-android.apk\n"))
