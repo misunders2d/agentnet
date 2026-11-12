@@ -328,12 +328,15 @@ class MainActivity : Activity() {
                     require(request.keys().asSequence().all { it == "id" || it == "type" }) { "Update requests cannot select an installation source." }
                     val action = request.getString("type")
                     if (action == "app:status") { reply(JSONObject().put("result", updater.status())); return }
-                    require(resumed && updateBusy.compareAndSet(false, true)) { "An update operation is already active or the app is not visible." }
+                    if (!resumed) { reply(error = "Return to AgentNet and try again."); return }
+                    // A second tap while a download runs says so, not "Invalid native request".
+                    if (!updateBusy.compareAndSet(false, true)) { reply(error = "An update is already running. Wait for it to finish."); return }
                     updates.execute {
                         try {
                             if (action == "app:check") {
                                 reply(JSONObject().put("result", updater.check())); updateBusy.set(false)
                             } else {
+                                updater.begin()
                                 val prepared = updater.prepare()
                                 runOnUiThread {
                                     installPreparedUpdate(prepared) { result, error ->
