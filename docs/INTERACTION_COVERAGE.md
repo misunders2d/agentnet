@@ -3015,3 +3015,26 @@ go test ./internal/client -run 'TestOwnAgentTagHandsTaskToOwnAgent|TestAgentTags
 The itest fails ("timed out waiting for the lead's report") with the routing
 hook disabled. No browser check: the browser shows these as existing agent
 request and answer turns. Not run: rendered skins with such an exchange.
+
+## MEL-775 — reopened chat lands mid-history (November 12, 2026)
+
+Cause: a reopened chat first shows its cached copy while the fresh copy
+loads. With no read visit yet, `Timeline` skipped entry placement, so the
+cached copy stayed at scroll position 0: "Earlier messages" and the oldest
+mounted day in view. Placement happened only when the fresh copy arrived.
+
+Counterpart reused from MEL-742 (Telegram Desktop a8de5f9,
+history_widget.cpp:8520–8533): history opens from local data at the unread
+bar, else at the end, without waiting for the server. AgentNet now places the
+cached copy the same way: the cached first unread (same `canMarkUnread` rule
+as the read visit) gets the "Unread messages" divider at the top; else the
+latest message. The read visit's own first unread replaces it on arrival.
+Read reporting is unchanged: rows are still marked read only within a visit.
+
+| Inventory | Intended local feedback | Completion/recovery | Executed evidence |
+|---|---|---|---|
+| MEL-775 reopen cached chat, read / 5 unread / tall unread / 40 unread | cached copy at divider or latest within one frame of showing (~0.4 s incl. 300 ms settle) | fresh copy keeps or moves to the visit's divider | `TestChatEntryCachedRendered` (Chromium) and the same script in WebKit (Playwright 1.63 container), 1440×900 and 390×900; fails on the previous code (`scrollTop` 0, "Earlier messages" in view) |
+
+Not run: the Linux desktop app's own WebKitGTK build, Android WebView, and
+image attachments with real file loads (the image-resize anchor path is the
+existing `TestReadScrollRendered` check).
