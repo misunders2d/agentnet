@@ -49,6 +49,7 @@ type Agent struct {
 	warm          atomic.Pointer[warmPool]        // this daemon run's warm native workers (warm.go)
 	warmLimits    warmLimits                      // their bounds; zero values are the defaults
 	readerAway    sync.WaitGroup                  // that work, waited for when the run ends
+	eraseSweeps   atomic.Int64                    // sweeps of erased turns started (convclear.go)
 
 	deliveryLocks    keyedLocks // envelope ID, shared by immediate sends and retry passes
 	flushOnce        sync.Once

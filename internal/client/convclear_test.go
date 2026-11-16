@@ -561,3 +561,94 @@ func TestDeletionFromAnotherPersonRefused(t *testing.T) {
 		t.Fatalf("the turns here: %v", b)
 	}
 }
+
+// The eraser sweeps only when it may have work: never for typing or
+// presence pulses, nor for a stored change while nothing erased is held
+// (the owner's daemon sat at a full core, November 16, because every
+// change re-read the store). A new erased turn still sweeps.
+func TestEraseSweepOnlyWhenWorkMayExist(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	a := w.alice
+	eventually(t, "the startup sweep", func() bool { return a.eraseSweeps.Load() > 0 })
+	settled := func() int64 {
+		for {
+			n := a.eraseSweeps.Load()
+			time.Sleep(300 * time.Millisecond)
+			if a.eraseSweeps.Load() == n {
+				return n
+			}
+		}
+	}
+	swept := settled()
+	for i := 0; i < 10; i++ {
+		a.changes.bumpKind("typing")
+		a.changes.bumpKind("presence")
+		a.NoteChange()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("pulses and stored changes with nothing erased started %d sweeps", got-swept)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion) VALUES('', ?, 'gone', 'd1')`, a.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	eventually(t, "a new erased turn sweeps", func() bool { return a.eraseSweeps.Load() > swept })
+	swept = settled()
+	for i := 0; i < 10; i++ {
+		a.NoteChange()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("stored changes with nothing held started %d sweeps", got-swept)
+	}
+
+	// A late copy of an erased turn is erased however it is stored: here at a
+	// row number below every earlier one, as SQLite may reuse after a delete.
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion) VALUES('', 'peer-fp', 'late', 'd2')`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	settled()
+	if _, err := a.store.db.Exec(`INSERT INTO inbox(rowid, id, sender, ts, kind, body, received_at, claimed_fp) VALUES(-5, 'late', 'peer/host', 1, 'message', 'erased words', 1, 'peer-fp')`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	eventually(t, "the late copy erased", func() bool {
+		var body string
+		a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'late'`).Scan(&body)
+		return body == ""
+	})
+
+	// Text kept for unfinished work does not sweep on every change; it is
+	// erased by the change that ends the work.
+	if _, err := a.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, claimed_fp, state) VALUES('ask', 'peer/host', 1, 'question', 'kept words', 1, 'peer-fp', 'pending')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion) VALUES('', 'peer-fp', 'ask', 'd3')`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	swept = settled()
+	for i := 0; i < 10; i++ {
+		a.NoteChange()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("text kept for unfinished work started %d sweeps", got-swept)
+	}
+	var body string
+	a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'ask'`).Scan(&body)
+	if body != "kept words" {
+		t.Fatalf("text erased while its work runs: %q", body)
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state = 'answered' WHERE id = 'ask'`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	eventually(t, "kept text erased when its work ends", func() bool {
+		a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'ask'`).Scan(&body)
+		return body == ""
+	})
+}
