@@ -1,3 +1,4 @@
+import { firstVideoFrame } from "./video-poster.mjs";
 // A lazy attachment player, scoped to one supplied file slot and captured host
 // callbacks. The entry owns admission/download and explicit view replacement.
 // Inject the package's existing pictures.mjs sniffVideo; never infer MIME from a name.
@@ -24,7 +25,7 @@ export function mountVideoFile({root, file, load, sniffVideo, download, allowed 
   const visible = () => document.visibilityState !== 'hidden' && !document.hidden && !pageHidden && nativeVisible;
   const current = () => !dead && active && root.isConnected !== false && card.isConnected !== false && root.contains(card) && visible() && allowed();
   const paint = () => {
-    play.hidden = phase !== 'idle'; close.hidden = phase !== 'loading' && phase !== 'ready';
+    play.hidden = phase !== 'idle' && phase !== 'failed'; close.hidden = phase !== 'loading' && phase !== 'ready';
     play.disabled = close.disabled = save.disabled = dead || !active;
     note.textContent = !local ? 'This video is not available on this device. Use Download to get it.'
       : !inline ? (size > INLINE_VIDEO_LIMIT ? 'Videos up to 16 MiB can play here. Download to play this file.' : 'This video’s size is unknown. Download to play this file.') : message;
@@ -98,16 +99,43 @@ export function mountVideoFile({root, file, load, sniffVideo, download, allowed 
   };
   if (inline) actions.append(play, close);
   actions.append(save); card.append(label, actions, note); root.append(card); paint();
+  // Local files only; never bypass explicit large-file download admission.
+  const previewAbort = new AbortController();
+  let observer;
+  if (inline && typeof window.IntersectionObserver === 'function') {
+    play.style.cssText = 'position:relative;display:grid;place-items:center;width:100%;max-width:360px;min-height:160px;overflow:hidden';
+    message = 'Preparing preview…'; paint();
+    observer = new window.IntersectionObserver(entries => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      observer.disconnect();
+      const timer = window.setTimeout(() => { previewAbort.abort(); if (current() && phase === 'idle') { message = 'Preview unavailable. Play or download this video.'; paint(); } }, 8000);
+      Promise.resolve().then(load).then(async ({bytes}) => {
+        if (previewAbort.signal.aborted || !current()) return;
+        const type = sniffVideo(bytes);
+        if (!type || bytes.byteLength !== size || bytes.byteLength > INLINE_VIDEO_LIMIT) throw Error();
+        const src = await firstVideoFrame(new window.Blob([bytes], {type}), previewAbort.signal);
+        if (previewAbort.signal.aborted || !current()) return;
+        const image = make('img'); image.src = src; image.alt = 'Preview ' + name;
+        image.style.cssText = 'position:absolute;width:100%;height:100%;object-fit:contain';
+        const label = make('span','▶ Play'); label.style.cssText = 'position:relative;background:#000c;color:white;padding:8px 16px;border-radius:24px';
+        play.replaceChildren(image,label);
+        if (phase === 'idle') { message = ''; paint(); }
+      }).catch(() => { if (current() && phase === 'idle') { message = 'Preview unavailable. Play or download this video.'; paint(); } })
+        .finally(() => window.clearTimeout(timer));
+    });
+    observer.observe(play);
+  }
+  const stopPreview = () => { observer?.disconnect(); previewAbort.abort(); };
   const hidden = () => { if (document.hidden || document.visibilityState === 'hidden') release(); };
   const pagehide = () => { pageHidden = true; release(); };
   const pageshow = () => { pageHidden = false; if (!dead) paint(); };
   document.addEventListener('visibilitychange', hidden);
   window.addEventListener('pagehide', pagehide); window.addEventListener('pageshow', pageshow);
   const offVisibility = onVisibility?.(visible => { nativeVisible = visible; if (!visible) release(); });
-  const deactivate = () => { if (dead || !active) return; active = false; release(); };
+  const deactivate = () => { if (dead || !active) return; active = false; stopPreview(); release(); };
   const destroy = () => {
     if (dead) return;
-    dead = true; active = false; release();
+    dead = true; active = false; stopPreview(); release();
     document.removeEventListener('visibilitychange', hidden);
     window.removeEventListener('pagehide', pagehide); window.removeEventListener('pageshow', pageshow);
     try { offVisibility?.(); } catch {}

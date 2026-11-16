@@ -80,11 +80,17 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 	}
 	topic := strings.Repeat("e", 32)
 	dm.Topics = []ThreadSummary{{ID: topic, Conv: id, Title: "Video topic", Count: 1, State: "active", LastAt: f.now()}}
+	if os.Getenv("AGENTNET_POSTER_FIXTURE") == "1" {
+		dm.Messages = append(dm.Messages, DMMessage{ID: "sent-video", LID: "sent-video", Dir: "out", From: "alice/desk", Kind: "message", Body: "Sent video", At: f.now(), State: "sent", Attachments: []FileView{{Index: 3, Name: "sent.webm", Size: int64(len(f.video)), Openable: true}}})
+	}
 	dm.Messages = append(dm.Messages, DMMessage{ID: "topic-video-message", LID: "topic-video-message", Dir: "in", From: "bob/desk", Kind: "message", Body: "Another topic", At: f.now(), State: "received", Topic: topic})
 	return dm, err
 }
 
 func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index int) (io.ReadCloser, string, error) {
+	if dir == "out" && id == "sent-video" && index == 3 {
+		return io.NopCloser(bytes.NewReader(f.video)), "sent.webm", nil
+	}
 	if dir != "in" || id != "picture-message" {
 		return nil, "", ErrNotFound
 	}
@@ -107,7 +113,14 @@ func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index i
 	return nil, "", ErrNotFound
 }
 
-func TestImageViewerRendered(t *testing.T) {
+func TestImageViewerRendered(t *testing.T) { imageViewerRendered(t, "testdata/image_viewer_check.cjs") }
+
+func TestVideoPosterRendered(t *testing.T) {
+	t.Setenv("AGENTNET_POSTER_FIXTURE", "1")
+	imageViewerRendered(t, "testdata/video_poster_rendered.cjs")
+}
+
+func imageViewerRendered(t *testing.T, script string) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright")
 	}
@@ -174,10 +187,10 @@ func TestImageViewerRendered(t *testing.T) {
 	})
 	ts.Start()
 	defer ts.Close()
-	t.Log(browserCheck(t, "testdata/image_viewer_check.cjs", ts.URL+"/?t="+testToken))
+	t.Log(browserCheck(t, script, ts.URL+"/?t="+testToken))
 	f.lock.Lock()
 	defer f.lock.Unlock()
-	if len(f.opened) != 2 || f.opened[0] != (imageReference{"in", "picture-message", 2}) || f.opened[1] != (imageReference{"in", "picture-message", 5}) {
+	if script == "testdata/image_viewer_check.cjs" && (len(f.opened) != 2 || f.opened[0] != (imageReference{"in", "picture-message", 2}) || f.opened[1] != (imageReference{"in", "picture-message", 5})) {
 		t.Fatal("desktop opened the wrong attachment", f.opened)
 	}
 }

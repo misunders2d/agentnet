@@ -38,6 +38,7 @@ manifest="${SKIN_MANIFEST:-$out/skin.json}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp -R "$here/package.json" "$here/package-lock.json" "$here/tsconfig.json" "$here/src" "$here/package.mjs" "$work/"
+cp "$here/../skins/shared/video-poster.mjs" "$here/../skins/shared/video-poster.d.mts" "$work/src/"
 cp "$here/../static/pictures.mjs" "$here/../static/pictures.d.mts" "$work/src/"
 cp "$here/../static/optimistic.mjs" "$here/../static/optimistic.d.mts" "$work/src/"
 cp "$here/../skins/shared/person-topics.mjs" "$here/../skins/shared/reaction-preferences.mjs" "$here/../skins/shared/collective-mentions.mjs" "$work/src/"

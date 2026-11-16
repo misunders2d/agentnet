@@ -11,21 +11,23 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   const close = name => card(name).getByRole('button', { name: 'Close video ' + name, exact: true });
   await file('received.webm').waitFor(); // baseline fails: video was only Download
   assert.equal(await p.locator('video').count(), 0, 'no media element/decode before explicit Play');
-  assert.deepEqual(await p.evaluate(() => window.videoResources.created.filter(x => x.type.startsWith('video/'))), [], 'no video Blob before Play');
+  await file('received.webm').scrollIntoViewIfNeeded();
+  await file('received.webm').locator('img').waitFor();
   const policy = (await ctx.request.get(base + '/')).headers()['content-security-policy'];
   assert.equal(policy.split(';').map(x => x.trim()).find(x => x.startsWith('media-src ')), 'media-src blob:', 'actual workspace host permits only owned Blob media');
   assert.equal(await file('large.webm').count(), 0);
   assert.equal(await file('unknown.mov').count(), 0);
   await card('large.webm').getByText('Videos up to 16 MiB can play here.', { exact: false }).waitFor();
   await card('unknown.mov').getByText('This video’s size is unknown.', { exact: false }).waitFor();
-  assert.deepEqual(reads, [], 'manifest gate and initial cards do not read videos');
+  assert(!reads.some(([i]) => i===11 || i===12), 'large and unknown manifests never fetch for previews');
+  reads.length = 0;
   const playBox = await file('received.webm').boundingBox();
   assert(playBox.height >= 44, 'Play has a 44px target');
   await file('received.webm').click();
   let video = card('received.webm').locator('video');
   await video.waitFor();
   await p.waitForFunction(v => v.readyState >= 2 && v.videoWidth === 160 && v.videoHeight === 120, await video.elementHandle());
-  assert.deepEqual(reads, [[8,'in']], 'one exact sparse index/id/direction read per open');
+  assert(reads.some(([i,d]) => i===8 && d==='in'), 'exact sparse index/direction player read');
   const src = await video.getAttribute('src');
   assert(src.startsWith('blob:'));
   assert.deepEqual(await video.evaluate(v => [v.controls,v.playsInline,v.autoplay,v.muted]), [true,true,false,false]);

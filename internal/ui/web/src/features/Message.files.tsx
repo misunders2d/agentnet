@@ -4,7 +4,7 @@
 // host.file; a download is a link the browser saves where it saves things,
 // so nothing here claims where the file went. HTML and SVG never render.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
+import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload, IconPlayerPlay } from "@tabler/icons-react";
 import { errorText, type Api, type FileProgress } from "../api";
 import { useStore } from "../store";
 import { useApp } from "../context";
@@ -20,6 +20,7 @@ import { isThreadMsg, type AnyMsg } from "./Message.model";
 import { SaveToDrive } from "./Drive";
 import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
 import { Markdown } from "./Markdown";
+import { firstVideoFrame } from "../video-poster.mjs";
 import { interleaveMp4 } from "./video-interleave";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string; fetch?: string }
@@ -312,7 +313,36 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [note, setNote] = useState("");
   const [expanded, setExpanded] = useState<VideoPlace | null>(null);
   const download = useDownload(m, f);
+  const [poster, setPoster] = useState("");
+  const [posterNote, setPosterNote] = useState("Preparing preview…");
+  const previewBox = useRef<HTMLButtonElement>(null);
   const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
+
+  useEffect(() => {
+    if (!inline || download.phase !== "here" || leaving || document.hidden) return;
+    let alive = true;
+    const abort = new AbortController();
+    const observer = new IntersectionObserver(entries => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      observer.disconnect();
+      // No network download admission here: use only the existing local-file path.
+      const timer = setTimeout(() => { abort.abort(); if (alive) setPosterNote("Preview unavailable. Play or download this video."); }, 8000);
+      void store.api.file(m.id, f.index, m.dir).then(async ({ bytes: b }) => {
+        if (!alive || abort.signal.aborted) return;
+        if (b.byteLength !== f.size || b.byteLength > INLINE_VIDEO_LIMIT) throw Error();
+        let type = sniffVideo(b);
+        if (!type) throw Error();
+        if (webkitGTK && (type === "video/mp4" || type === "video/quicktime")) {
+          try { b = interleaveMp4(b); type = "video/mp4"; } catch { /* original */ }
+        }
+        const image = await firstVideoFrame(new Blob([b as BlobPart], { type }), abort.signal);
+        if (alive && !abort.signal.aborted) { setPoster(image); setPosterNote(""); }
+      }).catch(() => { if (alive) setPosterNote("Preview unavailable. Play or download this video."); })
+        .finally(() => clearTimeout(timer));
+    });
+    if (previewBox.current) observer.observe(previewBox.current);
+    return () => { alive = false; observer.disconnect(); abort.abort(); };
+  }, [store, m.id, f.index, m.dir, inline, download.phase, leaving]);
 
   function release(reset = true) {
     generation.current++;
@@ -401,10 +431,15 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
     <div role="group" aria-label={"Video " + f.name} className="w-full min-w-0 max-w-[480px] space-y-1.5">
       <FileChip m={m} f={f} />
       {download.phase !== "here" ? null : inline ? <div className="flex flex-wrap items-center gap-2">
-        {phase === "idle" && <Button className="min-h-11" aria-label={"Play video " + f.name} onClick={() => void open()}>Play</Button>}
+        {(phase === "idle" || phase === "failed") && <button ref={previewBox} type="button" aria-label={"Play video " + f.name} onClick={() => void open()}
+          className="relative grid aspect-video w-full max-w-[360px] place-items-center overflow-hidden rounded-xl border border-outline/30 bg-sunken">
+          {poster && <img src={poster} alt={"Preview " + f.name} className="absolute inset-0 h-full w-full object-contain" />}
+          <span className="relative flex items-center gap-2 rounded-full bg-black/80 px-4 py-2 text-white"><IconPlayerPlay size={24} />Play</span>
+        </button>}
         {(phase === "loading" || phase === "ready") && <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>}
         {phase === "ready" && !document.fullscreenEnabled && <Button className="min-h-11" aria-label={"Expand video " + f.name} onClick={expand}>Expand</Button>}
       </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
+      {download.phase === "here" && inline && phase !== "ready" && posterNote && <p role="status" className="text-[12px] text-muted">{posterNote}</p>}
       {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
       {/* preload="auto": the bytes are in memory; "none" froze a few seconds in on the Linux app (October 29, 2026). */}
       {url && <video ref={bindMedia} src={url} controls playsInline preload="auto" aria-label={f.name}
