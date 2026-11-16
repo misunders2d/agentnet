@@ -266,15 +266,23 @@ func eraseArrivalIn(tx *sql.Tx, id string) error {
 // residualCount counts erased rows of conv whose text no unfinished work
 // needs any more but is still here: what eraseCoveredIn would blank now
 // (a request whose work has ended, a reply taken, a copy handed over).
+// Sent rows are found from conv's erased turns (`erasedOut` read from the
+// other side): a row without a conversation by id, any other by
+// conversation and logical id. Each row matches one erased turn at most, so
+// the counts equal a scan of every sent row, which the sweep cannot afford
+// after each change on a large store.
 func residualCount(q querier, conv, selfFP string) (int, error) {
 	var n int
 	err := q.QueryRow(`SELECT
 		(SELECT count(*) FROM inbox i WHERE coalesce(i.conv, '') = ? AND i.local = 0 AND coalesce(i.sub, '') IN `+erasableSubs+` AND i.body <> '' AND `+erasedIn+` AND NOT `+retainedIn+`)
 		+ (SELECT count(*) FROM inbox i JOIN outbox o ON o.id = i.id WHERE i.local = 1 AND coalesce(o.conv, '') = ? AND i.body <> '' AND `+erasedOut+` AND NOT `+retainedIn+`)
-		+ (SELECT count(*) FROM outbox o WHERE coalesce(o.conv, '') = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND `+erasedOut+` AND NOT `+retainedOut+`)
+		+ (SELECT count(*) FROM conv_erased e JOIN outbox o ON o.id = e.lid AND o.conv IS NULL
+		   WHERE e.conv = ? AND e.conv = '' AND e.key = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND NOT `+retainedOut+`)
+		+ (SELECT count(*) FROM conv_erased e JOIN outbox o ON o.conv = e.conv AND o.lid = e.lid
+		   WHERE e.conv = ? AND e.key = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND NOT `+retainedOut+`)
 		+ (SELECT count(*) FROM outbox o WHERE o.conv = ? AND o.sub = 'history' AND o.body <> '' AND NOT `+retainedOut+`
 		   AND EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = o.conv AND e.key = json_extract(o.body, '$.from_key') AND e.lid = json_extract(o.body, '$.lid')))`,
-		conv, conv, selfFP, conv, selfFP, conv).Scan(&n)
+		conv, conv, selfFP, conv, selfFP, conv, selfFP, conv).Scan(&n)
 	return n, err
 }
 
@@ -617,13 +625,21 @@ func (a *Agent) sendErased(me personRow, devs []identity.Public, conv string, tu
 }
 
 // eraseLoop runs sweepErased now (a restart after a crash) and again after
-// every local change, as the worker and reminders look again: the change
-// that ends a request (answered, declined, resolved, failed), a reply's
-// take or a copy's hand-over erases what was kept for it. No timer.
+// every local content change, as the worker and reminders look again: the
+// change that ends a request (answered, declined, resolved, failed), a
+// reply's take or a copy's hand-over erases what was kept for it. Typing and
+// presence pulses change nothing stored, so they never start a sweep: in an
+// active chat they arrive every few seconds and each sweep reads the store.
+// No timer.
 func (a *Agent) eraseLoop(ctx context.Context) {
+	var swept uint64
+	first := true
 	for {
-		_, changed := a.Changed() // before looking, so no change is missed
-		a.sweepErased(ctx)
+		view, changed := a.ViewChanges() // before looking, so no change is missed
+		if first || view.Content != swept {
+			a.sweepErased(ctx, first)
+			first, swept = false, view.Content
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -633,8 +649,12 @@ func (a *Agent) eraseLoop(ctx context.Context) {
 }
 
 // sweepErased erases what erased turns kept for work that has since ended
-// and queues what is still untold (after a crash).
-func (a *Agent) sweepErased(ctx context.Context) {
+// and queues what is still untold (after a crash). Cached and kept files of
+// erased turns are dropped when this sweep erased text in that conversation;
+// the startup sweep also drops what a crash after an erasing commit left.
+// Every deletion path drops its own files when it erases.
+func (a *Agent) sweepErased(ctx context.Context, startup bool) {
+	a.eraseSweeps.Add(1)
 	selfFP := a.Self().Fingerprint()
 	rows, err := a.store.db.Query(`SELECT DISTINCT conv FROM conv_erased`)
 	if err != nil {
@@ -652,6 +672,7 @@ func (a *Agent) sweepErased(ctx context.Context) {
 		return
 	}
 	for _, conv := range convs {
+		erased := false
 		if left, err := residualCount(a.store.db, conv, selfFP); err == nil && left > 0 {
 			tx, err := a.store.db.Begin()
 			if err != nil {
@@ -664,8 +685,11 @@ func (a *Agent) sweepErased(ctx context.Context) {
 			if a.store.done(tx.Commit()) != nil {
 				continue
 			}
+			erased = true
 		}
-		a.dropErasedFiles(conv) // also what a crash after the erasing commit left
+		if startup || erased {
+			a.dropErasedFiles(conv) // at startup also what a crash after the erasing commit left
+		}
 	}
 	if _, err := a.shareErased(ctx); err != nil {
 		a.Logf("conversation deletions: %v", err)

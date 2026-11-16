@@ -561,3 +561,38 @@ func TestDeletionFromAnotherPersonRefused(t *testing.T) {
 		t.Fatalf("the turns here: %v", b)
 	}
 }
+
+// Typing and presence pulses store nothing, so the eraser must not sweep for
+// them: in an active chat they arrive every few seconds, and each sweep reads
+// the store (the owner's daemon sat at a full core, November 16). A content
+// change still sweeps.
+func TestEraseSweepIgnoresTypingAndPresence(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	a := w.alice
+	eventually(t, "the startup sweep", func() bool { return a.eraseSweeps.Load() > 0 })
+	quiet := false
+	for attempt := 0; attempt < 20 && !quiet; attempt++ {
+		before, _ := a.ViewChanges()
+		swept := a.eraseSweeps.Load()
+		for i := 0; i < 10; i++ {
+			a.changes.bumpKind("typing")
+			a.changes.bumpKind("presence")
+		}
+		time.Sleep(300 * time.Millisecond)
+		after, _ := a.ViewChanges()
+		if after.Content != before.Content {
+			continue // an unrelated stored change arrived meanwhile: look again
+		}
+		quiet = true
+		if got := a.eraseSweeps.Load(); got != swept {
+			t.Fatalf("typing and presence pulses started %d sweeps", got-swept)
+		}
+	}
+	if !quiet {
+		t.Fatal("no quiet window without stored changes")
+	}
+	swept := a.eraseSweeps.Load()
+	a.NoteChange()
+	eventually(t, "a stored change sweeps", func() bool { return a.eraseSweeps.Load() > swept })
+}
