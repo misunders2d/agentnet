@@ -562,41 +562,45 @@ func TestDeletionFromAnotherPersonRefused(t *testing.T) {
 	}
 }
 
-// Typing and presence pulses store nothing, so the eraser must not sweep for
-// them: in an active chat they arrive every few seconds, and each sweep reads
-// the store (the owner's daemon sat at a full core, November 16). A content
-// change still sweeps.
-func TestEraseSweepIgnoresTypingAndPresence(t *testing.T) {
+// The eraser sweeps only when it may have work: never for typing or
+// presence pulses, nor for a stored change while nothing erased is held
+// (the owner's daemon sat at a full core, November 16, because every
+// change re-read the store). A new erased turn still sweeps.
+func TestEraseSweepOnlyWhenWorkMayExist(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	a := w.alice
 	eventually(t, "the startup sweep", func() bool { return a.eraseSweeps.Load() > 0 })
-	quiet := false
-	for attempt := 0; attempt < 20 && !quiet; attempt++ {
-		before, _ := a.ViewChanges()
-		swept := a.eraseSweeps.Load()
-		time.Sleep(300 * time.Millisecond) // a sweep already due for an earlier change starts now
-		if now, _ := a.ViewChanges(); now.Content != before.Content || a.eraseSweeps.Load() != swept {
-			continue
-		}
-		for i := 0; i < 10; i++ {
-			a.changes.bumpKind("typing")
-			a.changes.bumpKind("presence")
-		}
-		time.Sleep(300 * time.Millisecond)
-		after, _ := a.ViewChanges()
-		if after.Content != before.Content {
-			continue // an unrelated stored change arrived meanwhile: look again
-		}
-		quiet = true
-		if got := a.eraseSweeps.Load(); got != swept {
-			t.Fatalf("typing and presence pulses started %d sweeps", got-swept)
+	settled := func() int64 {
+		for {
+			n := a.eraseSweeps.Load()
+			time.Sleep(300 * time.Millisecond)
+			if a.eraseSweeps.Load() == n {
+				return n
+			}
 		}
 	}
-	if !quiet {
-		t.Fatal("no quiet window without stored changes")
+	swept := settled()
+	for i := 0; i < 10; i++ {
+		a.changes.bumpKind("typing")
+		a.changes.bumpKind("presence")
+		a.NoteChange()
 	}
-	swept := a.eraseSweeps.Load()
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("pulses and stored changes with nothing erased started %d sweeps", got-swept)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion) VALUES('', ?, 'gone', 'd1')`, a.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
 	a.NoteChange()
-	eventually(t, "a stored change sweeps", func() bool { return a.eraseSweeps.Load() > swept })
+	eventually(t, "a new erased turn sweeps", func() bool { return a.eraseSweeps.Load() > swept })
+	swept = settled()
+	for i := 0; i < 10; i++ {
+		a.NoteChange()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("stored changes with nothing held started %d sweeps", got-swept)
+	}
 }
