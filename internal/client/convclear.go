@@ -325,12 +325,17 @@ func (a *Agent) dropErasedFiles(conv string) {
 			os.Remove(a.downloadPath(blob) + ".part")
 		}
 	}
-	rows, err := a.store.db.Query(`SELECT DISTINCT s.sha256 FROM sent_attachments s JOIN outbox o ON o.id = s.message_id
-		WHERE coalesce(o.conv, '') = ? AND o.body = '' AND `+erasedOut+` AND NOT `+retainedOut+`
+	// Sent rows of conv's erased turns, found from conv_erased as in
+	// residualCount: the same rows as an outbox scan, without reading it.
+	rows, err := a.store.db.Query(`SELECT DISTINCT s.sha256 FROM (
+		  SELECT o.id, o.body, o.state FROM conv_erased e JOIN outbox o ON o.id = e.lid AND o.conv IS NULL WHERE e.conv = ? AND e.conv = '' AND e.key = ?
+		  UNION ALL SELECT o.id, o.body, o.state FROM conv_erased e JOIN outbox o ON o.conv = e.conv AND o.lid = e.lid WHERE e.conv = ? AND e.key = ?
+		) o JOIN sent_attachments s ON s.message_id = o.id
+		WHERE o.body = '' AND NOT `+retainedOut+`
 		AND NOT `+scheduledKeptReference+`
 		AND NOT EXISTS (SELECT 1 FROM sent_attachments s2 JOIN outbox o2 ON o2.id = s2.message_id WHERE s2.sha256 = s.sha256
 		  AND NOT EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = coalesce(o2.conv, '') AND e.key = ? AND e.lid = CASE WHEN o2.conv IS NULL THEN o2.id ELSE o2.lid END))`,
-		conv, selfFP, selfFP)
+		conv, selfFP, conv, selfFP, selfFP)
 	if err != nil {
 		return
 	}
@@ -637,7 +642,7 @@ func (a *Agent) eraseLoop(ctx context.Context) {
 	for {
 		view, changed := a.ViewChanges() // before looking, so no change is missed
 		if first || view.Content != swept {
-			a.sweepErased(ctx, first)
+			a.sweepErased(ctx)
 			first, swept = false, view.Content
 		}
 		select {
@@ -649,11 +654,8 @@ func (a *Agent) eraseLoop(ctx context.Context) {
 }
 
 // sweepErased erases what erased turns kept for work that has since ended
-// and queues what is still untold (after a crash). Cached and kept files of
-// erased turns are dropped when this sweep erased text in that conversation;
-// the startup sweep also drops what a crash after an erasing commit left.
-// Every deletion path drops its own files when it erases.
-func (a *Agent) sweepErased(ctx context.Context, startup bool) {
+// and queues what is still untold (after a crash).
+func (a *Agent) sweepErased(ctx context.Context) {
 	a.eraseSweeps.Add(1)
 	selfFP := a.Self().Fingerprint()
 	rows, err := a.store.db.Query(`SELECT DISTINCT conv FROM conv_erased`)
@@ -672,7 +674,6 @@ func (a *Agent) sweepErased(ctx context.Context, startup bool) {
 		return
 	}
 	for _, conv := range convs {
-		erased := false
 		if left, err := residualCount(a.store.db, conv, selfFP); err == nil && left > 0 {
 			tx, err := a.store.db.Begin()
 			if err != nil {
@@ -685,11 +686,8 @@ func (a *Agent) sweepErased(ctx context.Context, startup bool) {
 			if a.store.done(tx.Commit()) != nil {
 				continue
 			}
-			erased = true
 		}
-		if startup || erased {
-			a.dropErasedFiles(conv) // at startup also what a crash after the erasing commit left
-		}
+		a.dropErasedFiles(conv) // also what a crash after the erasing commit left
 	}
 	if _, err := a.shareErased(ctx); err != nil {
 		a.Logf("conversation deletions: %v", err)

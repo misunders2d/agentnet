@@ -575,6 +575,10 @@ func TestEraseSweepIgnoresTypingAndPresence(t *testing.T) {
 	for attempt := 0; attempt < 20 && !quiet; attempt++ {
 		before, _ := a.ViewChanges()
 		swept := a.eraseSweeps.Load()
+		time.Sleep(300 * time.Millisecond) // a sweep already due for an earlier change starts now
+		if now, _ := a.ViewChanges(); now.Content != before.Content || a.eraseSweeps.Load() != swept {
+			continue
+		}
 		for i := 0; i < 10; i++ {
 			a.changes.bumpKind("typing")
 			a.changes.bumpKind("presence")
