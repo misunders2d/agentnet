@@ -67,6 +67,64 @@ func ask(t *testing.T, w *world, replyTo string) (q, answer string) {
 	return r.ID, ans.ID
 }
 
+// App requests always name an executor and participation. These must retain
+// their owned native context, even though AskAgent does not add reply links.
+func TestSessionNamedAskAgentResume(t *testing.T) {
+	for _, harness := range []string{"cstyle", "xstyle"} {
+		t.Run(harness, func(t *testing.T) {
+			st := sessionStub(t)
+			w, conv, _, _ := agentWorld(t)
+			for _, a := range []*Agent{w.alice, w.bob} {
+				fakeNotify(a)
+				waitNamedAgentCaps(t, a)
+			}
+			record, err := w.bob.CreateLocalAgent("Session fixture", Responder{Harness: harness, Dir: st.dir, Timeout: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = w.bob.PublishAgentCatalog(tctx(t)); err != nil {
+				t.Fatal(err)
+			}
+			p, err := w.alice.InviteNamedAgent(tctx(t), conv, w.bob.Address, record.ID, nil, nil, "session regression")
+			if err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "invite", func() bool { return pollState(t, w.bob, p.PID).State == PartInvited })
+			if _, err = w.bob.AcceptParticipation(tctx(t), p.PID); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "accept", func() bool { return stateAt(t, w.alice, p.PID).Claimable() })
+			var ids []string
+			for range 2 {
+				q, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "continue this conversation")
+				if err != nil {
+					t.Fatal(err)
+				}
+				replyAt(t, w.alice, conv, q.ID)
+				var agentID, pid string
+				if err := w.bob.store.db.QueryRow(`SELECT agent_id,pid FROM inbox WHERE id=?`, q.ID).Scan(&agentID, &pid); err != nil {
+					t.Fatal(err)
+				}
+				if agentID != record.ID || pid != p.PID {
+					t.Fatalf("request missed named app path: agent=%q pid=%q", agentID, pid)
+				}
+				ids = append(ids, q.ID)
+			}
+			first, second := sessionOf(t, w.bob, ids[0]), sessionOf(t, w.bob, ids[1])
+			if first == nil || second == nil || first.ID == "" || second.ID != first.ID {
+				t.Fatalf("named AskAgent lost native context: first=%+v second=%+v runs=%v", first, second, st.runs())
+			}
+			if harness == "cstyle" {
+				if runs := st.runs(); len(runs) != 2 || !strings.Contains(runs[1], "--resume "+first.ID) {
+					t.Fatalf("missing native resume: %v", runs)
+				}
+			} else if raw := mustRead(t, st.log+".rpc"); !strings.Contains(raw, "thread/resume") {
+				t.Fatalf("missing thread/resume: %s", raw)
+			}
+		})
+	}
+}
+
 // A conversation's next question resumes the session its first question
 // started, also after the daemon restarts; a duplicate delivery runs nothing.
 func TestSessionCreateAndResumeAcrossRestart(t *testing.T) {
