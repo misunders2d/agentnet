@@ -603,4 +603,52 @@ func TestEraseSweepOnlyWhenWorkMayExist(t *testing.T) {
 	if got := a.eraseSweeps.Load(); got != swept {
 		t.Fatalf("stored changes with nothing held started %d sweeps", got-swept)
 	}
+
+	// A late copy of an erased turn is erased however it is stored: here at a
+	// row number below every earlier one, as SQLite may reuse after a delete.
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion) VALUES('', 'peer-fp', 'late', 'd2')`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	settled()
+	if _, err := a.store.db.Exec(`INSERT INTO inbox(rowid, id, sender, ts, kind, body, received_at, claimed_fp) VALUES(-5, 'late', 'peer/host', 1, 'message', 'erased words', 1, 'peer-fp')`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	eventually(t, "the late copy erased", func() bool {
+		var body string
+		a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'late'`).Scan(&body)
+		return body == ""
+	})
+
+	// Text kept for unfinished work does not sweep on every change; it is
+	// erased by the change that ends the work.
+	if _, err := a.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, claimed_fp, state) VALUES('ask', 'peer/host', 1, 'question', 'kept words', 1, 'peer-fp', 'pending')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion) VALUES('', 'peer-fp', 'ask', 'd3')`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	swept = settled()
+	for i := 0; i < 10; i++ {
+		a.NoteChange()
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("text kept for unfinished work started %d sweeps", got-swept)
+	}
+	var body string
+	a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'ask'`).Scan(&body)
+	if body != "kept words" {
+		t.Fatalf("text erased while its work runs: %q", body)
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state = 'answered' WHERE id = 'ask'`); err != nil {
+		t.Fatal(err)
+	}
+	a.NoteChange()
+	eventually(t, "kept text erased when its work ends", func() bool {
+		a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'ask'`).Scan(&body)
+		return body == ""
+	})
 }

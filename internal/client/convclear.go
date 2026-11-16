@@ -266,37 +266,21 @@ func eraseArrivalIn(tx *sql.Tx, id string) error {
 // residualCount counts erased rows of conv whose text no unfinished work
 // needs any more but is still here: what eraseCoveredIn would blank now
 // (a request whose work has ended, a reply taken, a copy handed over).
+// Sent rows are found from conv's erased turns (`erasedOut` read from the
+// other side): a row without a conversation by id, any other by
+// conversation and logical id. Each row matches one erased turn at most, so
+// the count equals a scan of every sent row, which a large store cannot
+// afford.
 func residualCount(q querier, conv, selfFP string) (int, error) {
-	return erasedTextCount(q, conv, selfFP, false)
-}
-
-// heldTextCount counts erased rows of conv whose text is still here because
-// unfinished work needs it: the rows whose work, when it ends, the sweep
-// must erase.
-func heldTextCount(q querier, conv, selfFP string) (int, error) {
-	return erasedTextCount(q, conv, selfFP, true)
-}
-
-// erasedTextCount counts erased rows of conv that still hold text, kept for
-// unfinished work (kept) or no longer needed (!kept). Sent rows are found
-// from conv's erased turns (`erasedOut` read from the other side): a row
-// without a conversation by id, any other by conversation and logical id.
-// Each row matches one erased turn at most, so the counts equal a scan of
-// every sent row, which a large store cannot afford on every change.
-func erasedTextCount(q querier, conv, selfFP string, kept bool) (int, error) {
-	not := "NOT "
-	if kept {
-		not = ""
-	}
 	var n int
 	err := q.QueryRow(`SELECT
-		(SELECT count(*) FROM inbox i WHERE coalesce(i.conv, '') = ? AND i.local = 0 AND coalesce(i.sub, '') IN `+erasableSubs+` AND i.body <> '' AND `+erasedIn+` AND `+not+retainedIn+`)
-		+ (SELECT count(*) FROM inbox i JOIN outbox o ON o.id = i.id WHERE i.local = 1 AND coalesce(o.conv, '') = ? AND i.body <> '' AND `+erasedOut+` AND `+not+retainedIn+`)
+		(SELECT count(*) FROM inbox i WHERE coalesce(i.conv, '') = ? AND i.local = 0 AND coalesce(i.sub, '') IN `+erasableSubs+` AND i.body <> '' AND `+erasedIn+` AND NOT `+retainedIn+`)
+		+ (SELECT count(*) FROM inbox i JOIN outbox o ON o.id = i.id WHERE i.local = 1 AND coalesce(o.conv, '') = ? AND i.body <> '' AND `+erasedOut+` AND NOT `+retainedIn+`)
 		+ (SELECT count(*) FROM conv_erased e JOIN outbox o ON o.id = e.lid AND o.conv IS NULL
-		   WHERE e.conv = ? AND e.conv = '' AND e.key = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND `+not+retainedOut+`)
+		   WHERE e.conv = ? AND e.conv = '' AND e.key = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND NOT `+retainedOut+`)
 		+ (SELECT count(*) FROM conv_erased e JOIN outbox o ON o.conv = e.conv AND o.lid = e.lid
-		   WHERE e.conv = ? AND e.key = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND `+not+retainedOut+`)
-		+ (SELECT count(*) FROM outbox o WHERE o.conv = ? AND o.sub = 'history' AND o.body <> '' AND `+not+retainedOut+`
+		   WHERE e.conv = ? AND e.key = ? AND coalesce(o.sub, '') IN `+erasableSubs+` AND o.body <> '' AND NOT `+retainedOut+`)
+		+ (SELECT count(*) FROM outbox o WHERE o.conv = ? AND o.sub = 'history' AND o.body <> '' AND NOT `+retainedOut+`
 		   AND EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = o.conv AND e.key = json_extract(o.body, '$.from_key') AND e.lid = json_extract(o.body, '$.lid')))`,
 		conv, conv, selfFP, conv, selfFP, conv, selfFP, conv).Scan(&n)
 	return n, err
@@ -662,16 +646,15 @@ func (a *Agent) sendErased(me personRow, devs []identity.Public, conv string, tu
 }
 
 // eraseLoop runs sweepErased now (a restart after a crash) and after a local
-// content change only when the sweep may have work, so a store with nothing
-// held is never read for it:
-//   - a turn was erased since the last sweep (any deletion path, this device
+// content change only when the sweep has work, so a store with nothing to
+// erase is never swept:
+//   - a turn was erased since the last look (any deletion path, this device
 //     or another of the person's devices);
-//   - a row stored since then is a copy of an erased turn (late delivery,
-//     retry, history), or a sent copy of one was queued;
-//   - the last sweep left something held: text that unfinished work needs
-//     until the change that ends it (answered, declined, resolved, failed, a
-//     reply taken, a copy handed over), a deletion not yet told to the
-//     person's other devices, or a file of an erased turn still here.
+//   - an erased turn's text is here and no unfinished work needs it: a late
+//     or retried copy, history, or a request whose work has ended, a reply
+//     taken, a copy handed over;
+//   - the last sweep left something: a deletion not yet told to the person's
+//     other devices, a file of an erased turn still here, or a failure.
 //
 // Typing and presence pulses change nothing stored and never wake it. No
 // timer.
@@ -697,39 +680,58 @@ func (a *Agent) eraseLoop(ctx context.Context) {
 	}
 }
 
-// eraseMark is how far the store was looked at for erase work: the erased
-// turns (count and newest row) and the newest received and sent rows.
-type eraseMark struct{ erased, erasedMax, inMax, outMax int64 }
+// eraseMark is the erased turns last looked at. conv_erased only grows, so
+// its count and newest row tell whether a turn was erased since.
+type eraseMark struct{ erased, erasedMax int64 }
 
-// eraseDue reads the current mark, then reports whether a sweep has work
-// since last: always when held, or on any read error. Rows stored after the
-// mark is read are looked at again next time.
+// eraseDue reports whether a sweep has work: when held, a turn was erased
+// since last, an erased turn's text is here that no work needs, or a read
+// fails.
 func (a *Agent) eraseDue(last eraseMark, held bool) (eraseMark, bool) {
 	var cur eraseMark
-	if err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM conv_erased), (SELECT coalesce(max(rowid), 0) FROM conv_erased),
-		(SELECT coalesce(max(rowid), 0) FROM inbox), (SELECT coalesce(max(rowid), 0) FROM outbox)`).Scan(&cur.erased, &cur.erasedMax, &cur.inMax, &cur.outMax); err != nil {
+	if err := a.store.db.QueryRow(`SELECT count(*), coalesce(max(rowid), 0) FROM conv_erased`).Scan(&cur.erased, &cur.erasedMax); err != nil {
 		return last, true
 	}
-	if held || cur.erased != last.erased || cur.erasedMax != last.erasedMax {
+	if held || cur != last {
 		return cur, true
 	}
 	if cur.erased == 0 {
 		return cur, false
 	}
-	var arrived bool
-	if err := a.store.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM inbox i WHERE i.rowid > ? AND `+erasedIn+`)
-		OR EXISTS (SELECT 1 FROM outbox o WHERE o.rowid > ? AND (`+erasedOut+`
-		  OR o.sub = 'history' AND EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = o.conv AND e.key = json_extract(o.body, '$.from_key') AND e.lid = json_extract(o.body, '$.lid'))))`,
-		last.inMax, last.outMax, a.Self().Fingerprint()).Scan(&arrived); err != nil {
-		return cur, true
-	}
-	return cur, arrived
+	left, err := erasedTextHere(a.store.db, a.Self().Fingerprint())
+	return cur, err != nil || left
 }
+
+// erasedTextHere reports whether any erased turn still holds text that no
+// unfinished work needs: what a sweep would erase, over every conversation.
+// It is driven from conv_erased (CROSS JOIN keeps that order) and looks rows
+// up by index, so it never reads all of inbox or outbox. Rows match as in
+// erasedIn and erasedOut: without a conversation by id, any other by
+// conversation and logical id.
+func erasedTextHere(q querier, selfFP string) (bool, error) {
+	var left bool
+	err := q.QueryRow(`SELECT EXISTS (SELECT 1 FROM conv_erased e CROSS JOIN inbox i ON i.id = e.lid AND i.conv IS NULL
+		  WHERE e.conv = '' AND i.local = 0 AND coalesce(i.sub, '') IN `+erasableSubs+` AND i.body <> '' AND coalesce(i.verified_by, i.claimed_fp, '') = e.key AND NOT `+retainedIn+`)
+		OR EXISTS (SELECT 1 FROM conv_erased e CROSS JOIN inbox i ON i.conv = e.conv AND i.lid = e.lid
+		  WHERE i.local = 0 AND coalesce(i.sub, '') IN `+erasableSubs+` AND i.body <> '' AND coalesce(i.verified_by, i.claimed_fp, '') = e.key AND NOT `+retainedIn+`)
+		OR EXISTS (SELECT 1 FROM conv_erased e CROSS JOIN outbox o ON o.id = e.lid AND o.conv IS NULL WHERE e.conv = '' AND e.key = ?1 AND (`+erasedSentText+`))
+		OR EXISTS (SELECT 1 FROM conv_erased e CROSS JOIN outbox o ON o.conv = e.conv AND o.lid = e.lid WHERE e.key = ?1 AND (`+erasedSentText+`))
+		OR EXISTS (SELECT 1 FROM outbox o WHERE o.sub = 'history' AND o.body <> '' AND NOT `+retainedOut+` AND o.conv IN (SELECT conv FROM conv_erased)
+		  AND EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = o.conv AND e.key = json_extract(o.body, '$.from_key') AND e.lid = json_extract(o.body, '$.lid')))`,
+		selfFP).Scan(&left)
+	return left, err
+}
+
+// erasedSentText matches a sent row (alias o) of an erased turn whose text,
+// or its own received copy's, is still here and no work needs it.
+const erasedSentText = `coalesce(o.sub, '') IN ` + erasableSubs + ` AND o.body <> '' AND NOT ` + retainedOut + `
+	OR EXISTS (SELECT 1 FROM inbox i WHERE i.id = o.id AND i.local = 1 AND i.body <> '' AND NOT ` + retainedIn + `)`
 
 // sweepErased erases what erased turns kept for work that has since ended,
 // drops their files and queues what is still untold (after a crash). It
-// reports whether anything is still held: kept text, an untold deletion or a
-// file still here (or a failure to tell).
+// reports whether anything is still held: an untold deletion or a file still
+// here (or a failure). Text kept for unfinished work is not: eraseDue finds
+// it once the work ends.
 func (a *Agent) sweepErased(ctx context.Context) (held bool) {
 	a.eraseSweeps.Add(1)
 	selfFP := a.Self().Fingerprint()
@@ -767,9 +769,6 @@ func (a *Agent) sweepErased(ctx context.Context) (held bool) {
 			}
 		}
 		if a.dropErasedFiles(conv) { // also what a crash after the erasing commit left
-			held = true
-		}
-		if kept, err := heldTextCount(a.store.db, conv, selfFP); err != nil || kept > 0 {
 			held = true
 		}
 	}
