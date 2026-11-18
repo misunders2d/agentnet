@@ -894,7 +894,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 				}
 			}
 		}
-		return a.sendGroupTurn(ctx, conv, m, binding)
+		sent, err := a.sendGroupTurn(ctx, conv, m, binding)
+		// A person change landing mid-send: read again, at most twice. A
+		// queued batch's row goes back to its worker instead (queuedsend.go).
+		for i := 0; i < 2 && errors.Is(err, errGroupRosterMoved) && stagingBatch(ctx) == nil && len(m.Files) == 0 && binding == nil; i++ {
+			sent, err = a.sendGroupTurn(ctx, conv, m, binding)
+		}
+		return sent, err
 	}
 	if m.PID != "" {
 		info, err := a.participation(conv, m.PID)

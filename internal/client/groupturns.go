@@ -18,6 +18,10 @@ import (
 
 const groupTurnRecipientSchema = `ALTER TABLE outbox ADD COLUMN recipient_fp TEXT;`
 
+// errGroupRosterMoved: a member's roster changed between a group send's
+// checks and its store. Nothing was stored; sending reads again (conv.go).
+var errGroupRosterMoved = fmt.Errorf("%w: a member's roster changed during the send", ErrGroupContextPending)
+
 func groupTurnPacketIn(q dbq, conv string) (GroupContext, error) {
 	var packet GroupContext
 	var raw []byte
@@ -383,7 +387,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 				return e
 			}
 			if !ok || p.roster.Hash() != hash {
-				return ErrGroupContextPending
+				return errGroupRosterMoved
 			}
 		}
 		for _, copy := range copies {
