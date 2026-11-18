@@ -26,7 +26,7 @@ tested, inactive until `ViewCoverSchema` is appended; with it, one projection
 per open (R1), without it two. S4 partial: host API only (`abacd697`, one commit with
 S3, as both change `dmPage`); Comic does not page, and `SelectGroupHistory` stays
 eager (Comic never asks `group_refs=0`, so lazy refs would save nothing).
-S4 web is deferred, not built: a first page of 50 costs what the whole first
+S4 web: deferral proposed, not settled (the busy max misses, see R3): a first page of 50 costs what the whole first
 read costs (370–540 ms at 6400 against 250–290 ms for the messages alone), as
 projection, topics and continuity are of the whole chat; paging the browser
 would not shorten the host's open. Indexed paging (host rows by page) is the
@@ -97,8 +97,9 @@ integration ships:
 | 6400 busy | 735 ms / 1.36 s; 2.11 / 5.74 s | 670 ms / 1.40 s; **1.09 / 2.20 s** | 2.33 / 3.08 s |
 | chat projections per open | 2–3 | 1 every open | 2–3 |
 
-10x busy with the step on: whole open p50 1.09 s, meeting ≤1100 ms; max 2.20 s
-does not. The tail is the first read after new messages: the whole chat is
+10x busy with the step on: whole open p50 1.09 s, and 1.24 s in a second
+15-open run (max 2.72 s, chat shown max 2.29 s): at the ≤1100 ms line, not
+reliably under it, and the max misses. The tail is the first read after new messages: the whole chat is
 projected again (6400 rows) for the rows that changed. TDLib appends a new
 message to the kept chat instead. Appending new rows to the kept projection
 is the next step; S4 web paging would not shorten it (below). Without the
@@ -122,16 +123,20 @@ the first open past 1 s, CPU, block and mutex profiles and an execution trace:
   attention over every row (now only the rows sharing a marked logical id).
 - Left at 10x busy, from a trace of 5 opens (7.6 s): 0.77 s runnable but not
   running, 0.41 s in sync waits, 0.12 s in syscalls, the rest on CPU. Blocked
-  time over 20 opens: about 0.54 s waiting for the writer, in two places. One
-  is the read mark's `Begin`, behind received messages' admission writes (the
-  send branch's lane: one transaction per received page is its work). The other
+  time over 20 opens: about 0.54 s waiting for the writer, so not the tail. The
+  profile shows the waits, not who held the writer. One is the read mark's
+  `Begin`. The likely holder under this load is received messages' admission
+  writes (the send branch's lane: one transaction per received page). To
+  confirm, take a goroutine dump while the open waits in `Begin`. The other
   is the list's `Reminders`: `reconcileReminders` takes the writer for a
   transaction that usually writes nothing. An exact read-only precheck also has
   to cover `projectReminders` (late originals, legacy aliases), so it is left
   as a finding. Waiting for a reader connection was about 20 ms.
-- Harness, not product: the sender (alice) and the Hub run in the measured
-  process. They used 5.4 s of its 32.7 s CPU during busy opens and add
-  scheduler latency a real device does not see.
+- Hypothesis, not confirmed: part of the busy cost is the harness. The sender
+  (alice) and the Hub run in the measured process: in a CPU profile of busy
+  opens (taken before R1's last changes) they used 5.4 s of 32.7 s. They would
+  add scheduler latency a real device does not see. To confirm, run the sender
+  in a separate process.
 
 | Fix | Commit | Regression |
 |---|---|---|
