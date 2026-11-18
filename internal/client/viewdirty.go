@@ -141,8 +141,9 @@ func (a *Agent) SetViewCachesOff(off bool) { a.topicCache.off.Store(off) }
 // more tables: these triggers name the rest, so a change event can say which
 // chats moved and the page reads again only those (MEL-748; TDLib sends one
 // update per changed chat, updateChatLastMessage and the rest, td_api.tl at
-// 03220f6b). ViewCoverSchema is the last schema step (store.go). The
-// background flush's note after it stored rows (backgroundsend.go) is
+// 03220f6b). ViewCoverSchema is a schema step (store.go); the last one,
+// ViewCoverCompactSchema, writes its triggers shorter. The background flush's
+// note after it stored rows (backgroundsend.go) is
 // noteStoredChange, not NoteChange: as NoteChange it made every received
 // message's change unscoped (measured: 0 of 20 events then spared the open
 // chat, 20 of 20 with it). ViewKeysScoped stays as a fallback: a store
@@ -169,31 +170,59 @@ func viewScopeKey(row string) string {
 	return "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id=" + row + ".scope) THEN 'c:'||" + row + ".scope ELSE 'p:'||" + row + ".scope END AS k"
 }
 
+// coverKey is one cover table's key: key in the form ViewCoverSchema
+// shipped it, expr the same key as one expression ("v" prefixed, NULL: no
+// chat), for ViewCoverCompactSchema.
+type coverKey struct {
+	key      func(string) string
+	expr     func(string) string
+	nullable bool
+}
+
+func coverConv(col string) coverKey {
+	return coverKey{viewConvKey(col), func(row string) string { return "'vc:'||" + row + "." + col }, true}
+}
+
+func coverMessage(col string) coverKey {
+	return coverKey{viewMessageKey(col), func(row string) string {
+		id := row + "." + col
+		return "coalesce((SELECT 'vc:'||conv FROM inbox WHERE id=" + id + " AND conv IS NOT NULL),(SELECT 'vc:'||conv FROM outbox WHERE id=" + id + " AND conv IS NOT NULL),'v*')"
+	}, false}
+}
+
+var coverScope = coverKey{viewScopeKey, func(row string) string {
+	return "CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id=" + row + ".scope) THEN 'vc:'||" + row + ".scope ELSE 'vp:'||" + row + ".scope END"
+}, true}
+
+func coverFixed(key string) coverKey {
+	return coverKey{viewFixedKey(key), func(string) string { return "'v" + key + "'" }, false}
+}
+
 var viewCover = []struct {
 	table string
-	key   func(string) string
+	coverKey
 }{
-	{"alert_mutes", viewConvKey("conv")}, {"alerts", viewConvKey("conv")}, {"file_serves", viewConvKey("conv")},
-	{"group_invitation_cancellations", viewConvKey("conv")}, {"group_invitations", viewConvKey("conv")},
-	{"group_proof_records", viewConvKey("conv")}, {"group_proof_roots", viewConvKey("conv")}, {"group_publications", viewConvKey("conv")},
-	{"proposal_choices", viewConvKey("conv")}, {"proposal_sends", viewConvKey("conv")}, {"read_marks", viewConvKey("conv")},
-	{"reminder_marks", viewConvKey("conv")}, {"reminders", viewConvKey("conv")}, {"reply_receivers", viewConvKey("conv")},
-	{"room_context", viewConvKey("conv")}, {"room_membership_events", viewConvKey("conv")}, {"room_turn_readers", viewConvKey("conv")},
-	{"scheduled_sends", viewConvKey("conv")},
-	{"attachments", viewMessageKey("message_id")}, {"file_requests", viewMessageKey("message_id")},
-	{"sent_attachments", viewMessageKey("message_id")}, {"uploads", viewMessageKey("message_id")},
-	{"request_continuations", viewMessageKey("request")}, {"request_parks", viewMessageKey("request")}, {"request_waits", viewMessageKey("request")},
-	{"topic_titles", viewScopeKey}, {"topic_marks", viewScopeKey}, {"topic_locations", viewScopeKey},
-	{"history_receipts", viewFixedKey("h")}, {"history_archive_children", viewFixedKey("h")}, {"history_archive_entries", viewFixedKey("h")},
-	{"history_archive_export_errors", viewFixedKey("h")}, {"history_archive_jobs", viewFixedKey("h")}, {"device_history_sources", viewFixedKey("h")},
-	{"agent_models", viewFixedKey("*")}, {"alert_senders", viewFixedKey("*")}, {"approvals", viewFixedKey("*")}, {"attention", viewFixedKey("*")},
-	{"conversations_v1", viewFixedKey("*")}, {"device_admin_notices", viewFixedKey("*")}, {"device_links", viewFixedKey("*")},
-	{"direct_blobs", viewFixedKey("*")}, {"direct_topic_operations", viewFixedKey("*")}, {"group_invitation_refreshes", viewFixedKey("*")},
-	{"link_offers", viewFixedKey("*")}, {"native_requests", viewFixedKey("*")}, {"operator_persons", viewFixedKey("*")},
-	{"operators", viewFixedKey("*")}, {"own_invitation_views", viewFixedKey("*")}, {"person_grants", viewFixedKey("*")},
-	{"persons_v1", viewFixedKey("*")}, {"quarantine", viewFixedKey("*")}, {"reply_sessions", viewFixedKey("*")},
-	{"task_grants", viewFixedKey("*")}, {"team_chain", viewFixedKey("*")}, {"teams", viewFixedKey("*")},
-	{"topic_transfer_manifest", viewFixedKey("*")}, {"topic_transfer_plans", viewFixedKey("*")},
+	{"alert_mutes", coverConv("conv")}, {"alerts", coverConv("conv")}, {"file_serves", coverConv("conv")},
+	{"group_invitation_cancellations", coverConv("conv")}, {"group_invitations", coverConv("conv")},
+	{"group_proof_records", coverConv("conv")}, {"group_proof_roots", coverConv("conv")}, {"group_publications", coverConv("conv")},
+	{"proposal_choices", coverConv("conv")}, {"proposal_sends", coverConv("conv")}, {"read_marks", coverConv("conv")},
+	{"reminder_marks", coverConv("conv")}, {"reminders", coverConv("conv")}, {"reply_receivers", coverConv("conv")},
+	{"room_context", coverConv("conv")}, {"room_membership_events", coverConv("conv")}, {"room_turn_readers", coverConv("conv")},
+	{"scheduled_sends", coverConv("conv")},
+	{"attachments", coverMessage("message_id")}, {"file_requests", coverMessage("message_id")},
+	{"sent_attachments", coverMessage("message_id")}, {"uploads", coverMessage("message_id")},
+	{"request_continuations", coverMessage("request")}, {"request_parks", coverMessage("request")}, {"request_waits", coverMessage("request")},
+	{"topic_titles", coverScope}, {"topic_marks", coverScope}, {"topic_locations", coverScope},
+	{"history_receipts", coverFixed("h")}, {"history_archive_children", coverFixed("h")}, {"history_archive_entries", coverFixed("h")},
+	{"history_archive_export_errors", coverFixed("h")}, {"history_archive_jobs", coverFixed("h")}, {"device_history_sources", coverFixed("h")},
+	{"agent_models", coverFixed("*")}, {"alert_senders", coverFixed("*")}, {"approvals", coverFixed("*")}, {"attention", coverFixed("*")},
+	{"conversations_v1", coverFixed("*")}, {"device_admin_notices", coverFixed("*")}, {"device_links", coverFixed("*")},
+	{"direct_blobs", coverFixed("*")}, {"direct_topic_operations", coverFixed("*")}, {"group_invitation_refreshes", coverFixed("*")},
+	{"link_offers", coverFixed("*")}, {"native_requests", coverFixed("*")}, {"operator_persons", coverFixed("*")},
+	{"operators", coverFixed("*")}, {"own_invitation_views", coverFixed("*")}, {"person_grants", coverFixed("*")},
+	{"persons_v1", coverFixed("*")}, {"quarantine", coverFixed("*")}, {"reply_sessions", coverFixed("*")},
+	{"task_grants", coverFixed("*")}, {"team_chain", coverFixed("*")}, {"teams", coverFixed("*")},
+	{"topic_transfer_manifest", coverFixed("*")}, {"topic_transfer_plans", coverFixed("*")},
 }
 
 // ViewCoverSchema is the step that makes change events name their chats. Its
@@ -206,6 +235,36 @@ var ViewCoverSchema = func() string {
 	for _, c := range viewCover {
 		key := c.key
 		b.WriteString(viewTable("cover_"+c.table, c.table, func(row string) string { return "SELECT 'v'||k AS k FROM (" + key(row) + ")" }))
+	}
+	return b.String()
+}()
+
+// ViewCoverCompactSchema replaces ViewCoverSchema's triggers with the same
+// triggers, names and keys, written shorter. Every connection parses the
+// whole schema when it opens (the writer and each reader of the pool), and
+// the cover step's 174 triggers about doubled that; the short form takes
+// about a fifth of it back (6.4 to 5.1 ms a connection). A key is written
+// once as an expression instead of a select of a select; a fixed key is
+// marked once on an update, not once for OLD and again for NEW.
+var ViewCoverCompactSchema = func() string {
+	mark := func(c coverKey, row string) string {
+		k, where := c.expr(row), "1" // an upsert after a SELECT needs its WHERE
+		if c.nullable {
+			where = k + " NOT NULL" // a row of no chat names none
+		}
+		return " INSERT INTO view_dirty SELECT " + k + ",(SELECT max(seq)+1 FROM view_dirty) WHERE " + where + " ON CONFLICT DO UPDATE SET seq=excluded.seq;\n"
+	}
+	var b strings.Builder
+	for _, c := range viewCover {
+		name, on := "view_cover_"+c.table, " ON "+c.table+" BEGIN\n"
+		b.WriteString("DROP TRIGGER " + name + "_in;\nDROP TRIGGER " + name + "_set;\nDROP TRIGGER " + name + "_out;\n")
+		b.WriteString("CREATE TRIGGER " + name + "_in AFTER INSERT" + on + mark(c.coverKey, "NEW") + "END;\n")
+		set := mark(c.coverKey, "OLD")
+		if c.expr("OLD") != c.expr("NEW") {
+			set += mark(c.coverKey, "NEW")
+		}
+		b.WriteString("CREATE TRIGGER " + name + "_set AFTER UPDATE" + on + set + "END;\n")
+		b.WriteString("CREATE TRIGGER " + name + "_out AFTER DELETE" + on + mark(c.coverKey, "OLD") + "END;\n")
 	}
 	return b.String()
 }()
