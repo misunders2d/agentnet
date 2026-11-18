@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -607,6 +608,28 @@ func (a *Agent) markOpenable(files []FileInfo, sent bool) {
 			}
 		}
 	}
+}
+
+// FilesNow fills again what msgs' files show from outside their chat's
+// mark: a kept or fetched copy here, a fetch running, a relay that dropped
+// the file. A kept projection (ui chatMessages) serves its page through it.
+func (a *Agent) FilesNow(msgs []ConvMessage) []ConvMessage {
+	out := slices.Clone(msgs)
+	for i := range out {
+		if len(out[i].Attachments) == 0 {
+			continue
+		}
+		files := slices.Clone(out[i].Attachments)
+		sent := out[i].Dir == "out" && out[i].Via == ""
+		for j := range files {
+			if sent || !strings.HasPrefix(files[j].BlobID, historyBlob) { // a history file's availability is stored
+				files[j].Fetch, files[j].Availability = "", ""
+			}
+		}
+		a.markOpenable(files, sent)
+		out[i].Attachments = files
+	}
+	return out
 }
 
 // prefetchFiles fetches (and keeps) the ciphertext of one received file

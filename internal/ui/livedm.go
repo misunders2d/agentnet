@@ -348,7 +348,8 @@ func refused(err error) error {
 // reads this one again too: a page told the change's keys (GET /events
 // "scope") does not ask for it then. What no write marks
 // (a host's connection, the clock) is settled again on every read (client
-// Resettled). fresh reads afresh, keeping nothing (overviewOracle's
+// Resettled); files on disk and running fetches, on the rows a page serves
+// (client FilesNow). fresh reads afresh, keeping nothing (overviewOracle's
 // comparison). scope is the chat's keys, for the page to match change events.
 func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage, assigned map[string]string, scope []string, err error) {
 	v, _ := l.a.ViewChanges() // before reading: a write meanwhile moves it past this
@@ -854,6 +855,7 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 				rows = append(rows, shown[o.row])
 			}
 		}
+		rows = l.a.FilesNow(rows) // a kept projection's files as they stand now
 		for _, m := range rows {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
