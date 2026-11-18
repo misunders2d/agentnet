@@ -54,7 +54,8 @@ group's signed context changed since they were last found complete
 (`groupsSynced`). The spool lock is taken only when a context copy is made.
 A context copy that lapses (failed, expired, not delivered) renews the
 continuity token by trigger, so the group's next send queues it again, as
-before. The daemon's background pass still checks every group. Open, same as
+before. The daemon's background pass visits every group and checks those
+whose key changed. Open, same as
 before this branch: a person change landing between the check and the turn's
 fan-out reaches the new device through the next send or the background pass.
 
@@ -67,7 +68,9 @@ without a write transaction. No file-metadata shortcut.
 **Save first, check after (S6f): not done.** Precondition fails: handover
 does not refuse removed and changed-key devices uniformly for every kind.
 `deliver` refuses a changed reader key only for follow-ups, proposals,
-reactions, controls, continuations and own-sync v3 (`client.go:747`);
+reactions, controls, continuations and own-sync v3 (`client.go:747`); its
+`readerCheck` (`copyneeds.go:171`) checks capabilities only, and nothing for
+a copy that requires none;
 reactions, device history and history archives have their own gates; an
 ordinary turn is sealed at send to the key checked then, and removed
 recipients are retired by the `reconcileRecipientLifecycle` sweep. Moving the
