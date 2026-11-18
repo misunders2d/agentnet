@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"slices"
 	"sync"
 	"time"
 
@@ -375,6 +376,11 @@ func (a *Agent) sync(ctx context.Context) {
 	// Live sends and receipts, each on its own lane, do not await bulk
 	// proof/history work, its transport or each other.
 	a.postOutboxBackground()
+	// Durable receipts still get a turn before bulk history and proof
+	// recovery on this worker.
+	if err := a.flushReceipts(ctx); err != nil {
+		a.Logf("receipts: %v", err)
+	}
 	// Give queued inert copies a turn before preparing more history. Empty
 	// wakes use the existing pending-state index instead of handover scans.
 	var queuedSync bool
@@ -649,9 +655,14 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 	return nil
 }
 
-// receiptLanes acknowledgements travel at once, so a backlog after catch-up
-// costs a few round trips, not one per message.
-const receiptLanes = 8
+// Receipts go in pages, as TDLib acknowledges up to 100 ids at a time
+// (mtproto/SessionConnection.cpp MAX_UNACKED_PACKETS): each page is sent,
+// then marked acknowledged in one transaction. Until the Hub takes a page in
+// one request, ackPage sends receiptLanes per-message acks at once.
+const (
+	receiptPage  = 100
+	receiptLanes = 8
+)
 
 // flushReceipts sends every stored disposition the Hub has not acknowledged.
 func (a *Agent) flushReceipts(ctx context.Context) error {
@@ -663,51 +674,63 @@ func (a *Agent) flushReceipts(ctx context.Context) error {
 	}
 	defer func() { <-a.receiptLock }()
 	pending, err := a.store.unsentReceipts()
-	if err != nil || len(pending) == 0 {
+	if err != nil {
 		return err
 	}
+	for page := range slices.Chunk(pending, receiptPage) {
+		acked, err := a.ackPage(ctx, page)
+		if e := a.store.markAcked(acked...); err == nil {
+			err = e
+		}
+		if err != nil {
+			return err // the next pass sends the rest
+		}
+	}
+	return nil
+}
+
+// ackPage tells the Hub one page of dispositions and returns those it took.
+// It is the one place a page-at-once Hub route would replace.
+func (a *Agent) ackPage(ctx context.Context, page []receipt) ([]receipt, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
 		wg    sync.WaitGroup
 		mu    sync.Mutex
+		acked []receipt
 		first error
 	)
 	lanes := make(chan struct{}, receiptLanes)
-	for _, r := range pending {
+	for _, r := range page {
 		select {
 		case lanes <- struct{}{}:
 		case <-ctx.Done():
 		}
 		if ctx.Err() != nil {
-			break // the first failure stops the rest; the next pass retries
+			break // the first failure stops the rest
 		}
-		wg.Add(1)
-		go func() {
-			defer func() { <-lanes; wg.Done() }()
+		wg.Go(func() {
+			defer func() { <-lanes }()
 			err := a.hub.do(ctx, "POST", "/v1/messages/"+url.PathEscape(r.id)+"/ack", protocol.AckRequest{State: r.state}, nil)
 			var he *HubError
 			if errors.As(err, &he) && he.Status == 404 {
 				err = nil // the Hub no longer holds it; nothing to report
 			}
+			mu.Lock()
+			defer mu.Unlock()
 			if err == nil {
-				err = a.store.markAcked(r)
+				acked = append(acked, r)
+			} else if first == nil {
+				first = err
+				cancel()
 			}
-			if err != nil {
-				mu.Lock()
-				if first == nil {
-					first = err
-					cancel()
-				}
-				mu.Unlock()
-			}
-		}()
+		})
 	}
 	wg.Wait()
 	if first == nil {
 		first = ctx.Err()
 	}
-	return first
+	return acked, first
 }
 
 func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error {

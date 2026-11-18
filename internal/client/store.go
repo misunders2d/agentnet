@@ -1026,21 +1026,34 @@ func (s *store) resendReceipt(id string) error {
 	return err
 }
 
-func (s *store) markAcked(r receipt) error {
-	switch r.table {
-	case "inbox", "history_receipts":
-		if r.state != protocol.StateDelivered {
-			return errors.New("delivered receipt required for admitted row")
-		}
-	case "quarantine":
-		if r.state != protocol.StateQuarantined {
-			return errors.New("quarantined receipt required for held row")
-		}
-	default:
-		return errors.New("unknown receipt source")
+// markAcked records that the Hub took rs, in one transaction.
+func (s *store) markAcked(rs ...receipt) error {
+	if len(rs) == 0 {
+		return nil
 	}
-	_, err := s.db.Exec(`UPDATE `+r.table+` SET acked = 1 WHERE id = ? AND receipt_gen = ?`, r.id, r.generation)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range rs {
+		switch r.table {
+		case "inbox", "history_receipts":
+			if r.state != protocol.StateDelivered {
+				return errors.New("delivered receipt required for admitted row")
+			}
+		case "quarantine":
+			if r.state != protocol.StateQuarantined {
+				return errors.New("quarantined receipt required for held row")
+			}
+		default:
+			return errors.New("unknown receipt source")
+		}
+		if _, err := tx.Exec(`UPDATE `+r.table+` SET acked = 1 WHERE id = ? AND receipt_gen = ?`, r.id, r.generation); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // Message is a received message as shown to the user.
