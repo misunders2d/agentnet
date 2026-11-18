@@ -329,13 +329,22 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema, groupCarrierLapseSchema}
 
 // unsentReceipts runs on every wake. Without these it read all three tables
 // whole (about 96 ms on 200k rows, 0.02 ms with them).
 const unackedReceiptSchema = `CREATE INDEX inbox_unacked ON inbox(id) WHERE acked = 0;
 CREATE INDEX quarantine_unacked ON quarantine(id) WHERE acked = 0;
 CREATE INDEX history_receipts_unacked ON history_receipts(id) WHERE acked = 0;`
+
+// A group context copy that stops counting as present
+// (groupHistoryBatchPresent) gives continuity_generation a new token, so
+// the next send in that group checks its devices again (groupsSynced).
+const groupCarrierLapseSchema = `CREATE TRIGGER continuity_group_carrier_lapse AFTER UPDATE OF state ON outbox
+WHEN OLD.sub IN ('group-proof','group-context')
+ AND OLD.state IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')
+ AND NEW.state NOT IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')
+BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;`
 
 // A reply's inherited topic and a topic's latest turn are looked up by
 // (conv, topic) instead of loading the conversation (chattopics.go).

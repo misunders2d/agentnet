@@ -65,6 +65,7 @@ type Agent struct {
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
 	receipting       backgroundPosts // acknowledgements, beside posting, never in front of it
+	groupsSynced     sync.Map        // group → continuity token/context hash its recovered devices were complete under
 	queued           queuedSends
 	topicCache       topicCache
 	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)

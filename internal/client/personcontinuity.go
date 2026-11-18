@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -749,8 +750,18 @@ func logicalGroupMember(q dbq, p GroupContext, person string) (protocol.GroupMem
 // Reuse the existing proof/current-context carriers and durable outbox batch
 // markers. Recovery shares current group state, never historical ciphertext or
 // execution grants, and never asks a group admin to sign another membership.
-func (a *Agent) syncContinuityGroups(ctx context.Context) error {
+// syncContinuityGroups gives a recovered person's current devices each
+// group's signed context before any turn of it. A send checks only its own
+// group (only), and only when the continuity inputs or the group's context
+// changed since its devices were last found complete; "" checks every group.
+func (a *Agent) syncContinuityGroups(ctx context.Context, only string) error {
 	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		return e
+	}
+	// Read before every other input: a change during this pass leaves a
+	// stale key behind, so the next send checks again.
+	var token string
+	if e := a.store.db.QueryRow(`SELECT token FROM continuity_generation`).Scan(&token); e != nil {
 		return e
 	}
 	aliases, e := logicalPersons(a.store)
@@ -766,32 +777,32 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 	if len(recovered) == 0 {
 		return nil
 	}
-	rows, e := a.store.db.Query(`SELECT conv FROM group_context ORDER BY conv`)
-	if e != nil {
-		return e
-	}
-	var convs []string
-	for rows.Next() {
-		var conv string
-		if e = rows.Scan(&conv); e != nil {
-			rows.Close()
+	convs := []string{only}
+	if only == "" {
+		if convs, e = groupContextConvs(a.store.db); e != nil {
 			return e
 		}
-		convs = append(convs, conv)
 	}
-	e = rows.Err()
-	rows.Close()
-	if e != nil {
-		return e
-	}
-	release, e := lockfile.Wait(a.spoolLockPath())
-	if e != nil {
-		return e
-	}
-	defer release()
+	var release func() // the spool lock, only once a copy is made
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	for _, conv := range convs {
-		packet, e := groupTurnPacketIn(a.store.db, conv)
-		if e != nil {
+		var raw []byte
+		if e = a.store.db.QueryRow(`SELECT payload FROM group_context WHERE conv=?`, conv).Scan(&raw); errors.Is(e, sql.ErrNoRows) {
+			continue
+		} else if e != nil {
+			return e
+		}
+		sum := sha256.Sum256(raw)
+		key := token + "/" + hex.EncodeToString(sum[:])
+		if done, _ := a.groupsSynced.Load(conv); done == key {
+			continue
+		}
+		var packet GroupContext
+		if e = json.Unmarshal(raw, &packet); e != nil {
 			return e
 		}
 		if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
@@ -824,6 +835,11 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 				if present {
 					continue
 				}
+				if release == nil {
+					if release, e = lockfile.Wait(a.spoolLockPath()); e != nil {
+						return e
+					}
+				}
 				copies, e := a.groupDeliveryTo(ctx, packet, payloads, dev)
 				if e != nil {
 					return e
@@ -852,8 +868,26 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 				}
 			}
 		}
+		a.groupsSynced.Store(conv, key)
 	}
 	return nil
+}
+
+func groupContextConvs(q dbq) ([]string, error) {
+	rows, e := q.Query(`SELECT conv FROM group_context ORDER BY conv`)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	var convs []string
+	for rows.Next() {
+		var conv string
+		if e = rows.Scan(&conv); e != nil {
+			return nil, e
+		}
+		convs = append(convs, conv)
+	}
+	return convs, rows.Err()
 }
 
 // UI controls keep the selected message's original signed conversation. A

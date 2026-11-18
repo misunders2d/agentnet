@@ -204,7 +204,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if len(m.Files) > envelope.MaxAttachments {
 		return ConvSent{}, errors.New("group: too many files")
 	}
-	if err := a.syncContinuityGroups(ctx); err != nil {
+	if err := a.syncContinuityGroups(ctx, conv); err != nil {
 		return ConvSent{}, err
 	}
 	packet, err := groupTurnPacketIn(a.store.db, conv)
