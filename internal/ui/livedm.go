@@ -572,7 +572,8 @@ func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
 	}
 	if dmOracle != nil && err == nil {
 		fresh, e := l.dmPage(id, page, true)
-		if now, _ := l.a.ViewChanges(); now.Content == rev.Content { // nothing changed under the comparison
+		now, _ := l.a.ViewChanges()
+		if after, _ := l.a.ViewMark(); now.Content == rev.Content && after == mark { // nothing changed under the comparison, announced or not
 			x, _ := json.Marshal(t)
 			y, _ := json.Marshal(fresh)
 			if e != nil || !bytes.Equal(x, y) {
