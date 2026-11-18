@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/pprof"
 	"slices"
@@ -22,22 +24,33 @@ import (
 // TestOpenChatMeasure times what opening a chat costs the host, as the page
 // does it: the chat, its read mark, the list after that write, the chat again
 // and the open's refresh. AGENTNET_OPEN_MEASURE=1 runs it; "busy" keeps
-// messages arriving in another chat throughout. Opt-in: timings are evidence
+// messages arriving in another chat throughout; AGENTNET_OPEN_SEPARATE=1 runs
+// that sender and the Hub as processes of the real binary, so the measured
+// process holds only the opening device. Opt-in: timings are evidence
 // for docs/INTERACTION_COVERAGE.md, not a pass/fail bound.
 func TestOpenChatMeasure(t *testing.T) {
 	if os.Getenv("AGENTNET_OPEN_MEASURE") == "" {
 		t.Skip("opt-in latency measurement (AGENTNET_OPEN_MEASURE=1)")
 	}
 	home := filepath.Join(t.TempDir(), "bob")
-	alice, bob, live, _ := liveWorldHubAt(t, home)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	var alice, bob *client.Agent
+	var live *Live
+	var bin *agentnetBin
+	separate := os.Getenv("AGENTNET_OPEN_SEPARATE") != ""
+	if separate {
+		bin = buildAgentnet(t)
+		alice, bob, live = separateWorld(t, ctx, bin, home)
+	} else {
+		alice, bob, live, _ = liveWorldHubAt(t, home)
+	}
 	for _, a := range []*client.Agent{alice, bob} {
 		if _, err := a.CreatePerson(ctx, "Person of "+a.Address); err != nil {
 			t.Fatal(err)
 		}
 	}
-	runDaemon(t, alice)
+	stopAlice := runDaemon(t, alice)
 	var conv string
 	for deadline := time.Now().Add(20 * time.Second); conv == ""; time.Sleep(50 * time.Millisecond) {
 		c, err := alice.CreateDM(ctx, bob.Address)
@@ -92,14 +105,25 @@ func TestOpenChatMeasure(t *testing.T) {
 		}
 		bob.NoteChange() // a write the store did not make: say so, as a second process's wake does
 	}
+	send := func(i int) {
+		alice.SendConv(ctx, group, client.ConvOutgoing{Body: fmt.Sprintf("busy %d", i)})
+	}
+	if separate { // alice from here on is the real binary, in its own processes
+		stopAlice()
+		alice.Close()
+		bin.start("alice-daemon.log", "--home", bin.alice, "daemon")
+		send = func(i int) { bin.run("--home", bin.alice, "dm", "send", group, fmt.Sprintf("busy %d", i)) }
+	}
 	var stopBusy atomic.Bool
+	var sent atomic.Int64
 	busy := func() func() {
 		stopBusy.Store(false)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			for i := 0; !stopBusy.Load(); i++ {
-				alice.SendConv(ctx, group, client.ConvOutgoing{Body: fmt.Sprintf("busy %d", i)})
+				send(i)
+				sent.Add(1)
 			}
 		}()
 		return func() { stopBusy.Store(true); <-done }
@@ -216,6 +240,7 @@ func TestOpenChatMeasure(t *testing.T) {
 		dump(size)
 		for _, load := range []string{"idle", "busy"} {
 			var stop func()
+			began, sent0 := time.Now(), sent.Load()
 			if load == "busy" {
 				stop = busy()
 				time.Sleep(300 * time.Millisecond)
@@ -257,8 +282,10 @@ func TestOpenChatMeasure(t *testing.T) {
 				prev = v
 			}
 			anew := fmt.Sprintf("%d of %d events spare the open chat (%d unscoped; keys %v)", spared, events, unscoped, slices.Sorted(maps.Keys(seen)))
+			rate := ""
 			if stop != nil {
 				stop()
+				rate = fmt.Sprintf("; busy sends %.1f/s", float64(sent.Load()-sent0)/time.Since(began).Seconds())
 			}
 			slices.Sort(first)
 			slices.Sort(all)
@@ -290,7 +317,7 @@ func TestOpenChatMeasure(t *testing.T) {
 			t.Logf("TRACE %s %s last open: %s", size, load, strings.Join(trace, " | "))
 			th, _ := live.DM(conv)
 			t.Logf("MEASURE %s %s msgs=%d: chat shown p50 %v max %v; whole open p50 %v max %v; chat projections per open %v; messages read alone p50 %v; first page of 50 p50 %v; %s",
-				size, load, len(th.Messages), first[runs/2].Round(time.Millisecond), first[runs-1].Round(time.Millisecond), all[runs/2].Round(time.Millisecond), all[runs-1].Round(time.Millisecond), builds, reads[1].Round(time.Millisecond), pages[1].Round(time.Millisecond), anew)
+				size, load, len(th.Messages), first[runs/2].Round(time.Millisecond), first[runs-1].Round(time.Millisecond), all[runs/2].Round(time.Millisecond), all[runs-1].Round(time.Millisecond), builds, reads[1].Round(time.Millisecond), pages[1].Round(time.Millisecond), anew+rate)
 		}
 	}
 	grow(9) // 640 rows: the owner's biggest chat
@@ -336,4 +363,92 @@ func waitOpen(t *testing.T, ok func() bool) {
 			t.Fatal("timed out")
 		}
 	}
+}
+
+// agentnetBin is the real agentnet binary, for a measure whose sender and Hub
+// run in processes of their own (AGENTNET_OPEN_SEPARATE): then the measured
+// process holds only the device that opens the chat.
+type agentnetBin struct {
+	t               *testing.T
+	bin, dir, alice string
+}
+
+func buildAgentnet(t *testing.T) *agentnetBin {
+	t.Helper()
+	dir := t.TempDir()
+	b := &agentnetBin{t: t, bin: filepath.Join(dir, "agentnet"), dir: dir, alice: filepath.Join(dir, "alice")}
+	if out, err := exec.Command("go", "build", "-o", b.bin, "../../cmd/agentnet").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	return b
+}
+
+func (b *agentnetBin) run(args ...string) string {
+	out, err := exec.Command(b.bin, args...).CombinedOutput()
+	if err != nil {
+		b.t.Logf("agentnet %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// start runs a long-lived process until the test ends.
+func (b *agentnetBin) start(log string, args ...string) {
+	b.t.Helper()
+	f, err := os.Create(filepath.Join(b.dir, log))
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	cmd := exec.Command(b.bin, args...)
+	cmd.Stdout, cmd.Stderr = f, f
+	if err := cmd.Start(); err != nil {
+		b.t.Fatal(err)
+	}
+	b.t.Cleanup(func() {
+		cmd.Process.Signal(os.Interrupt)
+		done := make(chan struct{})
+		go func() { cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			cmd.Process.Kill()
+			<-done
+		}
+		f.Close()
+	})
+}
+
+// separateWorld is liveWorldHubAt with the Hub a process of the real binary.
+// alice is set up here; the caller hands her to the binary after setup.
+func separateWorld(t *testing.T, ctx context.Context, b *agentnetBin, bobHome string) (alice, bob *client.Agent, live *Live) {
+	t.Helper()
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	data := filepath.Join(b.dir, "hub")
+	b.start("hub.log", "hub", "serve", "--data", data, "--listen", addr)
+	var code []byte
+	waitOpen(t, func() bool {
+		code, err = os.ReadFile(filepath.Join(data, "bootstrap-invite.txt"))
+		return err == nil && len(code) > 0
+	})
+	if alice, err = client.Join(ctx, b.alice, strings.TrimSpace(string(code)), "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	invite, err := alice.Invite(ctx, "bob", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bob, err = client.Join(ctx, bobHome, invite, "desk"); err != nil {
+		t.Fatal(err)
+	}
+	bob.Logf = t.Logf
+	run, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { bob.Run(run, client.RunOptions{}); close(done) }()
+	t.Cleanup(func() { stop(); <-done; bob.Close() })
+	return alice, bob, NewLive(bob)
 }
