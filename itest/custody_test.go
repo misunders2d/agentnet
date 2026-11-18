@@ -155,9 +155,14 @@ func TestSendCustodyDuringCatchUp(t *testing.T) {
 	t.Logf("D1_PHASE missed_serial_loop n=%d elapsed=%s", missed, time.Since(d1).Round(time.Millisecond))
 	d1 = time.Now()
 	waitUntil(t, "the messages bob missed in custody", 5*time.Minute, func() bool {
-		var waiting int
+		// A page send is accepted into the queue (scheduled_sends) before
+		// its copies reach the outbox: both must be empty.
+		var waiting, accepted int
 		err := w.homes["alice"].db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient LIKE 'bob/%' AND state IN ('queued','waiting')`).Scan(&waiting)
-		return err == nil && waiting == 0
+		if err == nil {
+			err = w.homes["alice"].db.QueryRow(`SELECT count(*) FROM scheduled_sends WHERE immediate=1 AND state IN ('pending','dispatching')`).Scan(&accepted)
+		}
+		return err == nil && waiting == 0 && accepted == 0
 	})
 	mark("missed_outbox_drain_wait")
 	stopBob = c.start("bob2.log", "--home", "bob", "daemon", "--ui", "127.0.0.1:0")
