@@ -26,11 +26,10 @@ tested, inactive until `ViewCoverSchema` is appended; with it, one projection
 per open (R1), without it two. S4 partial: host API only (`abacd697`, one commit with
 S3, as both change `dmPage`); Comic does not page, and `SelectGroupHistory` stays
 eager (Comic never asks `group_refs=0`, so lazy refs would save nothing).
-S4 web: deferral proposed, not settled (the busy max misses, see R3): a first page of 50 costs what the whole first
-read costs (370–540 ms at 6400 against 250–290 ms for the messages alone), as
-projection, topics and continuity are of the whole chat; paging the browser
-would not shorten the host's open. Indexed paging (host rows by page) is the
-step that would.
+S4 web is deferred (decided November 18): a first page of 50 costs what the
+whole first read costs (370–540 ms at 6400 against 250–290 ms for the messages
+alone), because projection, topics and continuity span the whole chat, so
+paging the browser would save nothing on the host's open.
 
 **Adaptations, and why.**
 - Typed per-message patches were not taken: they need a per-message change log
@@ -99,10 +98,42 @@ integration ships:
 
 10x busy with the step on: whole open p50 1.09 s, and 1.24 s in a second
 15-open run (max 2.72 s, chat shown max 2.29 s): at the ≤1100 ms line, not
-reliably under it, and the max misses. The tail is the first read after new messages: the whole chat is
+reliably under it, and the max misses.
+
+R4, the sender and the Hub as separate processes of the real `agentnet` binary
+(only the opening device in the measured process), step on, 15 opens, p50 / max:
+
+| 6400 busy | chat shown | whole open | busy sends | projections per open |
+|---|---|---|---|---|
+| separate processes | 631 ms / 1.49 s | 1.08 / 2.54 s | 7.5/s | 1 (one open 2) |
+| in-process, same session | 680 ms / 1.49 s | 1.13 / 2.24 s | 14.6/s | 1 |
+
+The max misses either way. The tail is the open's first read projecting the
+whole chat after a write to it: here the measure's own `unread()` (three rows
+made unread again: an update, not a new row).
+
+Appending new rows to the kept projection (R5) is not built. TDLib adds one
+message to the loaded history (`add_message_to_dialog`,
+`MessagesManager.cpp:31284`; history pages by `on_get_history`, `:7404`; a
+changed message by `on_message_changed`, `:32015`). Doing that exactly here
+would need two subsystems the store does not have:
+- Which rows changed. `view_dirty` says that a chat moved, not which rows or
+  whether only inserts happened. Receipts, delivery states, read marks, copies
+  of an existing message and edits move the same mark. That needs a per-row
+  change log: a schema step and triggers on the message tables.
+- Incremental derivation. A new row changes others: an answer settles its
+  question's controls and execution state (`decorateConv`), a copy merges into
+  an existing message (`convMessages`), an excerpt replaces a row
+  (`showExcerpts`), continuity notices and the time order interleave, and topic
+  assignments and attention follow.
+
+Estimate: one schema step, about 600–1000 lines across `convstore`,
+`controls`, the excerpt and continuity code, plus a parity oracle per derived
+field. It would not shorten this measure's tail, which is an update. Left for
+the owner's decision. The tail is the first read after new messages: the whole chat is
 projected again (6400 rows) for the rows that changed. TDLib appends a new
 message to the kept chat instead. Appending new rows to the kept projection
-is the next step; S4 web paging would not shorten it (below). Without the
+is the next step; S4 web paging would not shorten it (above). Without the
 step, the read mark and the daemon wake still re-project, so R1's gain lands
 with integration.
 
@@ -132,11 +163,11 @@ the first open past 1 s, CPU, block and mutex profiles and an execution trace:
   transaction that usually writes nothing. An exact read-only precheck also has
   to cover `projectReminders` (late originals, legacy aliases), so it is left
   as a finding. Waiting for a reader connection was about 20 ms.
-- Hypothesis, not confirmed: part of the busy cost is the harness. The sender
-  (alice) and the Hub run in the measured process: in a CPU profile of busy
-  opens (taken before R1's last changes) they used 5.4 s of 32.7 s. They would
-  add scheduler latency a real device does not see. To confirm, run the sender
-  in a separate process.
+- Refuted (R4): that the harness inflated busy timings, with the sender
+  (alice) and the Hub in the measured process. With both as processes of the
+  real binary (`AGENTNET_OPEN_SEPARATE=1`), the open measures the same at
+  half the message rate (table below). The busy cost is the opening device's
+  own receive work and the whole-chat projection.
 
 | Fix | Commit | Regression |
 |---|---|---|
