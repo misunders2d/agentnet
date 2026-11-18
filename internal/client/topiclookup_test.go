@@ -1,9 +1,12 @@
 package client
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // referenceTopicHead is chatTopicHead as it was: the whole history decides.
@@ -102,6 +105,32 @@ func TestTopicLookupsMatchWholeHistory(t *testing.T) {
 	send(w.alice, ConvOutgoing{Body: "reply to bob", ReplyTo: fromBob.LID})
 	send(w.alice, ConvOutgoing{Body: "main reply", ReplyTo: main.LID})
 	checkTopicParity(t, w.alice, conv, "plain")
+
+	// A shared excerpt as a topic's latest visible turn: the whole history
+	// shows it as a turn of the topic, so the indexed lookup must too. (A
+	// topic of its own: the legacy reply above sends the first one to the
+	// whole history anyway.)
+	other := send(w.alice, ConvOutgoing{Body: "second topic", Topic: "new"})
+	second := convMsgByID(t, w.alice, conv, other.ID).Topic
+	send(w.alice, ConvOutgoing{Body: "in second topic", Topic: second})
+	item, err := json.Marshal(HistoryItem{V: envelope.Version2, From: w.bob.Address, FromKey: w.bob.Self().Fingerprint(), ID: protocol.NewID(), LID: protocol.NewID(), TS: time.Now().Unix() + 60, Kind: envelope.KindMessage, Body: "shared excerpt", Topic: second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, carrier := time.Now().Add(time.Minute), protocol.NewID()
+	if _, err = w.alice.store.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,received_ms,conv,sub,lid,verified_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, carrier, w.bob.Address, at.Unix(), envelope.KindMessage, string(item), at.Unix(), at.UnixMilli(), conv, envelope.SubExcerpt, protocol.NewID(), w.bob.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	var excerpt HistoryItem
+	json.Unmarshal(item, &excerpt)
+	if head := referenceTopicHead(t, w.alice, conv, second); head != excerpt.LID {
+		t.Fatalf("the whole history's head is %s, not the excerpt", head)
+	}
+	checkTopicParity(t, w.alice, conv, "excerpt")
+	// It has no participation here to reply under: the rest goes on without it.
+	if _, err = w.alice.store.db.Exec(`DELETE FROM inbox WHERE id=?`, carrier); err != nil {
+		t.Fatal(err)
+	}
 
 	// A new message to the topic replies to its latest turn.
 	next := send(w.alice, ConvOutgoing{Body: "next in topic", Topic: topic})

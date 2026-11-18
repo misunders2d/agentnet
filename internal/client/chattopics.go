@@ -434,7 +434,8 @@ func (a *Agent) outgoingTopic(conv, topic, reply string) (string, error) {
 // turnRows are a conversation's stored turns as ConversationMessages shows
 // them: no controls, records, own-job copies, erased turns or topic
 // metadata. Arguments: conv, then the outbox's self fingerprint last.
-const turnRowsIn = ` FROM inbox i WHERE i.conv=? AND i.local=0 AND i.ref_id IS NULL AND coalesce(i.sub,'')='' AND NOT ` + `EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = coalesce(i.conv, '') AND e.key = coalesce(i.verified_by, i.claimed_fp, '') AND e.lid = i.lid)`
+var turnRowsIn = ` FROM inbox i WHERE i.conv=? AND i.local=0 AND i.ref_id IS NULL AND coalesce(i.sub,'')='' AND NOT ` + erasedIn
+
 const turnRowsOut = ` FROM outbox o WHERE o.conv=? AND o.ref_id IS NULL AND coalesce(o.sub,'')='' AND NOT ` + erasedOut
 
 // notOrganized leaves out move, merge, rename and resources events: the
@@ -786,12 +787,14 @@ func (a *Agent) chatTopicHead(conv, topic string) (string, error) {
 }
 
 // topicTurns loads only the turns that name topic, with what their order
-// needs. While no move, merge or promotion touches the conversation, those
-// are exactly the turns ChatTopicAssignments places in it; otherwise it
-// returns nil and the caller decides from the whole history.
+// needs. While no move, merge, promotion or shared excerpt (a turn only the
+// shown history places) touches the conversation, those are exactly the
+// turns ChatTopicAssignments places in it; otherwise it returns nil and the
+// caller decides from the whole history.
 func (s *store) topicTurns(conv, topic, selfFP string) ([]ConvMessage, error) {
 	var organized int
-	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE conv=? AND topic IS NOT NULL AND json_extract(nullif(topic_event,''),'$.action') IN ('move','merge')) OR EXISTS(SELECT 1 FROM outbox WHERE conv=? AND topic IS NOT NULL AND json_extract(nullif(topic_event,''),'$.action') IN ('move','merge'))`, conv, conv).Scan(&organized); err != nil {
+	const exceptional = ` WHERE conv=? AND (sub='excerpt' OR topic IS NOT NULL AND json_extract(nullif(topic_event,''),'$.action') IN ('move','merge')))`
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox`+exceptional+` OR EXISTS(SELECT 1 FROM outbox`+exceptional, conv, conv).Scan(&organized); err != nil {
 		return nil, err
 	}
 	if organized != 0 {
