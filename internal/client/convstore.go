@@ -764,8 +764,9 @@ type ConvMessage struct {
 	Sub               string                        `json:"sub,omitempty"`
 	Replica           bool                          `json:"replica,omitempty"`
 	OtherDM           bool                          `json:"other_dm,omitempty"` // from another DM with the same person (continuity): outside the requested DM's scope
-	Origin            string                        `json:"origin,omitempty"`   // the sender's assertion ("" for none)
-	Emotion           string                        `json:"emotion,omitempty"`  // "" means none sent
+	conv              string                        // the chat whose rows it came from, for RereadRead
+	Origin            string                        `json:"origin,omitempty"`  // the sender's assertion ("" for none)
+	Emotion           string                        `json:"emotion,omitempty"` // "" means none sent
 	Target            *envelope.Target              `json:"target,omitempty"`
 	PID               string                        `json:"pid,omitempty"`         // the agent participation it is for, from or about
 	AgentID           string                        `json:"agent_id,omitempty"`    // the named answer/result author, asserted by its host

@@ -548,7 +548,7 @@ func (a *Agent) MessagingConversationMessages(conv string) ([]ConvMessage, error
 		for _, m := range msgs {
 			if !envelope.TopicMetadata(m.TopicEvent) && !seen[m.ID] {
 				seen[m.ID] = true
-				m.OtherDM = row.ID != target
+				m.OtherDM, m.conv = row.ID != target, row.ID
 				out = append(out, m)
 			}
 		}

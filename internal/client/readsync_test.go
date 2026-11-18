@@ -995,7 +995,7 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 			checkLegacy(t, false)
 			// Execute the same exhaustion continuation used by MarkReadWithAttention,
 			// with the real error from the write-invalidated scope above.
-			if e = a.markReadAfterAttention(ids, err); e != nil {
+			if e = a.markReadAfterAttention(ids, err, nil); e != nil {
 				t.Fatal(e)
 			}
 			checkLegacy(t, true)
@@ -1009,7 +1009,7 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 	resetLegacy()
 	otherFailure := errors.New("scope resolver failure")
 	_, _, scopeErr := a.attentionActionScope(func() (map[string]protocol.ReadRef, error) { return nil, otherFailure })
-	if err = a.markReadAfterAttention(ids, scopeErr); !errors.Is(err, otherFailure) {
+	if err = a.markReadAfterAttention(ids, scopeErr, nil); !errors.Is(err, otherFailure) {
 		t.Fatal("non-contention error changed", err)
 	}
 	checkLegacy(t, false)
@@ -1509,4 +1509,55 @@ func testReadSyncV2Waiting(t *testing.T, mode string) {
 		t.Fatal("revoked reader admitted", allowed, e)
 	}
 	t.Logf("rd2 mode=%s one exact waiting carrier/copy across producer+restart; V1 independent=%t; same cipher released; key/revocation fenced", mode, mode == "rd1")
+}
+
+// A read's copies to this person's other devices (read_mark_copies and their
+// carriers, "h") move no chat's view mark, so the open chat's view patched at
+// the read's mark stays kept (ui markRead). The read still reaches the other
+// device with the daemon's own wake (notifyOwnWork, MEL-692).
+func TestReadMarkCopiesLeaveTheChatMark(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.alice)
+	conv := newDM(t, w.bob, w.alice)
+	if !w.alice.ViewKeysScoped() {
+		if _, err := w.alice.store.db.Exec(ViewCoverSchema); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "unseen turn"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the turn on both own devices", func() bool {
+		return len(convBodies(t, w.alice, conv)) == 1 && len(convBodies(t, phone, conv)) == 1
+	})
+	settled := func() int64 { // the chat's mark, once nothing has moved it for a while
+		_, last, _ := w.alice.ChatViewMark(conv)
+		for stable := time.Now(); time.Since(stable) < 500*time.Millisecond; time.Sleep(50 * time.Millisecond) {
+			if _, m, _ := w.alice.ChatViewMark(conv); m != last {
+				last, stable = m, time.Now()
+			}
+		}
+		return last
+	}
+	start := settled()
+	from, err := w.alice.ViewMark()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := readState(t, w.alice, conv, "unseen turn")
+	span, err := w.alice.MarkReadWatching([]string{id}, nil, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !span.OK || span.Before != start || span.After <= start {
+		t.Fatalf("read span %+v from mark %d", span, start)
+	}
+	eventually(t, "the read reaches the phone", func() bool { _, read := readState(t, phone, conv, "unseen turn"); return read })
+	if after := settled(); after != span.After {
+		keys, _, _ := w.alice.ViewDirtySince(from)
+		t.Fatalf("the chat's mark moved past the read (%d to %d): keys %v", span.After, after, keys)
+	}
 }

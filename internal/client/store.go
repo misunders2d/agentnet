@@ -1219,13 +1219,36 @@ func (s *store) setSaved(messageID, blobID, path string) error {
 	return s.done(err)
 }
 
-func (s *store) markRead(ids []string) error {
+// markRead marks ids read in one transaction: one write, not one per id (640
+// at once took 1.2 s of trigger work and as many commits, MEL-748).
+func (s *store) markRead(ids []string) error { return s.markReadSpan(ids, nil) }
+
+// markReadSpan is markRead recording the chat's view mark around its write
+// in span, when set (readSpans).
+func (s *store) markReadSpan(ids []string, span *readSpans) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = span.begin(tx); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`UPDATE inbox SET read_at = ? WHERE id = ? AND read_at IS NULL`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().Unix()
 	for _, id := range ids {
-		if _, err := s.db.Exec(`UPDATE inbox SET read_at = ? WHERE id = ? AND read_at IS NULL`, time.Now().Unix(), id); err != nil {
+		if _, err := stmt.Exec(now, id); err != nil {
 			return err
 		}
 	}
-	return s.done(nil)
+	if err = span.end(tx); err != nil {
+		return err
+	}
+	return s.done(tx.Commit())
 }
 
 // markRecordsRead marks read the records between devices that the inbox

@@ -234,14 +234,23 @@ func (a *Agent) ChatViewMark(conv string) (keys []string, mark int64, err error)
 			keys = append(keys, "c:"+r.ID)
 		}
 	}
+	mark, err = chatMarkIn(a.store.db, keys)
+	return keys, mark, err
+}
+
+// chatMarkIn is ChatViewMark's mark for keys, read through q: within a write
+// transaction it sees that transaction's own marks. "h" and "vh" are left
+// out: history copying's progress, which no chat's messages read (the page's
+// skip rule says the same, store.ts scopedRefetch).
+func chatMarkIn(q querier, keys []string) (mark int64, err error) {
 	args := make([]any, 0, 2*len(keys))
 	for _, k := range keys {
 		args = append(args, k, "v"+k)
 	}
 	// "c:" keys sort between "c:" and "c;", "vc:" ones between "vc:" and
 	// "vc;": the rest is three index ranges.
-	err = a.store.db.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty WHERE key IN (?`+strings.Repeat(",?", len(args)-1)+`) OR key<'c:' OR key>='c;' AND key<'vc:' OR key>='vc;'`, args...).Scan(&mark)
-	return keys, mark, err
+	err = q.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty WHERE (key IN (?`+strings.Repeat(",?", len(args)-1)+`) OR key<'c:' OR key>='c;' AND key<'vc:' OR key>='vc;') AND key NOT IN ('h','vh')`, args...).Scan(&mark)
+	return mark, err
 }
 
 // ViewScope returns the keys that moved after mark, as ViewDirtySince, when

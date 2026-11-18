@@ -260,11 +260,82 @@ func (l *Live) keptChats(convs []client.ConversationInfo) map[string]*chatEntry 
 }
 
 // keptMessages is one chat's projected messages as read at one mark: the
-// content revision (client ViewChanges) and the chat's view_dirty mark.
+// revision (keptRev) and the chat's view_dirty mark. assigned is their topic
+// assignments (client ChatTopicAssignments), kept with them because every
+// reader of the chat (its view, main topic, topics, list row) needs them and
+// they follow only the messages' reply and topic graph, not read state: a read
+// mark patched in place keeps them.
 type keptMessages struct {
-	rev  uint64
-	seq  int64
-	msgs []client.ConvMessage
+	rev      uint64
+	seq      int64
+	msgs     []client.ConvMessage
+	assigned map[string]string
+}
+
+// keptRev is the revision a kept chat is read at besides its view_dirty mark.
+// When every table names its scope (client ViewKeysScoped), a store write moves
+// only the marks of what it touched, so the unscoped revision (a change no
+// store write names) is enough: another chat's traffic then leaves this one
+// kept. Otherwise any write may be one no mark names: the content revision.
+// The step that scopes them is appended, never undone, and may be by another
+// process while this one runs, so a scoped revision sorts after every
+// unscoped one: what was kept before it is then replaced, never preferred.
+func (l *Live) keptRev(v client.ViewChange) uint64 {
+	if l.a.ViewKeysScoped() {
+		return 1<<63 | v.Unscoped
+	}
+	return v.Content
+}
+
+// markRead marks the open chat's messages read and, when nothing else moved
+// it meanwhile, applies the read state to its kept projection rather than
+// projecting it again: Telegram changes the dialog's read fields for a read
+// and sends updateChatReadInbox, never rebuilding history (TDLib at 03220f6:
+// read_history_inbox, MessagesManager.cpp:9618; set_dialog_last_read_inbox_message_id,
+// :9981; send_update_chat_read_inbox, :27660; td_api.tl:11430).
+func (l *Live) markRead(x Action) error {
+	l.msgsMu.Lock()
+	conv := l.lastOpen
+	kept, ok := l.msgs[conv]
+	l.msgsMu.Unlock()
+	if ok && len(x.IDs) > 0 {
+		want := map[string]bool{}
+		for _, id := range x.IDs {
+			want[id] = true
+		}
+		for _, m := range kept.msgs {
+			delete(want, m.ID)
+		}
+		ok = len(want) == 0 // every message marked is the open chat's
+	}
+	if !ok {
+		return refused(l.a.MarkReadWithAttention(x.IDs, x.Attention))
+	}
+	span, err := l.a.MarkReadWatching(x.IDs, x.Attention, conv)
+	if err != nil {
+		return refused(err)
+	}
+	v, _ := l.a.ViewChanges()
+	if !span.OK || kept.seq != span.Before || kept.rev != l.keptRev(v) {
+		return nil // something else moved it: the next read projects it again
+	}
+	msgs := slices.Clone(kept.msgs)
+	if l.a.RereadRead(msgs, x.IDs) != nil {
+		return nil
+	}
+	l.msgsMu.Lock()
+	if cur := l.msgs[conv]; cur.rev == kept.rev && cur.seq == kept.seq {
+		l.msgs[conv] = keptMessages{kept.rev, span.After, msgs, kept.assigned}
+	}
+	l.msgsMu.Unlock()
+	return nil
+}
+
+func refused(err error) error {
+	if err != nil {
+		return Refuse(sentence(err))
+	}
+	return nil
 }
 
 // chatMessages is a chat's projected messages, read once per mark and shared
@@ -279,12 +350,12 @@ type keptMessages struct {
 // (a host's connection, the clock) is settled again on every read (client
 // Resettled). fresh reads afresh, keeping nothing (overviewOracle's
 // comparison). scope is the chat's keys, for the page to match change events.
-func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage, scope []string, err error) {
+func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage, assigned map[string]string, scope []string, err error) {
 	v, _ := l.a.ViewChanges() // before reading: a write meanwhile moves it past this
-	rev := v.Content
+	rev := l.keptRev(v)
 	scope, seq, err := l.a.ChatViewMark(conv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	l.msgsMu.Lock()
 	kept, ok := l.msgs[conv]
@@ -295,12 +366,12 @@ func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage,
 		}
 		msgs, err := l.a.MessagingConversationMessages(conv)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if fresh {
-			return msgs, scope, nil
+			return msgs, client.ChatTopicAssignments(msgs), scope, nil
 		}
-		kept = keptMessages{rev, seq, msgs}
+		kept = keptMessages{rev, seq, msgs, client.ChatTopicAssignments(msgs)}
 		l.msgsMu.Lock()
 		for k, v := range l.msgs { // an older revision serves no one again
 			if v.rev < rev {
@@ -315,7 +386,7 @@ func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage,
 		}
 		l.msgsMu.Unlock()
 	}
-	return l.a.Resettled(kept.msgs), scope, nil
+	return l.a.Resettled(kept.msgs), kept.assigned, scope, nil
 }
 
 // buildChatSummary reads one chat's messages for its list row.
@@ -323,7 +394,7 @@ func (l *Live) buildChatSummary(c client.ConversationInfo, e *chatEntry, partici
 	if overviewChatBuilt != nil && !l.viewCachesOff {
 		overviewChatBuilt(c.ID)
 	}
-	msgs, _, err := l.chatMessages(c.ID, l.viewCachesOff)
+	msgs, kept, _, err := l.chatMessages(c.ID, l.viewCachesOff)
 	if err != nil {
 		return err
 	}
@@ -333,7 +404,7 @@ func (l *Live) buildChatSummary(c client.ConversationInfo, e *chatEntry, partici
 		if assigned != nil {
 			return titleErr
 		}
-		assigned = client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
+		assigned = kept // complete graph, including read ancestors
 		topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
 		titleErr = err
 		if err != nil {
@@ -567,6 +638,11 @@ func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
 	rev, _ := l.a.ViewChanges()
 	mark, _ := l.a.ViewMark()
 	t, err := l.dmPage(id, page, false)
+	if err == nil {
+		l.msgsMu.Lock()
+		l.lastOpen = t.ID
+		l.msgsMu.Unlock()
+	}
 	if dmOracle != nil && err == nil && page.Limit == 0 && l.a.ViewKeysScoped() {
 		l.checkSkip(id, t, mark, rev.Unscoped)
 	}
@@ -653,7 +729,7 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 		if err != nil {
 			return DMThread{}, err
 		}
-		msgs, scope, err := l.chatMessages(id, fresh)
+		msgs, assigned, scope, err := l.chatMessages(id, fresh)
 		if err != nil {
 			return DMThread{}, err
 		}
@@ -686,7 +762,7 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 		} else {
 			t.Members = originalViews(c)
 		}
-		main, err := l.a.ChatMainTopicForMessages(id, msgs)
+		main, err := l.a.ChatMainTopicForMessages(id, msgs, assigned)
 		if err != nil {
 			return t, err
 		}
@@ -694,7 +770,6 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 			summary := threadSummary(*main, false)
 			t.MainTopic = &summary
 		}
-		assigned := client.ChatTopicAssignments(msgs)
 		topics, err := l.a.ChatTopicsForMessages(id, msgs, assigned)
 		if err != nil {
 			return DMThread{}, err

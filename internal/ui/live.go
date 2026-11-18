@@ -46,6 +46,7 @@ type Live struct {
 	msgsMu         sync.Mutex
 	seen           map[string]seenView     // checkSkip's last view of each chat (dmOracle only)
 	msgs           map[string]keptMessages // each chat's projected messages at one content revision (livedm.go)
+	lastOpen       string                  // the chat DMPage read last: the one a read mark is for (markRead)
 	unreadMu       sync.Mutex
 	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards
 	count          unreadCount  // the app badge's running total (liveunreadcount.go)
@@ -751,7 +752,9 @@ func (l *Live) Act(x Action) (string, error) {
 		count, err = l.a.ArchiveHeldNotices(x.Held)
 		note = fmt.Sprintf("Archived %d notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.", count)
 	case DoRead:
-		err = l.a.MarkReadWithAttention(x.IDs, x.Attention)
+		// The store's write says it changed (and which chat, with keys): a
+		// further unscoped note would read every kept chat again.
+		return "", l.markRead(x)
 	case DoUnread:
 		err = l.a.MarkUnread(x.ID, x.IDs)
 		note = "Marked unread."
