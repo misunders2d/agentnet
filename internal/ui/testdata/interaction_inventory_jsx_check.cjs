@@ -41,11 +41,11 @@ async function main(){
   });
   const root=path.resolve(__dirname,'../web/src/features'),real=['Conversation.tsx','Conversation.topics.tsx','Teams.tsx'].map(f=>path.join(root,f));
   const actual=await jsxSourceNodes(real);
-  for(const [file,line,tag] of [['Conversation.tsx',116,'Button'],['Conversation.topics.tsx',353,'Button'],['Conversation.topics.tsx',354,'Button'],['Conversation.topics.tsx',359,'input']])check('actual source '+file+':'+line,()=>{
+  for(const [file,line,tag] of [['Conversation.tsx',120,'Button'],['Conversation.topics.tsx',353,'Button'],['Conversation.topics.tsx',354,'Button'],['Conversation.topics.tsx',359,'input']])check('actual source '+file+':'+line,()=>{
    const text=fs.readFileSync(path.join(root,file),'utf8');assert(actual.get(path.join(root,file)).some(n=>n.tag===tag&&text.slice(0,n.start).split('\n').length===line));
   });
   for(const [file,expected] of [
-   ['Conversation.tsx',[[111,['onSelect']],[116,['onClick']]]],
+   ['Conversation.tsx',[[115,['onSelect']],[120,['onClick']]]],
    ['Conversation.topics.tsx',[[349,['onOpenChange','title']],[353,['onClick']],[354,[]],[357,['onSubmit']],[359,['onChange']]]],
    ['Teams.tsx',[[270,['onClick']],[277,['onClick']]]],
   ])check('actual own attributes '+file,()=>{

@@ -18,6 +18,7 @@ function hooks(){let cells=[],cursor=0,effects=[],fn,tree;
   useState:init=>{const i=cursor++;cells[i]??={value:typeof init==='function'?init():init};return[cells[i].value,v=>{cells[i].value=typeof v==='function'?v(cells[i].value):v;}];},
   useRef:init=>{const i=cursor++;return cells[i]??(cells[i]={current:init});},
   useEffect:(effect,deps)=>{const i=cursor++,old=cells[i];if(!old||deps.some((d,n)=>d!==old[n])){cells[i]=deps;effects.push(effect);}},
+  useMemo:(make,deps)=>{const i=cursor++,old=cells[i];if(!old||deps.some((d,n)=>d!==old.deps[n]))cells[i]={deps,value:make()};return cells[i].value;},
  }};
 }
 const base={host:'fictional/host',id:'1'.repeat(32),key:'aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa',attempt:1};
