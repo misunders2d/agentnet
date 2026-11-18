@@ -106,4 +106,7 @@ func TestReaderPoolIsOneConnection(t *testing.T) {
 	if n := s.db.reads.Stats().MaxOpenConnections; n != 1 {
 		t.Fatalf("reader pool allows %d connections", n)
 	}
+	if n := s.db.reads.Stats().OpenConnections; n != 1 {
+		t.Fatalf("reader opened %d connections at open, want 1 ready", n)
+	}
 }

@@ -449,6 +449,14 @@ func openStore(path string) (*store, error) {
 		writer.Close()
 		return nil, err
 	}
+	// The reader parses the schema now, not on the first read: a read under a
+	// short deadline (a native request's) otherwise spent it there.
+	var objects int
+	if err := reads.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&objects); err != nil {
+		writer.Close()
+		reads.Close()
+		return nil, err
+	}
 	s := &store{db: &storeDB{writer, reads}}
 	s.continuityDirty.Store(true)
 	return s, nil
