@@ -458,6 +458,16 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	if errors.Is(err, errNativeActivityDeferred) {
 		return true // keep only latest detail due; other requests still progress
 	}
+	if errors.Is(err, ErrNoControls) && res.ID == "" && ref.Conv == "" {
+		// Not told, and not "never to be told" either, until the requester's
+		// record says what it reads: one still to come (its daemon has not
+		// connected since it started) is no proof that it cannot read this.
+		// The members push that announces the record wakes the next pass.
+		a.statusAwaitsCaps.Store(true)
+		if !a.peerAdvertised(sctx, sender) {
+			return true // still due; later requests still progress
+		}
+	}
 	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) && unreachableNow(err) {
 		a.Logf("status of %s not told to %s yet: %v", id, sender, err)
 		return false // still due: told on a later pass
@@ -467,6 +477,17 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	}
 	told() // stored for sending (the outbox retries it), or never to be told
 	return true
+}
+
+// peerAdvertised reports whether the relay shows the pinned device at
+// address with a capability record for each of its sessions.
+func (a *Agent) peerAdvertised(ctx context.Context, address string) bool {
+	key, err := a.sendKey(ctx, address)
+	if err != nil {
+		return false
+	}
+	prof, err := a.peerProfile(ctx, address)
+	return err == nil && prof.Advertised(address, key.SignKey)
 }
 
 // unreachableNow reports an error from not reaching the Hub (no

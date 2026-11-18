@@ -92,6 +92,7 @@ type Agent struct {
 	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
 	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
+	statusAwaitsCaps atomic.Bool                // a status waits for its requester's capability record (tellStatus)
 	receiveFails     receiveFailures            // transient admission failures per pushed envelope (daemon.go)
 	prefetchFailed   map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
 	fetches          fileFetches                // received files a person chose to download (filewait.go)
