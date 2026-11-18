@@ -687,6 +687,9 @@ func (b *sendBatch) headUnknown(s ScheduledSend) bool {
 	return ok && head == "" && s.ReplyTo == ""
 }
 
+// drainStep, set only by tests, runs before each row of a drain is prepared.
+var drainStep func(int)
+
 // drainQueued prepares rows in order, the text ones into one batch, then
 // stores the batch. waiting: a message must wait, and so the chat with it.
 func (a *Agent) drainQueued(ctx context.Context, rows []ScheduledSend) ([]queuedOutcome, bool) {
@@ -695,6 +698,9 @@ func (a *Agent) drainQueued(ctx context.Context, rows []ScheduledSend) ([]queued
 	var out []queuedOutcome
 	waiting := false
 	for i, r := range rows {
+		if drainStep != nil {
+			drainStep(i)
+		}
 		alone := len(r.Files) > 0 || r.Ask != nil
 		if i > 0 && (alone || b.headUnknown(r)) {
 			break // its turn comes first in the next drain, after this batch is stored
@@ -719,11 +725,9 @@ func (a *Agent) drainQueued(ctx context.Context, rows []ScheduledSend) ([]queued
 			break
 		}
 	}
-	if ctx.Err() != nil {
-		// The attempt ended (its budget, or shutdown) while checks were made:
-		// nothing of it is stored; each resumes under its id.
-		return out, true
-	}
+	// The attempt may have ended (its budget, or shutdown) while a later one
+	// was checked: what was checked before it is stored, under the same
+	// guards in the transaction; the rest resumes under its id.
 	stored, more := a.storeSendBatch(b)
 	return append(out, stored...), waiting || more
 }

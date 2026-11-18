@@ -234,3 +234,48 @@ func TestQueuedBatchRechecksKeyAtCommit(t *testing.T) {
 		t.Fatalf("second attempt: %s %v, %d copies", row.State, err, queuedLIDCopies(t, w.alice, id))
 	}
 }
+
+// An attempt that runs out while a later message is checked still stores
+// the messages checked before it, in order; the rest waits for the next.
+func TestQueuedBatchKeepsCheckedPrefixWhenAttemptEnds(t *testing.T) {
+	w, _, _, _ := groupTurnsFixture(t)
+	dm := newDM(t, w.alice, w.bob)
+	q := &w.alice.queued
+	q.Lock()
+	q.closed = true
+	q.Unlock()
+	ids := make([]string, 21)
+	for i := range ids {
+		ids[i] = protocol.NewID()
+		if _, err := w.alice.QueueSend(ScheduledSendInput{ID: ids[i], Conv: dm, Body: fmt.Sprintf("ready %d", i+1)}, "", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := w.alice.nextQueuedSends(dm)
+	if err != nil || len(rows) != len(ids) {
+		t.Fatalf("queued: %d %v", len(rows), err)
+	}
+	ctx, cancel := context.WithCancel(withRoundTrips(tctx(t)))
+	defer cancel()
+	drainStep = func(i int) {
+		if i == 20 {
+			cancel() // message 21 exhausts the attempt
+		}
+	}
+	defer func() { drainStep = nil }()
+	_, waiting := w.alice.drainQueued(ctx, rows)
+	if !waiting {
+		t.Fatal("the chat does not wait for message 21")
+	}
+	for i, id := range ids[:20] {
+		if queuedLIDCopies(t, w.alice, id) == 0 {
+			t.Fatalf("checked message %d dropped with the attempt", i+1)
+		}
+	}
+	if n := queuedLIDCopies(t, w.alice, ids[20]); n != 0 {
+		t.Fatalf("message 21 stored %d copies without its checks", n)
+	}
+	if s := queuedRow(t, w.alice, ids[20]); s.State != ScheduledPending && s.State != ScheduledDispatching {
+		t.Fatalf("message 21 %s, want it waiting", s.State)
+	}
+}
