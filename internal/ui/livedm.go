@@ -1,17 +1,13 @@
 package ui
 
 import (
-	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -270,7 +266,14 @@ type keptMessages struct {
 	seq      int64
 	msgs     []client.ConvMessage
 	assigned map[string]string
+	used     uint64 // when it was last read (Live.msgsUsed)
 }
+
+// keptChats bounds the kept projections to the open chat and the chats read
+// most recently: TDLib unloads the messages of chats not opened lately
+// (MessagesManager.cpp:8946 at 03220f6b), and a list row's summary is kept
+// apart (chatEntry), so a chat read again is only one that changed.
+const keptChats = 16
 
 // keptRev is the revision a kept chat is read at besides its view_dirty mark.
 // When every table names its scope (client ViewKeysScoped), a store write moves
@@ -325,7 +328,7 @@ func (l *Live) markRead(x Action) error {
 	}
 	l.msgsMu.Lock()
 	if cur := l.msgs[conv]; cur.rev == kept.rev && cur.seq == kept.seq {
-		l.msgs[conv] = keptMessages{kept.rev, span.After, msgs, kept.assigned}
+		l.msgs[conv] = keptMessages{kept.rev, span.After, msgs, kept.assigned, cur.used}
 	}
 	l.msgsMu.Unlock()
 	return nil
@@ -360,6 +363,11 @@ func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage,
 	}
 	l.msgsMu.Lock()
 	kept, ok := l.msgs[conv]
+	if ok {
+		l.msgsUsed++
+		kept.used = l.msgsUsed
+		l.msgs[conv] = kept
+	}
 	l.msgsMu.Unlock()
 	if fresh || !ok || kept.rev != rev || kept.seq != seq {
 		if dmProjected != nil && !fresh {
@@ -372,7 +380,7 @@ func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage,
 		if fresh {
 			return msgs, client.ChatTopicAssignments(msgs), scope, nil
 		}
-		kept = keptMessages{rev, seq, msgs, client.ChatTopicAssignments(msgs)}
+		kept = keptMessages{rev: rev, seq: seq, msgs: msgs, assigned: client.ChatTopicAssignments(msgs)}
 		l.msgsMu.Lock()
 		for k, v := range l.msgs { // an older revision serves no one again
 			if v.rev < rev {
@@ -383,11 +391,28 @@ func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage,
 			l.msgs = map[string]keptMessages{}
 		}
 		if old := l.msgs[conv]; old.rev < rev || old.rev == rev && old.seq <= seq {
+			l.msgsUsed++
+			kept.used = l.msgsUsed
 			l.msgs[conv] = kept
 		}
+		l.evictKept(conv)
 		l.msgsMu.Unlock()
 	}
 	return l.a.Resettled(kept.msgs), kept.assigned, scope, nil
+}
+
+// evictKept drops the least recently read projections past keptChats,
+// never conv's nor the open chat's; l.msgsMu is held.
+func (l *Live) evictKept(conv string) {
+	for len(l.msgs) > keptChats {
+		oldest := ""
+		for k, v := range l.msgs {
+			if k != conv && k != l.lastOpen && (oldest == "" || v.used < l.msgs[oldest].used) {
+				oldest = k
+			}
+		}
+		delete(l.msgs, oldest)
+	}
 }
 
 // buildChatSummary reads one chat's messages for its list row.
@@ -644,73 +669,10 @@ func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
 		l.lastOpen = t.ID
 		l.msgsMu.Unlock()
 	}
-	if dmOracle != nil && err == nil && page.Limit == 0 && l.a.ViewKeysScoped() {
-		l.checkSkip(id, t, mark, rev.Unscoped)
-	}
-	if dmOracle != nil && err == nil {
-		fresh, e := l.dmPage(id, page, true)
-		now, _ := l.a.ViewChanges()
-		if after, _ := l.a.ViewMark(); now.Content == rev.Content && after == mark { // nothing changed under the comparison, announced or not
-			x, _ := json.Marshal(t)
-			y, _ := json.Marshal(fresh)
-			if e != nil || !bytes.Equal(x, y) {
-				dmOracle(fmt.Sprintf("chat %s differs from a fresh read (%v):\nkept  %s\nfresh %s", id, e, x, y))
-			} else {
-				dmOracle("")
-			}
-		}
+	if dmChecked != nil && err == nil {
+		dmChecked(l, id, page, t, mark, rev)
 	}
 	return t, err
-}
-
-// checkSkip (dmOracle only) proves the page's skip rule (store.ts
-// scopedRefetch): when every key moved since this chat's last view is "h" or
-// another chat's, and nothing unscoped happened, the view is as it was. Seq
-// and exec staleness move without a write and are left out.
-func (l *Live) checkSkip(id string, t DMThread, mark int64, unscoped uint64) {
-	t.Seq = 0
-	t.Messages = slices.Clone(t.Messages)
-	for i := range t.Messages {
-		if e := t.Messages[i].Exec; e != nil {
-			c := *e
-			c.Stale = false
-			t.Messages[i].Exec = &c
-		}
-	}
-	now, _ := json.Marshal(t)
-	l.msgsMu.Lock()
-	prev, ok := l.seen[id]
-	if l.seen == nil {
-		l.seen = map[string]seenView{}
-	}
-	l.seen[id] = seenView{mark, unscoped, now}
-	l.msgsMu.Unlock()
-	if !ok || prev.unscoped != unscoped {
-		return
-	}
-	keys, _, err := l.a.ViewDirtySince(prev.mark)
-	if err != nil || len(keys) == 0 {
-		return
-	}
-	for _, k := range keys {
-		if k = strings.TrimPrefix(k, "v"); k != "h" && (!strings.HasPrefix(k, "c:") || slices.Contains(t.Scope, k)) { // as ViewScope says it
-			return // the page reads it again
-		}
-	}
-	if !bytes.Equal(prev.view, now) {
-		dmOracle(fmt.Sprintf("chat %s changed under keys %v that leave it as it was:\nbefore %s\nnow    %s", id, keys, prev.view, now))
-		return
-	}
-	skipsChecked.Add(1)
-}
-
-var skipsChecked atomic.Int64 // checkSkip's proven skips, said by the tests
-
-// seenView is checkSkip's last view of a chat.
-type seenView struct {
-	mark     int64
-	unscoped uint64
-	view     []byte
 }
 
 func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
