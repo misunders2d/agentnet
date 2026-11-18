@@ -69,12 +69,15 @@ received rows copied to 640 and 6400; "busy" = the peer sending into the group
 throughout; shared 8-core laptop, so ±30%). "Chat shown" is `/api/dm` on open;
 "whole open" is DM, read mark, list, DM, refresh.
 
-| Size, load | main `4f867fae` shown / whole | S1 | S1+S3 |
-|---|---|---|---|
-| 640 idle | 157 ms / 471 ms | 334 ms / 1.08 s | 72 ms / 237 ms |
-| 640 busy | 2.22 s / 5.10 s | 661 ms / 1.40 s | 173 ms / 586 ms |
-| 6400 idle | 2.10 s / 4.98 s | 1.36 s / 3.36 s | 423 ms / 1.19 s |
-| 6400 busy | 54.0 s / 1 m 54 s | 2.81 s / 7.82 s | 630 ms / 2.40 s |
+| Size, load | main `4f867fae` shown / whole | S1 | S1+S3 (`abacd697`) | branch head (`860e67df`) |
+|---|---|---|---|---|
+| 640 idle | 157 ms / 471 ms | 334 ms / 1.08 s | 72 ms / 237 ms | 80 ms / 285 ms |
+| 640 busy | 2.22 s / 5.10 s | 661 ms / 1.40 s | 173 ms / 586 ms | 155 ms / 406 ms |
+| 6400 idle | 2.10 s / 4.98 s | 1.36 s / 3.36 s | 423 ms / 1.19 s | 435 ms / 1.14 s |
+| 6400 busy | 54.0 s / 1 m 54 s | 2.81 s / 7.82 s | 630 ms / 2.40 s | 968 ms / 3.02 s |
+
+Under 1100 ms for the chat shown at every size and load at the branch head;
+the whole open at 10x busy (3 s, max 8 s) is not.
 
 A first page of 50 costs about the same as the whole kept chat (66–75 ms at
 640, 320–510 ms at 6400). The remaining host cost at 6400 is topic summaries
