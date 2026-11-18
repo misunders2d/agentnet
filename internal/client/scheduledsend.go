@@ -726,23 +726,7 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string, stored *
 		s.Rev++
 	}
 	fail := func(state, detail string, cause error) (ScheduledSend, error) {
-		diagnostic := ""
-		if s.Immediate {
-			detail, diagnostic = queuedSendWords(state, detail, cause)
-		}
-		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state=?,detail=?,diagnostic=?,updated_at=? WHERE id=? AND rev=? AND state='dispatching'`, state, detail, diagnostic, time.Now().UnixNano(), id, s.Rev)
-		if e != nil {
-			return s, e
-		}
-		n, _ := result.RowsAffected()
-		if n == 1 && (state == ScheduledNeedsReview || detail != s.Detail) {
-			a.store.changed()
-		}
-		out, _, e := a.ScheduledSend(id)
-		if e != nil {
-			return out, e
-		}
-		return out, cause
+		return a.dispatchFail(s, state, detail, cause)
 	}
 	current, _, err := a.scheduledAudience(a.store.db, s.Conv, s.Topic)
 	if err != nil {
@@ -798,32 +782,65 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string, stored *
 		dispatchCtx = WithHumanSendGroup(dispatchCtx, ask.SendGroup)
 	}
 	msg.beforeStore = a.scheduledCommit(s)
+	batch := stagingBatch(dispatchCtx)
+	staged := len(batch.staged())
 	sent, err := a.SendConv(dispatchCtx, s.Conv, msg)
-	if errors.Is(err, ErrSendAlreadyKept) {
-		// Another attempt stored this exact id: the same send, nothing to repeat.
-		if _, err = a.store.db.Exec(`UPDATE scheduled_sends SET state='sent',detail='',diagnostic='',updated_at=? WHERE id=? AND state IN ('pending','dispatching')`, time.Now().UnixNano(), id); err == nil {
-			a.store.changed()
-		}
-		s, _, _ = a.ScheduledSend(id)
-		return s, err
+	if err == nil && len(batch.staged()) > staged {
+		batch.stagedAs(s) // stored with its batch, settled after (queuedsend.go)
+		return s, nil
 	}
 	if err == nil && stored != nil {
 		*stored = sent
+	}
+	return a.settleDispatch(s, err)
+}
+
+// settleDispatch records how storing s went: sent, waiting or stopped.
+func (a *Agent) settleDispatch(s ScheduledSend, err error) (ScheduledSend, error) {
+	if errors.Is(err, ErrSendAlreadyKept) {
+		// Another attempt stored this exact id: the same send, nothing to repeat.
+		if _, err = a.store.db.Exec(`UPDATE scheduled_sends SET state='sent',detail='',diagnostic='',updated_at=? WHERE id=? AND state IN ('pending','dispatching')`, time.Now().UnixNano(), s.ID); err == nil {
+			a.store.changed()
+		}
+		s, _, _ = a.ScheduledSend(s.ID)
+		return s, err
 	}
 	if err != nil {
 		// An ordinary authority guard may reject a changed group before our
 		// neutral guard runs. Growth still requires explicit audience review.
 		latest, _, audienceErr := a.scheduledAudience(a.store.db, s.Conv, s.Topic)
 		if audienceErr == nil && !scheduledWithin(latest, s.Audience) {
-			return fail(ScheduledNeedsReview, "The chat audience changed. Review the schedule.", ErrScheduledAudience)
+			return a.dispatchFail(s, ScheduledNeedsReview, "The chat audience changed. Review the schedule.", ErrScheduledAudience)
 		}
 		if scheduledWait(err) {
-			return fail(ScheduledPending, "Waiting for current chat information or connectivity.", err)
+			return a.dispatchFail(s, ScheduledPending, "Waiting for current chat information or connectivity.", err)
 		}
-		return fail(ScheduledNeedsReview, "The message could not be queued safely. Review the schedule.", err)
+		return a.dispatchFail(s, ScheduledNeedsReview, "The message could not be queued safely. Review the schedule.", err)
 	}
-	out, _, err := a.ScheduledSend(id)
+	out, _, err := a.ScheduledSend(s.ID)
 	return out, err
+}
+
+// dispatchFail leaves s waiting or stopped with its words, unless another
+// change (a Discard, a Hold, a newer attempt) already moved it on.
+func (a *Agent) dispatchFail(s ScheduledSend, state, detail string, cause error) (ScheduledSend, error) {
+	diagnostic := ""
+	if s.Immediate {
+		detail, diagnostic = queuedSendWords(state, detail, cause)
+	}
+	result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state=?,detail=?,diagnostic=?,updated_at=? WHERE id=? AND rev=? AND state='dispatching'`, state, detail, diagnostic, time.Now().UnixNano(), s.ID, s.Rev)
+	if e != nil {
+		return s, e
+	}
+	n, _ := result.RowsAffected()
+	if n == 1 && (state == ScheduledNeedsReview || detail != s.Detail) {
+		a.store.changed()
+	}
+	out, _, e := a.ScheduledSend(s.ID)
+	if e != nil {
+		return out, e
+	}
+	return out, cause
 }
 
 func scheduledWait(err error) bool {

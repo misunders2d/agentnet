@@ -241,7 +241,10 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if err != nil {
 		return ConvSent{}, err
 	}
-	reply, err := groupReplyLID(a.store.db, conv, m.ReplyTo)
+	reply := m.ReplyTo // a turn staged in this drain is its own logical id
+	if !stagingBatch(ctx).names(reply) {
+		reply, err = groupReplyLID(a.store.db, conv, m.ReplyTo)
+	}
 	if err != nil {
 		return ConvSent{}, err
 	}
@@ -399,14 +402,14 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		}
 		return m.organizationBatch.stage(a, copies, envelope.Inner{}, claim)
 	}
-	err = a.store.addConvOutboxGuarded(copies, envelope.Inner{}, claim, "", m.beforeStore, binding)
+	err = a.storeConvOutbox(ctx, copies, envelope.Inner{}, claim, "", m.beforeStore, binding)
 	if err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
 	if queuedSend(ctx) {
-		sent := a.queuedConv(copies, copies[0].env.ID, lid)
+		sent := a.queuedConv(ctx, copies, copies[0].env.ID, lid)
 		sent.Copies = append(sent.Copies, skipped...)
 		sent.State, sent.Detail = notSentFirst(sent.State, sent.Detail, skipped)
 		return sent, nil

@@ -534,6 +534,26 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 type beforeConvStore func(*sql.Tx, []outCopy, envelope.Inner) error
 
 func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string, before beforeConvStore, selected ...*replyBinding) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := addConvOutboxTx(tx, copies, local, claim, jobKey, before, selected...); err != nil {
+		return err
+	}
+	if err := s.done(tx.Commit()); err != nil {
+		return err
+	}
+	if jobKey != "" && s.onJobReady != nil {
+		s.onJobReady()
+	}
+	return nil
+}
+
+// addConvOutboxTx is addConvOutboxGuarded's work inside the caller's
+// transaction: a queued drain stores a whole batch in one (queuedsend.go).
+func addConvOutboxTx(tx *sql.Tx, copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string, before beforeConvStore, selected ...*replyBinding) error {
 	originals := copies
 	if len(selected) > 0 && selected[0] != nil {
 		originals = nil
@@ -547,11 +567,6 @@ func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, cla
 		copies = append(append([]outCopy(nil), copies...), *selected[0].setup)
 	}
 	now := time.Now()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	first := local.ID
 	if len(copies) > 0 {
 		first = copies[0].env.ID
@@ -580,22 +595,19 @@ func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, cla
 		env, in := c.env, c.in
 		data, _ := json.Marshal(env)
 		refID, refFP := refCols(in.Ref)
-		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub, ref_id, ref_fp, agent_id, required_cap, recipient_fp,group_admission)
-			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''),nullif(?,''))`,
+		// One statement per copy: each further update of the row ran the
+		// outbox triggers again.
+		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub, ref_id, ref_fp, agent_id, required_cap, recipient_fp,group_admission,send_group,wire_send_group,topic,topic_event,quote,topic_done,recipient_person)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''),nullif(?,''),?,?,nullif(?,''),nullif(?,''),nullif(?,''),?,(SELECT person FROM person_devices WHERE address=?))`,
 			env.ID, env.To, in.Body, string(data), c.state, c.why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
-			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
+			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission,
+			local.SendGroup, in.SendGroup != "", in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.To); err != nil {
 			return err
 		}
 		if err := storeSharedTopicRequirement(tx, c); err != nil {
 			return err
 		}
 		if err := storeAgentActionRequirements(tx, c); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE outbox SET send_group=?,wire_send_group=? WHERE id=?`, local.SendGroup, in.SendGroup != "", env.ID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE outbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=?,recipient_person=(SELECT person FROM person_devices WHERE address=?) WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.To, env.ID); err != nil {
 			return err
 		}
 		if err := storeRequestFollowup(tx, "outbox", env.ID, in.Followup); err != nil {
@@ -667,16 +679,7 @@ func (s *store) addConvOutboxGuarded(copies []outCopy, local envelope.Inner, cla
 			return err
 		}
 	}
-	if err := settleSteeringResultIn(tx, first); err != nil {
-		return err
-	}
-	if err := s.done(tx.Commit()); err != nil {
-		return err
-	}
-	if jobKey != "" && s.onJobReady != nil {
-		s.onJobReady()
-	}
-	return nil
+	return settleSteeringResultIn(tx, first)
 }
 
 // turnClosesHeld closes the questions and tasks held for the person

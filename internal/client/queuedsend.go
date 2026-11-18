@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -52,6 +54,7 @@ type QueuedSendResult struct {
 }
 
 type queuedOutcome struct {
+	id   string
 	row  ScheduledSend
 	sent *ConvSent
 	err  error
@@ -487,6 +490,8 @@ func (a *Agent) startQueuedWorker(conv string) {
 // waiting on the network holds back only later ones in its own chat; a stopped
 // one holds back nothing, as in Telegram. Waiting between attempts follows the
 // same 1 s doubling to 45 s as the outbox, and any sign of life ends it early.
+// What is waiting goes as one batch (drainQueued): one round of Hub checks,
+// one attempt budget, one backoff and one transaction for all of it.
 func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{}) {
 	q := &a.queued
 	wait := time.Second
@@ -524,13 +529,13 @@ func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{
 		if ctx.Err() != nil && exit() {
 			return
 		}
-		id, err := a.nextQueuedSend(conv)
+		rows, err := a.nextQueuedSends(conv)
 		if err != nil && ctx.Err() == nil {
 			a.Logf("queued sends: lookup failed")
 			sleep()
 			continue
 		}
-		if id == "" {
+		if len(rows) == 0 {
 			if exit() {
 				return
 			}
@@ -541,41 +546,236 @@ func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{
 		case <-ctx.Done():
 			continue
 		}
-		attempt, cancel := context.WithTimeout(ctx, budget)
-		var stored ConvSent
-		row, err := a.dispatchScheduledLocked(attempt, id, &stored)
+		attempt, cancel := context.WithTimeout(withRoundTrips(ctx), budget)
+		outcomes, waiting := a.drainQueued(attempt, rows)
 		cancel()
 		<-q.lanes
-		outcome := queuedOutcome{row: row, err: err}
-		if err == nil && stored.LID != "" {
-			outcome.sent = &stored
+		var sent []any
+		for _, o := range outcomes {
+			q.settle(o.id, o)
+			if o.row.State == ScheduledSent {
+				sent = append(sent, o.id)
+			}
 		}
-		q.settle(id, outcome)
+		if len(sent) > 0 {
+			if _, e := a.store.db.Exec(`DELETE FROM scheduled_sends WHERE immediate=1 AND state='sent' AND id IN (?`+strings.Repeat(",?", len(sent)-1)+`)`, sent...); e != nil {
+				a.Logf("queued sends: cleanup failed")
+			}
+		}
 		if ctx.Err() != nil {
 			continue
 		}
-		switch row.State {
-		case ScheduledPending, ScheduledDispatching:
+		if waiting {
 			budget = min(budget*2, queuedAttemptMax)
 			sleep()
-		case ScheduledSent:
-			wait, budget = time.Second, first
-			if _, e := a.store.db.Exec(`DELETE FROM scheduled_sends WHERE id=? AND immediate=1 AND state='sent'`, id); e != nil {
-				a.Logf("queued sends: cleanup failed")
-			}
-		default:
+		} else {
 			wait, budget = time.Second, first
 		}
 	}
 }
 
-func (a *Agent) nextQueuedSend(conv string) (string, error) {
-	var id string
-	err := a.store.db.QueryRow(`SELECT id FROM scheduled_sends WHERE immediate=1 AND conv=? AND state IN ('pending','dispatching') ORDER BY created_at,id LIMIT 1`, conv).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+// queuedBatchMax bounds one drain's transaction, so accepting and reading
+// never wait long behind it (TDLib's MessageDb flushes after 50 writes).
+const queuedBatchMax = 50
+
+func (a *Agent) nextQueuedSends(conv string) ([]ScheduledSend, error) {
+	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE immediate=1 AND conv=? AND state IN ('pending','dispatching') ORDER BY created_at,id LIMIT ?`, conv, queuedBatchMax)
+	if err != nil {
+		return nil, err
 	}
-	return id, err
+	defer rows.Close()
+	var out []ScheduledSend
+	for rows.Next() {
+		s, e := scanScheduled(rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// A drain's text messages are each checked and sealed as one send is, then
+// stored together: each in its own savepoint, so one that may no longer go
+// (discarded, its audience changed) stops only itself and what follows it,
+// which the next drain prepares again. A message with files or an ask goes
+// alone. A message continuing a topic names the batch's last turn there
+// (sendTopicHead); a reply or quote names only a stored message (accepting
+// refuses any other).
+type sendBatch struct {
+	rows       []stagedSend
+	heads      map[string]string // topic: the head a staged turn became; "": unknown until stored
+	continuing string            // the send that is continuing its topic's head now
+}
+
+type stagedSend struct {
+	row   ScheduledSend
+	sent  ConvSent
+	store func(*sql.Tx) error
+}
+
+type sendBatchKey struct{}
+
+func stagingBatch(ctx context.Context) *sendBatch {
+	b, _ := ctx.Value(sendBatchKey{}).(*sendBatch)
+	return b
+}
+
+func (b *sendBatch) staged() []stagedSend {
+	if b == nil {
+		return nil
+	}
+	return b.rows
+}
+
+func (b *sendBatch) stagedAs(s ScheduledSend) { b.rows[len(b.rows)-1].row = s }
+
+// names reports that id is a message staged in this batch: its own logical
+// id, as a reply or a topic's next turn names it once stored.
+func (b *sendBatch) names(id string) bool {
+	return b != nil && id != "" && slices.ContainsFunc(b.rows, func(r stagedSend) bool { return r.row.ID == id })
+}
+
+// storeConvOutbox stores one send's copies now, or, inside a drain, stages
+// them for the drain's one transaction.
+func (a *Agent) storeConvOutbox(ctx context.Context, copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string, before beforeConvStore, binding *replyBinding) error {
+	b := stagingBatch(ctx)
+	if b == nil {
+		return a.store.addConvOutboxGuarded(copies, local, claim, jobKey, before, binding)
+	}
+	in := local
+	if len(copies) > 0 {
+		in = copies[0].in
+	}
+	if in.Topic != "" && in.Sub == "" && in.TopicEvent == nil {
+		if b.heads == nil {
+			b.heads = map[string]string{}
+		}
+		// A turn that continued the head is the new head; where any other
+		// turn lands in the chain only the stored history says.
+		b.heads[in.Topic] = ""
+		if b.continuing == in.LID {
+			b.heads[in.Topic] = in.LID
+		}
+	}
+	b.rows = append(b.rows, stagedSend{sent: a.queuedConv(ctx, copies, local.ID, in.LID), store: func(tx *sql.Tx) error {
+		return addConvOutboxTx(tx, copies, local, claim, jobKey, before, binding)
+	}})
+	return nil
+}
+
+// sendTopicHead is the turn a message continues in topic: the head a staged
+// turn became, else the stored head.
+func (a *Agent) sendTopicHead(ctx context.Context, conv, topic string) (string, error) {
+	b := stagingBatch(ctx)
+	if b == nil {
+		return a.chatTopicHead(conv, topic)
+	}
+	b.continuing, _ = sendID(ctx)
+	if head, ok := b.heads[topic]; ok {
+		if head == "" {
+			return "", errors.New("internal: topic head unknown within a batch")
+		}
+		return head, nil
+	}
+	return a.chatTopicHead(conv, topic)
+}
+
+// headUnknown: s continues a topic whose head only its stored turns decide.
+func (b *sendBatch) headUnknown(s ScheduledSend) bool {
+	head, ok := b.heads[s.Topic]
+	return ok && head == "" && s.ReplyTo == ""
+}
+
+// drainQueued prepares rows in order, the text ones into one batch, then
+// stores the batch. waiting: a message must wait, and so the chat with it.
+func (a *Agent) drainQueued(ctx context.Context, rows []ScheduledSend) ([]queuedOutcome, bool) {
+	b := &sendBatch{}
+	batched := context.WithValue(ctx, sendBatchKey{}, b)
+	var out []queuedOutcome
+	waiting := false
+	for i, r := range rows {
+		alone := len(r.Files) > 0 || r.Ask != nil
+		if i > 0 && (alone || b.headUnknown(r)) {
+			break // its turn comes first in the next drain, after this batch is stored
+		}
+		use := batched
+		if alone {
+			use = ctx
+		}
+		n := len(b.rows)
+		var stored ConvSent
+		row, err := a.dispatchScheduledLocked(use, r.ID, &stored)
+		if len(b.rows) > n {
+			continue
+		}
+		o := queuedOutcome{id: r.ID, row: row, err: err}
+		if err == nil && stored.LID != "" {
+			o.sent = &stored
+		}
+		out = append(out, o)
+		if row.State == ScheduledPending || row.State == ScheduledDispatching || ctx.Err() != nil {
+			waiting = true
+			break
+		}
+	}
+	if ctx.Err() != nil {
+		// The attempt ended (its budget, or shutdown) while checks were made:
+		// nothing of it is stored; each resumes under its id.
+		return out, true
+	}
+	stored, more := a.storeSendBatch(b)
+	return append(out, stored...), waiting || more
+}
+
+// storeSendBatch stores a drain's staged sends in one transaction, in order.
+func (a *Agent) storeSendBatch(b *sendBatch) ([]queuedOutcome, bool) {
+	if len(b.rows) == 0 {
+		return nil, false
+	}
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		a.Logf("queued sends: store failed")
+		return nil, true // each stays dispatching under its id: the next drain resumes it
+	}
+	defer tx.Rollback()
+	kept, failed := len(b.rows), error(nil)
+	for i, r := range b.rows {
+		if _, err = tx.Exec(`SAVEPOINT queued_send`); err == nil {
+			if failed = r.store(tx); failed != nil {
+				_, err = tx.Exec(`ROLLBACK TO queued_send`)
+				kept = i
+			}
+		}
+		if err == nil {
+			_, err = tx.Exec(`RELEASE queued_send`)
+		}
+		if err != nil || failed != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		a.Logf("queued sends: store failed")
+		return nil, true
+	}
+	var out []queuedOutcome
+	for _, r := range b.rows[:kept] {
+		r.row.State = ScheduledSent
+		out = append(out, queuedOutcome{id: r.row.ID, row: r.row, sent: &r.sent})
+	}
+	if kept > 0 { // one change and one wake of the sender for the batch
+		a.NoteChange()
+		a.postOutboxBackground()
+	}
+	if failed == nil {
+		return out, false
+	}
+	row, err := a.settleDispatch(b.rows[kept].row, failed)
+	out = append(out, queuedOutcome{id: b.rows[kept].row.ID, row: row, err: err})
+	return out, row.State == ScheduledPending || row.State == ScheduledDispatching
 }
 
 // queuedSendAccepted is when the message with this id was accepted, zero when

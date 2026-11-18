@@ -508,7 +508,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			if extra != nil {
 				copies = append(copies, *extra)
 			}
-			queued := a.queuedConv(copies, env.ID, env.ID)
+			queued := a.queuedConv(ctx, copies, env.ID, env.ID)
 			return ControlSent{ID: queued.ID, State: queued.State, Detail: queued.Detail}, nil
 		}
 		if extra != nil {
@@ -829,7 +829,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	}
 	defer notifyDaemon(a.home)
 	if queuedSend(ctx) {
-		queued := a.queuedConv(copies, local.ID, lid)
+		queued := a.queuedConv(ctx, copies, local.ID, lid)
 		sent.ID, sent.State, sent.Detail = queued.ID, queued.State, queued.Detail
 		if deferredActivity {
 			return sent, errNativeActivityDeferred

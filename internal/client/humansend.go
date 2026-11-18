@@ -86,6 +86,9 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	}
 	if out.ReplyTo != "" { // every copy names the parent's logical id
 		parent, known, err := humanReplyParent(a.store.db, root.ID(), out.ReplyTo)
+		if stagingBatch(ctx).names(out.ReplyTo) { // staged in this drain: its own logical id
+			parent, known, err = out.ReplyTo, true, nil
+		}
 		if err != nil {
 			return ConvSent{}, err
 		}
@@ -319,13 +322,13 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if out.selfJob { // asked on the host itself: its job is recorded with it
 		jobKey, local.ID, local.To = a.Self().Fingerprint(), in.LID, a.Address
 	}
-	if err := a.store.addConvOutboxGuarded(copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, out.beforeStore, binding); err != nil {
+	if err := a.storeConvOutbox(ctx, copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
 	if queuedSend(ctx) {
-		return a.queuedConv(copies, local.ID, in.LID), nil
+		return a.queuedConv(ctx, copies, local.ID, in.LID), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {

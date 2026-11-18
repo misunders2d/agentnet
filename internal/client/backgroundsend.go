@@ -273,7 +273,7 @@ func (a *Agent) stopBackgroundPosts() {
 	}
 }
 
-func (a *Agent) queuedConv(copies []outCopy, localID, lid string) ConvSent {
+func (a *Agent) queuedConv(ctx context.Context, copies []outCopy, localID, lid string) ConvSent {
 	sent := ConvSent{ID: localID, LID: lid, State: protocol.StateDelivered}
 	if len(copies) > 0 {
 		sent.ID = copies[0].env.ID
@@ -285,8 +285,10 @@ func (a *Agent) queuedConv(copies []outCopy, localID, lid string) ConvSent {
 		}
 		sent.Copies = append(sent.Copies, cp)
 	}
-	a.NoteChange()
-	a.postOutboxBackground()
+	if stagingBatch(ctx) == nil { // a batch tells once, when it is stored
+		a.NoteChange()
+		a.postOutboxBackground()
+	}
 	return sent
 }
 

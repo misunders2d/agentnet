@@ -746,7 +746,16 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	replyParent := func(conv, ref string) (string, bool, error) { return humanReplyParent(a.store.db, conv, ref) }
 	if continuity {
 		replyParent = a.continuityReplyParent
-
+	}
+	if batch, resolve := stagingBatch(ctx), replyParent; batch != nil {
+		replyParent = func(conv, ref string) (string, bool, error) {
+			if batch.names(ref) {
+				return ref, true, nil
+			}
+			return resolve(conv, ref)
+		}
+	}
+	if continuity {
 		next, e := a.currentDM(ctx, conv)
 		if e != nil {
 			return ConvSent{}, e
@@ -777,7 +786,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && !m.contribution && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
 		// Addressed questions/tasks continue the same causal topic chain as chat.
-		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
+		m.ReplyTo, err = a.sendTopicHead(ctx, conv, m.Topic)
 		if err != nil {
 			return ConvSent{}, err
 		}
@@ -1176,7 +1185,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		return m.organizationBatch.stage(a, copies, local, claim)
 	}
-	if err := a.store.addConvOutboxGuarded(copies, local, claim, jobKey, m.beforeStore, binding); err != nil {
+	if err := a.storeConvOutbox(ctx, copies, local, claim, jobKey, m.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	receiverStored = true
@@ -1184,7 +1193,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		m.stored()
 	}
 	if queuedSend(ctx) {
-		return a.queuedConv(copies, local.ID, lid), nil
+		return a.queuedConv(ctx, copies, local.ID, lid), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
