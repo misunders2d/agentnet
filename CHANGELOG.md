@@ -11,14 +11,15 @@ This record starts with v0.8.1; earlier releases remain on the
   messages, in the order you sent them. 1000 queued messages finish in about
   9 s instead of 21 s, and in 20 s instead of 42 s on a busy computer. Writing
   in another chat stays instant meanwhile.
-- Catching up after being offline is about four times faster. Missed
-  messages are saved in pages of up to 100 instead of one by one: 1000 missed
-  messages arrive in about 3.5 s instead of 16 s. Each is still checked on its
-  own and stored once, in order.
+- Catching up on a two-person chat after being offline is about four times
+  faster. Missed messages are saved in pages of up to 100 instead of one by
+  one: 1000 missed messages arrive in about 3.5 s instead of 16 s. Each is
+  still checked on its own and stored once, in order. Group messages still
+  arrive one at a time.
 - Big, busy chats open in about a second. A chat with thousands of messages
   that another person keeps writing into took close to a minute to show; it
-  now shows in well under a second, and the whole open settles in about one to
-  two seconds. Reading no longer waits behind the app's writes.
+  now shows in about a second. Reading no longer waits behind the app's
+  writes.
 - The screen no longer redraws every message on each change, and changes in
   other chats no longer make the open chat load again. Marking a chat read
   updates it in place.

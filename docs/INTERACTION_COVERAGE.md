@@ -139,11 +139,14 @@ data race. `ui-2` passes. `ui-0` failed `TestBrowserMovedTopicInvitationNativeRe
 and `TestStopResultPresentation`, `ui-1` `TestBrowserNativeTopicDestinationTitle`,
 `TestComposerOwnGroupCurrentAttempt`, `TestBrowserEngineRechecksAfterProfile`
 and `TestInteractionInventory`; the two harness tests are fixed (`905a66f2`).
-The browser-to-native tests fail with `peer_update` (the native daemon had not
-yet connected to publish its capabilities): under race, `Run` sometimes waits
-~800 ms at `driveQueuedSends`'s cleanup DELETE for the writer before it
-connects, and the tests do not wait for the connection. Open: what holds the
-writer then; those tests pass on main under race (8 of 8) and pre-merge.
+The four browser-to-native tests fail with `peer_update` (the browser engine
+sees no published capabilities for the native daemon; the tests do not wait
+for its connection). They pass on main under race (8 of 8) and pre-merge, so
+this is a regression of the integrated tree, cause not established. Two
+instrumented runs: one failed with `Run`'s startup done in 35 ms and the
+session logged before the error; one waited ~800 ms at `driveQueuedSends`'s
+cleanup DELETE for the writer. What publishes the capabilities after the
+session, and when, was not located. Open, for the release tester.
 
 ## MEL-748 read path: chat open, list, updates — unreleased, November 18, 2026
 
