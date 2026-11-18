@@ -985,9 +985,14 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.wakeStatus() // a status another process noted (noteStatus)
 		work := convHistory | convServe | convFetch | convRelease | convRecipients
 		ownKick := a.ownKick()
-		if !ownKick {
-			// Its own work was told by its store; telling the page again on each
-			// received message made every change unscoped (GET /events "scope").
+		if ownKick {
+			// Its own work was told by its store; an unscoped bump on each
+			// received message made every change unscoped (GET /events
+			// "scope"). Still a scoped one: a wake from another process can be
+			// counted as its own (ownKick), and its rows, written through the
+			// same triggers, name their scope too.
+			a.changes.bumpStored()
+		} else {
 			a.changes.bump()
 			a.store.continuityDirty.Store(true)
 			work |= convRetry // a local participation record shares its public scope with guests now
