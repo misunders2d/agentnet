@@ -642,10 +642,14 @@ func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error 
 		}
 		return a.store.resendReceipt(env.ID)
 	}
+	page := receivingPage(ctx)
+	staged := len(page.staged())
 	if err = a.verifyAndStore(ctx, env); err != nil {
 		return a.admissionFailed(ctx, env, err)
 	}
-	a.receiveFails.clear(env.ID)
+	if len(page.staged()) == staged { // a staged turn's count clears once its page is stored (storePage)
+		a.receiveFails.clear(env.ID)
+	}
 	return nil
 }
 

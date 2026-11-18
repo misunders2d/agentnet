@@ -160,3 +160,61 @@ func TestReceivePageRechecksRevokedSender(t *testing.T) {
 		t.Fatalf("ordinary message in custody: %d admitted", admitted)
 	}
 }
+
+// A staged turn whose page write fails transiently keeps its count across
+// restaging: after receiveAttempts in a row it is held, and the turns after
+// it come in, instead of ending the stream at attempt one forever.
+func TestReceivePageCountsTransientFailures(t *testing.T) {
+	w := newWorld(t, "")
+	persons(t, w.alice, w.bob)
+	stopBob := runAgent(t, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "opener"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the DM on bob", func() bool {
+		var got int
+		w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND body=?`, conv, "opener").Scan(&got)
+		return got == 1
+	})
+	stopBob()
+	var envs []envelope.Envelope
+	for i := range 2 {
+		sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: fmt.Sprintf("turn %d", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw string
+		if err := w.alice.store.db.QueryRow(`SELECT envelope FROM outbox WHERE lid=? AND recipient=?`, sent.LID, w.bob.Address).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var env envelope.Envelope
+		if err := json.Unmarshal([]byte(raw), &env); err != nil {
+			t.Fatal(err)
+		}
+		envs = append(envs, env)
+	}
+	stuck := envs[0].ID
+	pageRowFault = func(env envelope.Envelope) error {
+		if env.ID == stuck {
+			return context.DeadlineExceeded // transient, every time
+		}
+		return nil
+	}
+	defer func() { pageRowFault = nil }()
+	count := func(table, id string) (n int) {
+		w.bob.store.db.QueryRow(`SELECT count(*) FROM `+table+` WHERE id=?`, id).Scan(&n)
+		return
+	}
+	for attempt := 1; attempt < receiveAttempts; attempt++ {
+		if err := w.bob.receivePage(tctx(t), envs); err == nil {
+			t.Fatalf("attempt %d: no error for a transient failure", attempt)
+		}
+	}
+	if err := w.bob.receivePage(tctx(t), envs); err != nil {
+		t.Fatalf("attempt %d still ends the stream: %v", receiveAttempts, err)
+	}
+	if count("quarantine", stuck) != 1 || count("inbox", stuck) != 0 || count("inbox", envs[1].ID) != 1 {
+		t.Fatalf("after %d attempts: held %d, admitted %d, next admitted %d", receiveAttempts, count("quarantine", stuck), count("inbox", stuck), count("inbox", envs[1].ID))
+	}
+}

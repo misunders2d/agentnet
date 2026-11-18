@@ -43,9 +43,19 @@ type receivePageKey struct{}
 // pageFault, set only by tests, fails a page just before its commit.
 var pageFault func() error
 
+// pageRowFault, set only by tests, fails one staged turn's write.
+var pageRowFault func(envelope.Envelope) error
+
 func receivingPage(ctx context.Context) *receivePage {
 	p, _ := ctx.Value(receivePageKey{}).(*receivePage)
 	return p
+}
+
+func (p *receivePage) staged() []pageRow {
+	if p == nil {
+		return nil
+	}
+	return p.rows
 }
 
 func (p *receivePage) stage(in envelope.Inner, store func(*sql.Tx, txStmts) (string, bool, error), settle func(string, error) error) {
@@ -148,7 +158,12 @@ func (a *Agent) storePage(ctx context.Context, p *receivePage) error {
 			return err
 		}
 		var keep bool
-		res[i], keep, failed = r.store(tx, st)
+		if pageRowFault != nil {
+			failed = pageRowFault(r.env)
+		}
+		if failed == nil {
+			res[i], keep, failed = r.store(tx, st)
+		}
 		if failed != nil || !keep {
 			if _, err := tx.Exec(`ROLLBACK TO receive_page`); err != nil {
 				return err
@@ -183,6 +198,7 @@ func (a *Agent) storePage(ctx context.Context, p *receivePage) error {
 		if err := settle(rows[i], res[i], nil); err != nil {
 			return err
 		}
+		a.receiveFails.clear(rows[i].env.ID) // settled durably: its transient failures start again from none
 	}
 	if kept == len(rows) {
 		return nil
