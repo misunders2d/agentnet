@@ -298,6 +298,34 @@ func continuityFamily(rows []ConversationInfo, aliases map[string]string, conv s
 	})
 	return out
 }
+
+// continuityViews is continuityFamily's first chat for every DM at once, in
+// one pass: the list asked each DM's family over all rows (O(chats²): 570 ms
+// at 3000 chats). A DM not in a recovered person's family is its own view.
+func continuityViews(rows []ConversationInfo, aliases map[string]string) map[string]string {
+	recovered := map[string]bool{}
+	for id, to := range aliases {
+		if id != to {
+			recovered[to] = true
+		}
+	}
+	first := map[string]ConversationInfo{}
+	for _, r := range rows {
+		if p := aliases[r.Peer.Person]; r.Kind == protocol.ConvKindDM && recovered[p] {
+			if f, ok := first[p]; !ok || r.Created < f.Created || r.Created == f.Created && r.ID < f.ID {
+				first[p] = r
+			}
+		}
+	}
+	views := map[string]string{}
+	for _, r := range rows {
+		if p := aliases[r.Peer.Person]; r.Kind == protocol.ConvKindDM && recovered[p] {
+			views[r.ID] = first[p].ID
+		}
+	}
+	return views
+}
+
 func (a *Agent) ContinuityConversation(conv string) (string, error) {
 	rows, e := a.continuityDMs(conv)
 	if e != nil {
@@ -320,6 +348,7 @@ func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInf
 	if e != nil {
 		return nil, e
 	}
+	views := continuityViews(stored, aliases)
 	seen := map[string]bool{}
 	out := rows[:0]
 	for _, r := range rows {
@@ -328,8 +357,8 @@ func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInf
 			continue
 		}
 		view := r.ID
-		if family := continuityFamily(stored, aliases, r.ID); len(family) > 0 {
-			view = family[0].ID
+		if v := views[r.ID]; v != "" {
+			view = v
 		}
 		if seen[view] {
 			continue
