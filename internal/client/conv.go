@@ -1671,6 +1671,8 @@ func frozenRecordWaits(reason, why string) (string, string) {
 
 const frozenMemberWhy = "group: a member's person record is frozen here"
 
+var errSenderRevoked = errors.New("sender permanently removed from this workspace")
+
 // admitConv admits a verified version 2 message, or holds it (quarantine)
 // with the reason it cannot be admitted yet. fromQuarantine: env is held
 // already, and is released when admitted.
@@ -1684,7 +1686,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return err
 	}
 	if !allowed {
-		return hold(reasonInvalid, "sender permanently removed from this workspace")
+		return hold(reasonInvalid, errSenderRevoked.Error())
 	}
 	personErr := func(err error) error { return holdForPerson(err, hold) }
 	if in.Sub == envelope.SubHistoryArchive {
@@ -1894,6 +1896,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	now, event := time.Now(), also
 	forward := a.forwardStale(me, in, sender.Fingerprint(), in.Root) // for this person's devices its sender did not know
 	also = func(tx *sql.Tx) error {                                  // with the message, or not at all
+		// A revocation recorded since the checks above (while a page was
+		// prepared) refuses it here, as at the start of admission.
+		if !relayIngress(ctx, env.ID) || !retainedRelayOrdinary(in) {
+			if revoked, e := revokedDeviceKnown(tx, sender.Address, sender.Fingerprint()); e != nil {
+				return e
+			} else if revoked {
+				return errSenderRevoked
+			}
+		}
 		if event != nil {
 			if err := event(tx); err != nil {
 				return err
@@ -1940,6 +1951,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	settle := func(res string, err error) error {
 		if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
 			return hold(reasonInvalid, err.Error())
+		}
+		if errors.Is(err, errSenderRevoked) {
+			return hold(reasonInvalid, errSenderRevoked.Error())
 		}
 		if err != nil {
 			return err
