@@ -201,3 +201,43 @@ func TestClaudeReplyLazyParentPathFences(t *testing.T) {
 		})
 	}
 }
+
+// A hook event reads the executable once (its capture) and, unchanged,
+// takes no write transaction: a tool call never waits behind the daemon's
+// writes, nor rereads a large binary three times.
+func TestClaudeHookReadsBinaryOnceWithoutWriteLock(t *testing.T) {
+	w := newWorld(t, "")
+	owner, route := claudeReceiverFixture(t, w.alice)
+	_, dbPath := paths(w.alice.home)
+	other, e := openStore(dbPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer other.db.Close()
+	hold, e := other.db.Begin() // the daemon mid-write, in another process
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer hold.Rollback()
+	for _, event := range []string{"UserPromptSubmit", "PostToolUse", "Stop"} {
+		before, start := binaryReads.Load(), time.Now()
+		handle, e := w.alice.registerClaudeHook(event, owner.SessionID, owner.File, route, route.SHA256)
+		if e != nil || handle == "" {
+			t.Fatalf("%s: %q %v", event, handle, e)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Fatalf("%s waited %v behind a held write", event, took)
+		}
+		if n := binaryReads.Load() - before; n != 0 {
+			t.Fatalf("%s reread the executable %d times after its capture", event, n)
+		}
+	}
+	hold.Rollback()
+	before := binaryReads.Load()
+	if _, e = w.alice.registerClaudeReplySession("PostToolUse", owner.SessionID, owner.File, route); e != nil {
+		t.Fatal(e)
+	}
+	if binaryReads.Load()-before != 1 {
+		t.Fatal("a route without this event's digest is not verified against the executable")
+	}
+}

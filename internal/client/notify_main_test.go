@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 		if e != nil {
 			msg = e.Error()
 		}
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"route": r, "error": msg})
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"route": r, "error": msg, "reads": binaryReads.Load()})
 		os.Exit(0)
 	}
 	// A short-lived CLI process: one local decision on a home whose daemon
