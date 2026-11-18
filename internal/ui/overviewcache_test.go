@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 	fmt.Fprintf(os.Stderr, "overview cache: %d kept lists equal a fresh read\n", overviewCompared.Load())
 	fmt.Fprintf(os.Stderr, "schema image: %d fixture stores started from a copy, not schema proof\n", schematest.Copies())
 	if os.Getenv("AGENTNET_TEST_VIEW_COVER") != "" {
-		fmt.Fprintf(os.Stderr, "scoped keys: %d fixture stores with ViewCoverSchema\n", viewCovered.Load())
+		fmt.Fprintf(os.Stderr, "scoped keys: %d fixture stores with ViewCoverSchema; %d skipped chat reads left the chat as it was\n", viewCovered.Load(), skipsChecked.Load())
 	}
 	if n := overviewDiffered.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "overview cache: %d kept lists differed from a fresh read\n", n)

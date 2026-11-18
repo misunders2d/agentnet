@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Every table names its scope in view_dirty, or is one no view reads: a table
@@ -50,10 +52,10 @@ func TestViewCoverNamesEveryTable(t *testing.T) {
 		write string
 		want  []string
 	}{
-		{`INSERT INTO alert_mutes(conv) VALUES('C2')`, []string{"c:C2"}},
-		{`INSERT INTO uploads(blob_id,message_id,state) VALUES('b1','i1','done')`, []string{"c:C1"}},
-		{`INSERT INTO uploads(blob_id,message_id,state) VALUES('b2','gone','done')`, []string{"*"}},
-		{`INSERT INTO approvals(address,added_at) VALUES('x',1)`, []string{"*"}},
+		{`INSERT INTO alert_mutes(conv) VALUES('C2')`, []string{"vc:C2"}},
+		{`INSERT INTO uploads(blob_id,message_id,state) VALUES('b1','i1','done')`, []string{"vc:C1"}},
+		{`INSERT INTO uploads(blob_id,message_id,state) VALUES('b2','gone','done')`, []string{"v*"}},
+		{`INSERT INTO approvals(address,added_at) VALUES('x',1)`, []string{"v*"}},
 		{`INSERT INTO routes(endpoint,until) VALUES('e',1)`, nil},
 	} {
 		_, mark, err := a.ViewDirtySince(0)
@@ -66,6 +68,26 @@ func TestViewCoverNamesEveryTable(t *testing.T) {
 		if keys, _, _ := a.ViewDirtySince(mark); !slices.Equal(keys, c.want) {
 			t.Errorf("%s: keys %v, want %v", c.write, keys, c.want)
 		}
+	}
+
+	// Attention's write check sees only the keys it saw before the step: a
+	// cover write, in its chat or in none, never refuses Mark unread or read
+	// (busy agents write attention, requests and uploads all the time).
+	scope := map[string]protocol.ReadRef{"i1": {Conv: "C1"}}
+	_, mark, _ := a.ViewDirtySince(0)
+	for _, w := range []string{`INSERT INTO alert_mutes(conv) VALUES('C1')`, `DELETE FROM alert_mutes WHERE conv='C1'`, `INSERT INTO approvals(address,added_at) VALUES('y',1)`, `UPDATE uploads SET state='sent' WHERE blob_id='b1'`} {
+		if _, err = s.db.Exec(w); err != nil {
+			t.Fatalf("%s: %v", w, err)
+		}
+	}
+	if moved, err := attentionScopeMoved(s.db, mark, scope); err != nil || moved {
+		t.Errorf("cover writes moved attention's scope (%v, %v)", moved, err)
+	}
+	if _, err = s.db.Exec(`UPDATE inbox SET body='edited' WHERE id='i1'`); err != nil {
+		t.Fatal(err)
+	}
+	if moved, _ := attentionScopeMoved(s.db, mark, scope); !moved {
+		t.Error("the chat's own message write did not move attention's scope")
 	}
 
 	// A chat's mark moves with its own key and with no chat's, not another's.
@@ -83,7 +105,7 @@ func TestViewCoverNamesEveryTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys, after, _ := a.ChatViewMark("C1")
-	if after == before || !slices.Equal(keys, []string{"c:C1"}) {
+	if after == before || !slices.Equal(keys, []string{"c:C1"}) { // the page's scope: its key, not the cover's
 		t.Errorf("C1's own write: keys %v mark %d -> %d", keys, before, after)
 	}
 }

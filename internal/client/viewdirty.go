@@ -1,6 +1,9 @@
 package client
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // The chat list used to read every message of every chat again on each change:
 // 1.4 s on a real store, and with it every new message or receipt. Telegram keeps
@@ -195,11 +198,16 @@ var viewCover = []struct {
 	{"topic_transfer_manifest", viewFixedKey("*")}, {"topic_transfer_plans", viewFixedKey("*")},
 }
 
-// ViewCoverSchema is the step that makes change events name their chats.
+// ViewCoverSchema is the step that makes change events name their chats. Its
+// keys carry a leading "v" ("vc:<conv>", "v*", "vh"): the same scope, from a
+// table only chat views read. Readers that kept their state on the earlier keys
+// (the list, the unread count, attention's write check) ignore them, as before
+// the step; chat views (ChatViewMark) and change events (ViewScope) count them.
 var ViewCoverSchema = func() string {
 	var b strings.Builder
 	for _, c := range viewCover {
-		b.WriteString(viewTable("cover_"+c.table, c.table, c.key))
+		key := c.key
+		b.WriteString(viewTable("cover_"+c.table, c.table, func(row string) string { return "SELECT 'v'||k AS k FROM (" + key(row) + ")" }))
 	}
 	return b.String()
 }()
@@ -226,12 +234,13 @@ func (a *Agent) ChatViewMark(conv string) (keys []string, mark int64, err error)
 			keys = append(keys, "c:"+r.ID)
 		}
 	}
-	args := make([]any, len(keys))
-	for i, k := range keys {
-		args[i] = k
+	args := make([]any, 0, 2*len(keys))
+	for _, k := range keys {
+		args = append(args, k, "v"+k)
 	}
-	// "c:" keys sort between "c:" and "c;": the rest is two index ranges.
-	err = a.store.db.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty WHERE key IN (?`+strings.Repeat(",?", len(keys)-1)+`) OR key<'c:' OR key>='c;'`, args...).Scan(&mark)
+	// "c:" keys sort between "c:" and "c;", "vc:" ones between "vc:" and
+	// "vc;": the rest is three index ranges.
+	err = a.store.db.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty WHERE key IN (?`+strings.Repeat(",?", len(args)-1)+`) OR key<'c:' OR key>='c;' AND key<'vc:' OR key>='vc;'`, args...).Scan(&mark)
 	return keys, mark, err
 }
 
@@ -246,10 +255,16 @@ func (a *Agent) ViewScope(mark int64, max int) (keys []string, next int64, ok bo
 	if err != nil {
 		return nil, mark, false
 	}
-	if len(keys) > max {
-		keys = []string{"*"}
+	scoped := make([]string, 0, len(keys))
+	for _, k := range keys { // a cover key is its scope's key to the page
+		if k = strings.TrimPrefix(k, "v"); !slices.Contains(scoped, k) {
+			scoped = append(scoped, k)
+		}
 	}
-	return keys, next, true
+	if len(scoped) > max {
+		scoped = []string{"*"}
+	}
+	return scoped, next, true
 }
 
 // ViewMark is the newest view_dirty mark: where a new listener starts.

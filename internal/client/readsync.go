@@ -665,7 +665,7 @@ func attentionScopeMoved(q dbq, mark int64, scope map[string]protocol.ReadRef) (
 			return false, err
 		}
 		switch {
-		case key == "h":
+		case key == "h", strings.HasPrefix(key, "v"): // "v": ViewCoverSchema's, of tables no scope reads
 		case strings.HasPrefix(key, "c:"):
 			moved = moved || convs[key[2:]]
 		case strings.HasPrefix(key, "p:"):

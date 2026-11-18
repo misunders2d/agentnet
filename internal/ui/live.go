@@ -44,6 +44,7 @@ type Live struct {
 	historyDirty   bool
 	historyWake    atomic.Bool
 	msgsMu         sync.Mutex
+	seen           map[string]seenView     // checkSkip's last view of each chat (dmOracle only)
 	msgs           map[string]keptMessages // each chat's projected messages at one content revision (livedm.go)
 	unreadMu       sync.Mutex
 	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards

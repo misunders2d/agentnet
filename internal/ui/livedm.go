@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -564,7 +565,11 @@ func (l *Live) DM(id string) (DMThread, error) { return l.DMPage(id, DMPage{Grou
 // for the page asked.
 func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
 	rev, _ := l.a.ViewChanges()
+	mark, _ := l.a.ViewMark()
 	t, err := l.dmPage(id, page, false)
+	if dmOracle != nil && err == nil && page.Limit == 0 && l.a.ViewKeysScoped() {
+		l.checkSkip(id, t, mark, rev.Unscoped)
+	}
 	if dmOracle != nil && err == nil {
 		fresh, e := l.dmPage(id, page, true)
 		if now, _ := l.a.ViewChanges(); now.Content == rev.Content { // nothing changed under the comparison
@@ -578,6 +583,56 @@ func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
 		}
 	}
 	return t, err
+}
+
+// checkSkip (dmOracle only) proves the page's skip rule (store.ts
+// scopedRefetch): when every key moved since this chat's last view is "h" or
+// another chat's, and nothing unscoped happened, the view is as it was. Seq
+// and exec staleness move without a write and are left out.
+func (l *Live) checkSkip(id string, t DMThread, mark int64, unscoped uint64) {
+	t.Seq = 0
+	t.Messages = slices.Clone(t.Messages)
+	for i := range t.Messages {
+		if e := t.Messages[i].Exec; e != nil {
+			c := *e
+			c.Stale = false
+			t.Messages[i].Exec = &c
+		}
+	}
+	now, _ := json.Marshal(t)
+	l.msgsMu.Lock()
+	prev, ok := l.seen[id]
+	if l.seen == nil {
+		l.seen = map[string]seenView{}
+	}
+	l.seen[id] = seenView{mark, unscoped, now}
+	l.msgsMu.Unlock()
+	if !ok || prev.unscoped != unscoped {
+		return
+	}
+	keys, _, err := l.a.ViewDirtySince(prev.mark)
+	if err != nil || len(keys) == 0 {
+		return
+	}
+	for _, k := range keys {
+		if k = strings.TrimPrefix(k, "v"); k != "h" && (!strings.HasPrefix(k, "c:") || slices.Contains(t.Scope, k)) { // as ViewScope says it
+			return // the page reads it again
+		}
+	}
+	if !bytes.Equal(prev.view, now) {
+		dmOracle(fmt.Sprintf("chat %s changed under keys %v that leave it as it was:\nbefore %s\nnow    %s", id, keys, prev.view, now))
+		return
+	}
+	skipsChecked.Add(1)
+}
+
+var skipsChecked atomic.Int64 // checkSkip's proven skips, said by the tests
+
+// seenView is checkSkip's last view of a chat.
+type seenView struct {
+	mark     int64
+	unscoped uint64
+	view     []byte
 }
 
 func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
