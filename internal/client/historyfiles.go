@@ -622,7 +622,7 @@ func (a *Agent) FilesNow(msgs []ConvMessage) []ConvMessage {
 		files := slices.Clone(out[i].Attachments)
 		sent := out[i].Dir == "out" && out[i].Via == ""
 		for j := range files {
-			if sent || !strings.HasPrefix(files[j].BlobID, historyBlob) { // a history file's availability is stored
+			if !strings.HasPrefix(files[j].BlobID, historyBlob) { // a history file's availability is stored (file_requests)
 				files[j].Fetch, files[j].Availability = "", ""
 			}
 		}
