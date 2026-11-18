@@ -10,20 +10,29 @@ Desktop a532622b.
 | Path | Counterpart (file:line) | AgentNet now | Reused / adapted |
 |---|---|---|---|
 | Receive acks | TDLib `SessionConnection.cpp:897-910`: acks gather and leave together, at most 100 (`MAX_UNACKED_PACKETS`) | receipts leave in pages of 100 (`receiptPage`), 8 POSTs in flight (`receiptLanes`), one `markAcked` transaction per page; own lane (`receipting`) beside the outbox lane, never in front of it | adapted: TDLib's ack is a transport ack; ours is a delivery receipt over a per-message Hub route |
-| Receive DB writes | TDLib `MessageDb.cpp:1192-1221`: writes batch, 50 or 10 ms per transaction | **not done, blocked** (see below) | open |
+| Receive DB writes | TDLib `MessageDb.cpp:1192-1221`: writes batch, 50 or 10 ms per transaction | a page of what the stream reader has buffered (≤100, no wait added): each verified, decrypted and checked as before, plain two-person turns stored in one transaction (savepoint each, insert prepared once), one change and one receipt pass per page (`receivepage.go`) | adapted: no 10 ms timer, only what is already read |
 | Catch-up vs live | TDLib `UpdatesManager.cpp:2165-2180`: getDifference slices, then back to live updates | sync lane already interleaves with live; live lane at the Hub stays strictly in seq order | Hub work, H2 below |
 | Send | TDLib `MessagesManager.cpp:21930-22019`: message object built and saved locally (`save_send_message_log_event`) before `do_send_message`; the call returns the local message at once | text sends no longer wait for the spool lock; files take it only after the network checks; rosters and keys fetched once and at once; new-topic first messages queue like every other (`sendWait` 0) | reused |
 | Retry | TDLib `NetQueryDelayer.cpp:77-83`: retry delay doubles to 60 s | unchanged: the queued worker waits 1 s, doubling to 45 s (`queuedsend.go:492-510`, `sendRetryMax`, the stream's reconnect cap) | reused; cap adapted to the stream's |
 | Edit while pending | TDLib `MessagesManager.cpp:23390` `can_edit_message` false for `is_yet_unsent()`; tdesktop `history_item.cpp:3479` `canBeEdited` needs a regular (not local) item | unchanged: a pending message cannot be edited; it becomes editable once in the outbox — measured below | reused (Telegram behavior), owner 2026-11-18: "I'm ok NOT being able to edit messages until they are sent - I just don't want to wait 10 seconds" |
 | Delete while pending | TDLib `MessagesManager.cpp:21595-21672` `cancel_send_message_query`: delete of a yet-unsent message cancels its send | existing `DiscardQueuedSend` (`queuedsend.go:348`): races the attempt in the database, exactly one wins; now also for a queued new-topic first message | reused; `TestDiscardCancelsQueuedNewTopicSend` |
 
-**Receive batching, blocked.** One transaction per received page would mean
-threading one transaction through every admit path (`verifyAndStore` →
-admit conv / control / inbox, each its own transaction) and through
-`sqlitedb`, which the read worker owns. Profile of a 300-message drain:
-~25 ms per message, ~55% of it waiting for the single SQLite connection held
-by change-driven loops (remind, alert, worker, review attention). Not simple
-or safe in this branch. The ack half is done.
+**Receive in pages (B2).** Only a plain message of a two-person chat is
+staged. Anything else (controls, sync, history, group and person turns, a
+key to look up, a failed open) and a turn replying to one staged in the same
+page first stores the page so far, so every write keeps stream order and
+every check reads what serial admission read. A failed verification is held
+as before and the page goes on. A failure inside the transaction keeps the
+prefix, settles that message as before (held, or the stream ends) and admits
+the rest one at a time. A page that never commits stores nothing; pushed
+again, a committed page stores nothing new and asks for its receipts again
+(`TestReceivePageReplayStoresOnce`). 1000 missed messages (`TestReceive-
+BacklogInPages`, this machine, load ~8): 15.7–17.2 s before this branch,
+11.9–12.9 s with B1's pacing only, 3.5–3.6 s with pages. What bounds it:
+per message ~3 ms of reader CPU (open ~0.6 ms, checks ~0.8 ms, its row
+~1.4 ms, of which statement parsing of the alert and room queries the page
+does not prepare), and the Hub's per-message acknowledgement route (H2).
+Group and person turns still go one at a time (open).
 
 **H2, Hub route (described, not built).** (1) One page-ack request: a POST
 with a list of `{id, state}`, answering per id; the client's `ackPage` is the
@@ -31,7 +40,7 @@ one place it plugs in, and stays on the per-message route until the Hub
 advertises it. (2) Reconnect backlog through the interleaving path, so a live
 message is not queued behind 1000 missed ones in the live lane.
 
-**Open: a burst of sends queues per chat (owner decision).** With
+**A burst of sends queues per chat, now drained in batches (B1).** With
 `sendWait` 0 the page answers once a send is stored, so it no longer paces
 the sender by the worker. A chat's queued worker stores about 8 sends a
 second (~120 ms each: rosters, keys, profiles, member checks). A burst
@@ -40,8 +49,19 @@ behind it. Measured in the custody journey: 1000 sends accepted in 20–31 s,
 then ~150 s to drain, the same total as main's paced loop (168 s), so no
 send got slower; the wait moved from the page into the queue. Each message
 is stored and shown at once and none is lost. Send-to-editable (~350 ms) is
-for an idle chat. Faster draining (one round of network checks for several
-queued messages of one chat) is not built.
+for an idle chat. Now a worker pass takes up to 50 queued sends of one chat:
+one round of person and key checks, each sealed, all stored in one
+transaction (savepoint each; the good prefix kept), one change and one post
+wake. A send with files or an Ask goes alone; a send whose topic head would
+be a turn of the same batch other than its own auto-continued one starts the
+next batch (`TestQueuedBatchMatchesOneAtATime`). Background passes (job
+worker, reminders) run at most every 100 ms instead of on every change; a
+second wake inside the window, an agent job's pickup included, waits up to
+100 ms. 1000 queued sends (`TestQueuedBurstDrainsInBatches`): 20.5–21.7 s
+before at low load, 8.5–9.6 s after; 41.6 s vs 20.4 s at load ~9. What
+bounds it: the one store connection shared with handover and receipts,
+statement parsing (no statement cache in `sqlitedb`), and per-message
+sealing and in-transaction guards.
 
 **Reply receiver sends directly.** `queueDM` still sends a reply-receiver
 message directly: it needs the network catalog check before it can be
@@ -65,7 +85,8 @@ Every other route check still runs; the daemon's own verify still reads the
 executable. Unchanged events (UserPromptSubmit, PostToolUse, Stop) only read,
 without a write transaction. No file-metadata shortcut.
 
-**Save first, check after (S6f): not done.** Precondition fails: handover
+**Save first, check after (S6f): dropped (owner decision, November 18).**
+Not built: the batched queued lane gives the visible goal. Precondition fails: handover
 does not refuse removed and changed-key devices uniformly for every kind.
 `deliver` refuses a changed reader key only for follow-ups, proposals,
 reactions, controls, continuations and own-sync v3 (`client.go:747`); its
