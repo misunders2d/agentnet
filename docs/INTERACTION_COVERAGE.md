@@ -115,6 +115,36 @@ Not run: race shards, full suites, the Codex capture's read count (needs a
 live Codex daemon record; same two-line change as Claude's), skins, native
 shells, Android.
 
+**Integration with the read path (`59cf183e`, November 18).** `perf/read-path`
+(head `9f2c771f`) merged into this branch. `client.ViewCoverSchema` is the last
+schema step, after this branch's own, so scoped change events (S2) are on in
+every store; the test switches `AGENTNET_TEST_VIEW_COVER` and
+`AGENTNET_OPEN_COVER` are gone. `ViewKeysScoped` stays as the fallback for a
+store whose cover triggers are missing. The background post pass notes its
+change as `noteStoredChange`. Fixes found by the integrated tree:
+- an own kick the `selfKicks` counter misattributes no longer skips the change
+  (`454bb6e8`): it bumps scoped, so the read-mark patch keeps the open chat and
+  `TestWorkerQueuedOwnRequestWakesBeforeRemoteDelivery` passes (it failed on
+  `perf/read-path` alone, 2 of 2);
+- a direct text group send whose member roster moved inside its claim reads
+  again, at most twice (`e70e7f40`): reads beside the writer widened that race
+  (`TestGroupSendSyncsOnlyItsGroupWhenContinuityChanged` failed 3 of 3 after
+  the merge, passes 3 of 3);
+- list-key expectations ignore the step's `v` keys (`75ba3ef1`); the web node
+  harnesses follow S5's timeline (`905a66f2`).
+
+Race shards (`scripts/race-shard.sh`, this machine, package timeout raised to
+1500 s because every shard needs ~590 s of test time here, main included): no
+data race. `ui-2` passes. `ui-0` failed `TestBrowserMovedTopicInvitationNativeReceiver`
+and `TestStopResultPresentation`, `ui-1` `TestBrowserNativeTopicDestinationTitle`,
+`TestComposerOwnGroupCurrentAttempt`, `TestBrowserEngineRechecksAfterProfile`
+and `TestInteractionInventory`; the two harness tests are fixed (`905a66f2`).
+The browser-to-native tests fail with `peer_update` (the native daemon had not
+yet connected to publish its capabilities): under race, `Run` sometimes waits
+~800 ms at `driveQueuedSends`'s cleanup DELETE for the writer before it
+connects, and the tests do not wait for the connection. Open: what holds the
+writer then; those tests pass on main under race (8 of 8) and pre-merge.
+
 ## MEL-748 read path: chat open, list, updates — unreleased, November 18, 2026
 
 Owner: opening a chat takes seconds; every interaction lags behind Telegram and
@@ -136,9 +166,8 @@ Telegram Desktop `a532622b`.
 
 **State of the targets.** S1 and S5 done. S3 partial: the unread page and the
 badge do not reuse the projection (the badge is the list's, already kept per
-chat; the unread page reads its own rows). S2 partial: the mechanism is in and
-tested, inactive until `ViewCoverSchema` is appended; with it, one projection
-per open (R1), without it two. S4 partial: host API only (`abacd697`, one commit with
+chat; the unread page reads its own rows). S2 done at integration: `ViewCoverSchema` is
+appended (send-path section above); one projection per open (R1). S4 partial: host API only (`abacd697`, one commit with
 S3, as both change `dmPage`); Comic does not page, and `SelectGroupHistory` stays
 eager (Comic never asks `group_refs=0`, so lazy refs would save nothing).
 S4 web is deferred (decided November 18): a first page of 50 costs what the
@@ -164,11 +193,11 @@ paging the browser would save nothing on the host's open.
   jump-to-quote, topics, search, `markUnread(fromHere)` and the invite sheet to
   load what they need, and the read-entry snapshot (MEL-692/693) kept exact.
 - Scoped keys (S2) need every table a view reads to name its scope.
-  `client.ViewCoverSchema` is that step, written here and not appended (the send
-  branch owns this phase's step); `TestViewCoverNamesEveryTable` fails on a new
-  table that chooses nothing. Until it is appended the host sends no keys and
-  the page reads everything, as before. With it, the send branch must also note
-  the background flush as `noteStoredChange` (`backgroundsend.go`): measured,
+  `client.ViewCoverSchema` is that step, appended last at integration;
+  `TestViewCoverNamesEveryTable` fails on a new table that chooses nothing.
+  Without the step (a store whose cover triggers are missing) the host sends no
+  keys and the page reads everything. The background flush notes its change as
+  `noteStoredChange` (`backgroundsend.go`), done at integration: measured,
   0 of 20 change events spare the open chat under another chat's traffic with
   `NoteChange`, 20 of 20 with `noteStoredChange`.
 - `h` (the list's history-copy progress) does not reload an open chat: no chat
