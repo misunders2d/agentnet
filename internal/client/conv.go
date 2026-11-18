@@ -1048,7 +1048,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	// a key changed (until trusted) or none of their devices can get a copy.
 	// Records go to the devices that can take them.
 	turn := m.sub == "" && !m.selfJob
-	var peerErr error // why a device of the other member got no copy
+	var peerErr error   // why a device of the other member got no copy
 	var seals []sealing // one per copy, sealed once the checks are done
 	for _, dev := range devices {
 		key, err := a.sendKey(ctx, dev.Address)
