@@ -31,6 +31,18 @@ one place it plugs in, and stays on the per-message route until the Hub
 advertises it. (2) Reconnect backlog through the interleaving path, so a live
 message is not queued behind 1000 missed ones in the live lane.
 
+**Open: a burst of sends queues per chat (owner decision).** With
+`sendWait` 0 the page answers once a send is stored, so it no longer paces
+the sender by the worker. A chat's queued worker stores about 8 sends a
+second (~120 ms each: rosters, keys, profiles, member checks). A burst
+faster than that waits in order in `scheduled_sends`; a later message waits
+behind it. Measured in the custody journey: 1000 sends accepted in 20–31 s,
+then ~150 s to drain, the same total as main's paced loop (168 s), so no
+send got slower; the wait moved from the page into the queue. Each message
+is stored and shown at once and none is lost. Send-to-editable (~350 ms) is
+for an idle chat. Faster draining (one round of network checks for several
+queued messages of one chat) is not built.
+
 **Reply receiver sends directly.** `queueDM` still sends a reply-receiver
 message directly: it needs the network catalog check before it can be
 stored. It now logs why a send was not queued instead of falling back
