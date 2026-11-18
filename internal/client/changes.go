@@ -1,6 +1,10 @@
 package client
 
-import "sync"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // Changes let an in-process view, such as the daemon's messenger page, learn
 // that this installation's local state changed without polling. The daemon's
@@ -97,4 +101,28 @@ func (s *store) done(err error) error {
 		s.changed()
 	}
 	return err
+}
+
+// A background pass (the job worker's claims and review, reminders) reads
+// much of the store, and a burst of sends or receipts changes it many times
+// a second; each change woke every such pass again, and the passes took the
+// one store connection from the sends themselves. passEvery paces them: the
+// first wake after a quiet moment runs at once, further wakes within it run
+// once, at its end. Nothing is missed: a pass captures the next change
+// before it looks, as before.
+const passEvery = 100 * time.Millisecond
+
+// pace waits until passEvery after the last pass began; false: ctx ended.
+func pace(ctx context.Context, last *time.Time) bool {
+	if wait := passEvery - time.Since(*last); wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+	*last = time.Now()
+	return true
 }

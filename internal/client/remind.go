@@ -255,7 +255,11 @@ const alertedDueReminderSQL = `SELECT EXISTS(SELECT 1 FROM reminders WHERE state
 func (a *Agent) remindLoop(ctx context.Context) {
 	timer := newWallTimer()
 	defer timer.Stop()
+	var last time.Time
 	for {
+		if !pace(ctx, &last) {
+			return
+		}
 		_, changed := a.Changed() // before looking, so no change is missed
 		next, err := a.remindDue(time.Now())
 		if err != nil {
