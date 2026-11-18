@@ -391,10 +391,14 @@ type store struct {
 }
 
 // storeDB is the store's one writer, which serialises every write and
-// transaction, with read-only connections beside it for plain reads. A UI read
-// then never queues behind sync, catch-up or a send holding the writer (WAL: a
-// read sees everything committed before it starts). Reads that depend on the
-// connection itself, such as total_changes(), use the embedded writer.
+// transaction, with one read-only connection beside it for plain reads. A UI
+// read then never queues behind sync, catch-up or a send holding the writer
+// (WAL: a read sees everything committed before it starts). Reads that depend
+// on the connection itself, such as total_changes(), use the embedded writer.
+// One reader, not more: each new connection parses the whole schema on its
+// first statement, and a daemon's loops starting together each opened one,
+// delaying its start and the capability record peers wait for. Reads nest no
+// deeper than they did on the single connection before.
 type storeDB struct {
 	*sql.DB
 	reads *sql.DB
@@ -440,7 +444,7 @@ func openStore(path string) (*store, error) {
 	if err != nil {
 		return nil, err
 	}
-	reads, err := sqlitedb.OpenReader(path, 4)
+	reads, err := sqlitedb.OpenReader(path, 1)
 	if err != nil {
 		writer.Close()
 		return nil, err
