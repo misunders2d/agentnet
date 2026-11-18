@@ -820,7 +820,28 @@ func (s *store) topicTurns(conv, topic, selfFP string) ([]ConvMessage, error) {
 		at[m.LID] = len(g)
 		g = append(g, m)
 	}
-	return g, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	// A reply whose (older) sender named no topic is in the topic through its
+	// chain, which this lookup does not follow: the whole history decides.
+	var refs []string
+	for _, m := range g {
+		refs = append(refs, m.ID, m.LID)
+		for _, c := range m.Copies {
+			refs = append(refs, c.ID)
+		}
+	}
+	list, _ := json.Marshal(refs)
+	var legacy int
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE reply_to IN (SELECT value FROM json_each(?)) AND conv=? AND topic IS NULL AND coalesce(sub,'')='') OR EXISTS(SELECT 1 FROM outbox WHERE reply_to IN (SELECT value FROM json_each(?)) AND conv=? AND topic IS NULL AND coalesce(sub,'')='')`, string(list), conv, string(list), conv).Scan(&legacy); err != nil {
+		return nil, err
+	}
+	if legacy != 0 {
+		return nil, nil
+	}
+	return g, nil
 }
 
 // Main-flow names use the existing own-device preference channel with a stable
