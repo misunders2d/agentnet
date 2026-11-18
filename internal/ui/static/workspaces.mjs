@@ -78,7 +78,9 @@ export class WorkspaceShell {
     return new File([blob],file.name.replace(/\.[^.]*$/,"")+".mp4",{type:"video/mp4",lastModified:file.lastModified});
    }} : {}),
    listen:(fn)=>{check();if(entry.engine)return entry.engine.listen(seq=>{if(entry.connected)fn({type:"change",seq,workspace:id});});
-    const es=this.eventSource(prefix+"/events");for(const kind of ["change","typing","presence"])es.addEventListener(kind,e=>{if(entry.connected)fn({type:"change",seq:Number(e.data),workspace:id,...(kind==="change"?{}:{hint:kind})});});
+    // "scope" (additive) names the keys the next "change" of the same seq moved; any doubt drops them, and the page then reads everything again.
+    const es=this.eventSource(prefix+"/events");let scope=null;es.addEventListener("scope",e=>{try{const v=JSON.parse(e.data);scope=Number.isSafeInteger(v?.seq)&&Array.isArray(v.keys)&&v.keys.every(k=>typeof k==="string")?v:null;}catch{scope=null;}});
+    for(const kind of ["change","typing","presence"])es.addEventListener(kind,e=>{const seq=Number(e.data),keys=kind==="change"&&scope?.seq===seq?scope.keys:undefined;if(kind==="change")scope=null;if(entry.connected)fn({type:"change",seq,workspace:id,...(kind==="change"?{}:{hint:kind}),...(keys?{keys:[...keys]}:{})});});
     es.addEventListener("restart",()=>{es.close();fn({type:"restart",workspace:id});});
     es.onerror=()=>{es.close();fn({type:"disconnect",workspace:id});};return()=>es.close();
    },

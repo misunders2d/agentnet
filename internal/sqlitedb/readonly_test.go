@@ -45,3 +45,38 @@ func TestReadOnlySnapshotAllowsConcurrentWriter(t *testing.T) {
 		t.Fatalf("fresh read missed write: value=%q err=%v", value, err)
 	}
 }
+
+func TestReaderReadsBesideAHeldWriteAndRefusesWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.db")
+	writer, err := Open(path, []string{`CREATE TABLE v(value TEXT); INSERT INTO v VALUES('old')`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	reader, err := OpenReader(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	tx, err := writer.Begin() // immediate: holds the write lock
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE v SET value='new'`); err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err := reader.QueryRow(`SELECT value FROM v`).Scan(&value); err != nil || value != "old" {
+		t.Fatalf("read beside a held write: value=%q err=%v", value, err)
+	}
+	if _, err := reader.Exec(`INSERT INTO v VALUES('x')`); err == nil {
+		t.Fatal("the reader wrote")
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.QueryRow(`SELECT value FROM v`).Scan(&value); err != nil || value != "new" {
+		t.Fatalf("committed write unseen: value=%q err=%v", value, err)
+	}
+}

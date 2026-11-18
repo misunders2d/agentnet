@@ -35,7 +35,9 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 		}
 	}
 unwrapped:
-	if db, ok := source.(*sql.DB); ok {
+	if db, ok := source.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	}); ok {
 		tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return err

@@ -384,6 +384,8 @@ still runs with the page's full trust.
 
 Native `change` events may carry optional `hint:"typing"` or `hint:"presence"`. A skin may refresh only typing for the first, and overview plus typing for the second; neither requires reloading chat history. Missing or unknown hints require the ordinary full refresh. The daemon retains separate monotonic revisions internally, so a coalesced message/edit is always an ordinary change even when followed by typing. Existing skins may ignore hints and keep reloading normally.
 
+A native `change` may also carry `keys`, the scopes it moved: `c:<conv>` one chat, `p:<peer>` a peer's device threads, `h` the list's history-copy progress, `*` no single chat (MEL-748). A skin may then reload only the list when every key is `h` or another chat's `c:` key outside the open chat's `scope` (a field of `/api/dm`; Comic: `store.ts` `scopedRefetch`); any other key, or no or empty `keys`, requires the ordinary full refresh. Hosts send `keys` only once every table a view reads names its scope.
+
 **Naming a workspace.** Show a workspace by, in this order: this device's own
 label (`name`, unless it is a placeholder such as `""`, "Current workspace",
 "This computer" or "This server"); the workspace's own name its admin set

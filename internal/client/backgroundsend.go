@@ -233,7 +233,7 @@ func (a *Agent) runPosts(p *backgroundPosts, pass func(context.Context)) {
 			// Every Hub ping runs this pass. One that stored nothing must
 			// not make open views rebuild (MEL-731).
 			if after, ok := a.store.rowChanges(); !counted || !ok || after != before {
-				a.NoteChange()
+				a.noteStoredChange()
 			}
 			p.Lock()
 			if p.again && !p.closed && ctx.Err() == nil {

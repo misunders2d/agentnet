@@ -287,7 +287,7 @@ func Open(home string) (*Agent, error) {
 		}
 	}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1), networkWake: make(chan struct{}, 1)}
-	st.onChange = a.changes.bump
+	st.onChange = a.changes.bumpStored
 	st.onJobReady = func() { a.wakeWorker(); a.notifyOwnWork() }
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {

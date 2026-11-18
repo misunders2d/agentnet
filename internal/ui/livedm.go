@@ -1,12 +1,17 @@
 package ui
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -254,12 +259,142 @@ func (l *Live) keptChats(convs []client.ConversationInfo) map[string]*chatEntry 
 	return kept
 }
 
+// keptMessages is one chat's projected messages as read at one mark: the
+// revision (keptRev) and the chat's view_dirty mark. assigned is their topic
+// assignments (client ChatTopicAssignments), kept with them because every
+// reader of the chat (its view, main topic, topics, list row) needs them and
+// they follow only the messages' reply and topic graph, not read state: a read
+// mark patched in place keeps them.
+type keptMessages struct {
+	rev      uint64
+	seq      int64
+	msgs     []client.ConvMessage
+	assigned map[string]string
+}
+
+// keptRev is the revision a kept chat is read at besides its view_dirty mark.
+// When every table names its scope (client ViewKeysScoped), a store write moves
+// only the marks of what it touched, so the unscoped revision (a change no
+// store write names) is enough: another chat's traffic then leaves this one
+// kept. Otherwise any write may be one no mark names: the content revision.
+// The step that scopes them is appended, never undone, and may be by another
+// process while this one runs, so a scoped revision sorts after every
+// unscoped one: what was kept before it is then replaced, never preferred.
+func (l *Live) keptRev(v client.ViewChange) uint64 {
+	if l.a.ViewKeysScoped() {
+		return 1<<63 | v.Unscoped
+	}
+	return v.Content
+}
+
+// markRead marks the open chat's messages read and, when nothing else moved
+// it meanwhile, applies the read state to its kept projection rather than
+// projecting it again: Telegram changes the dialog's read fields for a read
+// and sends updateChatReadInbox, never rebuilding history (TDLib at 03220f6:
+// read_history_inbox, MessagesManager.cpp:9618; set_dialog_last_read_inbox_message_id,
+// :9981; send_update_chat_read_inbox, :27660; td_api.tl:11430).
+func (l *Live) markRead(x Action) error {
+	l.msgsMu.Lock()
+	conv := l.lastOpen
+	kept, ok := l.msgs[conv]
+	l.msgsMu.Unlock()
+	if ok && len(x.IDs) > 0 {
+		want := map[string]bool{}
+		for _, id := range x.IDs {
+			want[id] = true
+		}
+		for _, m := range kept.msgs {
+			delete(want, m.ID)
+		}
+		ok = len(want) == 0 // every message marked is the open chat's
+	}
+	if !ok {
+		return refused(l.a.MarkReadWithAttention(x.IDs, x.Attention))
+	}
+	span, err := l.a.MarkReadWatching(x.IDs, x.Attention, conv)
+	if err != nil {
+		return refused(err)
+	}
+	v, _ := l.a.ViewChanges()
+	if !span.OK || kept.seq != span.Before || kept.rev != l.keptRev(v) {
+		return nil // something else moved it: the next read projects it again
+	}
+	msgs := slices.Clone(kept.msgs)
+	if l.a.RereadRead(msgs, x.IDs) != nil {
+		return nil
+	}
+	l.msgsMu.Lock()
+	if cur := l.msgs[conv]; cur.rev == kept.rev && cur.seq == kept.seq {
+		l.msgs[conv] = keptMessages{kept.rev, span.After, msgs, kept.assigned}
+	}
+	l.msgsMu.Unlock()
+	return nil
+}
+
+func refused(err error) error {
+	if err != nil {
+		return Refuse(sentence(err))
+	}
+	return nil
+}
+
+// chatMessages is a chat's projected messages, read once per mark and shared
+// by its open view and its list row: opening a chat, marking it read and the
+// list after that write then read the chat once, not three times (TDLib keeps
+// each chat's messages in memory and the list row reads its kept last message,
+// MessagesManager.cpp Dialog::store at 03220f6b). The chat's view_dirty mark
+// moves with any write its keys name, a write no process told of included;
+// the content revision moves with any write or wake, so another chat's write
+// reads this one again too: a page told the change's keys (GET /events
+// "scope") does not ask for it then. What no write marks
+// (a host's connection, the clock) is settled again on every read (client
+// Resettled). fresh reads afresh, keeping nothing (overviewOracle's
+// comparison). scope is the chat's keys, for the page to match change events.
+func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage, assigned map[string]string, scope []string, err error) {
+	v, _ := l.a.ViewChanges() // before reading: a write meanwhile moves it past this
+	rev := l.keptRev(v)
+	scope, seq, err := l.a.ChatViewMark(conv)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	l.msgsMu.Lock()
+	kept, ok := l.msgs[conv]
+	l.msgsMu.Unlock()
+	if fresh || !ok || kept.rev != rev || kept.seq != seq {
+		if dmProjected != nil && !fresh {
+			dmProjected(conv)
+		}
+		msgs, err := l.a.MessagingConversationMessages(conv)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if fresh {
+			return msgs, client.ChatTopicAssignments(msgs), scope, nil
+		}
+		kept = keptMessages{rev, seq, msgs, client.ChatTopicAssignments(msgs)}
+		l.msgsMu.Lock()
+		for k, v := range l.msgs { // an older revision serves no one again
+			if v.rev < rev {
+				delete(l.msgs, k)
+			}
+		}
+		if l.msgs == nil {
+			l.msgs = map[string]keptMessages{}
+		}
+		if old := l.msgs[conv]; old.rev < rev || old.rev == rev && old.seq <= seq {
+			l.msgs[conv] = kept
+		}
+		l.msgsMu.Unlock()
+	}
+	return l.a.Resettled(kept.msgs), kept.assigned, scope, nil
+}
+
 // buildChatSummary reads one chat's messages for its list row.
 func (l *Live) buildChatSummary(c client.ConversationInfo, e *chatEntry, participations func(string) ([]client.ParticipationInfo, error)) error {
 	if overviewChatBuilt != nil && !l.viewCachesOff {
 		overviewChatBuilt(c.ID)
 	}
-	msgs, err := l.a.MessagingConversationMessages(c.ID)
+	msgs, kept, _, err := l.chatMessages(c.ID, l.viewCachesOff)
 	if err != nil {
 		return err
 	}
@@ -269,7 +404,7 @@ func (l *Live) buildChatSummary(c client.ConversationInfo, e *chatEntry, partici
 		if assigned != nil {
 			return titleErr
 		}
-		assigned = client.ChatTopicAssignments(msgs) // complete graph, including read ancestors
+		assigned = kept // complete graph, including read ancestors
 		topics, err := l.a.ChatTopicsForMessages(c.ID, msgs, assigned)
 		titleErr = err
 		if err != nil {
@@ -495,32 +630,114 @@ func (l *Live) NewDM(address string) (string, error) {
 }
 
 // DM implements Persons.
-func (l *Live) DM(id string) (DMThread, error) {
+func (l *Live) DM(id string) (DMThread, error) { return l.DMPage(id, DMPage{GroupRefs: true}) }
+
+// DMPage implements DMPager: one projection of the chat, its rows built only
+// for the page asked.
+func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
+	rev, _ := l.a.ViewChanges()
+	mark, _ := l.a.ViewMark()
+	t, err := l.dmPage(id, page, false)
+	if err == nil {
+		l.msgsMu.Lock()
+		l.lastOpen = t.ID
+		l.msgsMu.Unlock()
+	}
+	if dmOracle != nil && err == nil && page.Limit == 0 && l.a.ViewKeysScoped() {
+		l.checkSkip(id, t, mark, rev.Unscoped)
+	}
+	if dmOracle != nil && err == nil {
+		fresh, e := l.dmPage(id, page, true)
+		now, _ := l.a.ViewChanges()
+		if after, _ := l.a.ViewMark(); now.Content == rev.Content && after == mark { // nothing changed under the comparison, announced or not
+			x, _ := json.Marshal(t)
+			y, _ := json.Marshal(fresh)
+			if e != nil || !bytes.Equal(x, y) {
+				dmOracle(fmt.Sprintf("chat %s differs from a fresh read (%v):\nkept  %s\nfresh %s", id, e, x, y))
+			} else {
+				dmOracle("")
+			}
+		}
+	}
+	return t, err
+}
+
+// checkSkip (dmOracle only) proves the page's skip rule (store.ts
+// scopedRefetch): when every key moved since this chat's last view is "h" or
+// another chat's, and nothing unscoped happened, the view is as it was. Seq
+// and exec staleness move without a write and are left out.
+func (l *Live) checkSkip(id string, t DMThread, mark int64, unscoped uint64) {
+	t.Seq = 0
+	t.Messages = slices.Clone(t.Messages)
+	for i := range t.Messages {
+		if e := t.Messages[i].Exec; e != nil {
+			c := *e
+			c.Stale = false
+			t.Messages[i].Exec = &c
+		}
+	}
+	now, _ := json.Marshal(t)
+	l.msgsMu.Lock()
+	prev, ok := l.seen[id]
+	if l.seen == nil {
+		l.seen = map[string]seenView{}
+	}
+	l.seen[id] = seenView{mark, unscoped, now}
+	l.msgsMu.Unlock()
+	if !ok || prev.unscoped != unscoped {
+		return
+	}
+	keys, _, err := l.a.ViewDirtySince(prev.mark)
+	if err != nil || len(keys) == 0 {
+		return
+	}
+	for _, k := range keys {
+		if k = strings.TrimPrefix(k, "v"); k != "h" && (!strings.HasPrefix(k, "c:") || slices.Contains(t.Scope, k)) { // as ViewScope says it
+			return // the page reads it again
+		}
+	}
+	if !bytes.Equal(prev.view, now) {
+		dmOracle(fmt.Sprintf("chat %s changed under keys %v that leave it as it was:\nbefore %s\nnow    %s", id, keys, prev.view, now))
+		return
+	}
+	skipsChecked.Add(1)
+}
+
+var skipsChecked atomic.Int64 // checkSkip's proven skips, said by the tests
+
+// seenView is checkSkip's last view of a chat.
+type seenView struct {
+	mark     int64
+	unscoped uint64
+	view     []byte
+}
+
+func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 	if resolved, err := l.a.ContinuityConversation(id); err != nil {
 		return DMThread{}, err
 	} else {
 		id = resolved
 	}
-	convs, err := l.a.MessagingConversations()
+	c, found, err := l.a.MessagingConversation(id) // this chat only, not the whole list
 	if err != nil {
 		return DMThread{}, err
 	}
-	for _, c := range convs {
-		if c.ID != id {
-			continue
-		}
+	if found {
 		// Before the messages: a send stored between the two reads is then seen
 		// twice and shown once, where the other order would lose it from this view.
 		queued, err := l.a.QueuedSends(id)
 		if err != nil {
 			return DMThread{}, err
 		}
-		msgs, err := l.a.MessagingConversationMessages(id)
+		msgs, assigned, scope, err := l.chatMessages(id, fresh)
 		if err != nil {
 			return DMThread{}, err
 		}
 		t := DMThread{ID: id, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
 			Messages: []DMMessage{}}
+		if l.a.ViewKeysScoped() {
+			t.Scope = scope
+		}
 		t.Kind, t.Title, t.Frozen = c.Kind, c.Title, c.Frozen
 		if c.Kind == protocol.ConvKindGroup {
 			t.Peer.Label = c.Title
@@ -545,7 +762,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		} else {
 			t.Members = originalViews(c)
 		}
-		main, err := l.a.ChatMainTopicForMessages(id, msgs)
+		main, err := l.a.ChatMainTopicForMessages(id, msgs, assigned)
 		if err != nil {
 			return t, err
 		}
@@ -553,7 +770,6 @@ func (l *Live) DM(id string) (DMThread, error) {
 			summary := threadSummary(*main, false)
 			t.MainTopic = &summary
 		}
-		assigned := client.ChatTopicAssignments(msgs)
 		topics, err := l.a.ChatTopicsForMessages(id, msgs, assigned)
 		if err != nil {
 			return DMThread{}, err
@@ -562,7 +778,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Topics = append(t.Topics, threadSummary(topic, false))
 		}
 		var groupRefs []protocol.GroupHistoryRef
-		if c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
+		if page.GroupRefs && c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
 			ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 			groupRefs, err = l.a.SelectGroupHistory(ctx, id, client.GroupHistorySelection{Last: 64})
 			cancel()
@@ -604,7 +820,22 @@ func (l *Live) DM(id string) (DMThread, error) {
 			labels[p.Person] = p.Label
 		}
 		confirmable := l.a.ProposalConfirmer()
-		for _, m := range shownRows(msgs, people) {
+		shown := shownRows(msgs, people)
+		anchor, unread := -1, -1
+		for i, m := range shown {
+			if page.From != "" && (m.ID == page.From || m.LID == page.From) {
+				anchor = i
+			}
+			if unread < 0 && m.Unread {
+				unread = i
+			}
+		}
+		if page.From != "" && anchor < 0 {
+			return DMThread{}, NotFound("no message with that id in this chat")
+		}
+		start, end := pageBounds(len(shown), anchor, unread, page)
+		t.Older, t.Newer = start > 0, end < len(shown)
+		for _, m := range shown[start:end] {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
 				Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, JobDetail: m.JobDetail, At: time.Unix(m.At, 0), Unread: m.Unread, Attention: m.Attention, Replica: m.Replica, OtherDM: m.OtherDM, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
@@ -699,7 +930,9 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Messages = append(t.Messages, dm)
 		}
 		linkReplies(msgs, t.Messages)
-		t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
+		if !t.Newer { // a message waiting to go belongs at the end
+			t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
+		}
 		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
 	}
@@ -802,43 +1035,30 @@ func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self strin
 // per open, ask the Hub about copies it still holds, and, for a DM, about the
 // person's device.
 func (l *Live) refreshDM(id string) (Presence, bool, error) {
-	convs, err := l.a.MessagingConversations()
+	c, found, err := l.a.MessagingConversation(id)
+	if err != nil || !found {
+		return Presence{}, found, err
+	}
+	// A message shows its least advanced copy's state, so every copy still
+	// held is asked about, not only the first one (often the other person's,
+	// long delivered, while a copy to one of this person's own devices stays
+	// shown as held forever). The push stream carries receipts the Hub sends;
+	// these asks cover copies it holds for a device that has not answered.
+	held, err := l.a.HeldCopies(id, 20)
 	if err != nil {
-		return Presence{}, false, err
+		return Presence{}, true, err
 	}
-	for _, c := range convs {
-		if c.ID != id {
-			continue
-		}
-		msgs, err := l.a.MessagingConversationMessages(id)
-		if err != nil {
-			return Presence{}, true, err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
-		defer cancel()
-		// A message shows its least advanced copy's state, so every copy
-		// still held is asked about, not only the first one (often the other
-		// person's, long delivered, while a copy to one of this person's own
-		// devices stays shown as held forever), and also the held copies of
-		// a message shown by a less advanced one (failed, or kept here).
-		const maxReceipts = 20
-		asked := 0
-		for i := len(msgs) - 1; i >= 0 && asked < maxReceipts; i-- {
-			m := msgs[i]
-			if m.Dir != "out" {
-				continue
-			}
-			for _, copy := range m.Copies { // none: sent from another device of this person
-				if copy.State == protocol.StateCustody && asked < maxReceipts {
-					asked++
-					l.a.Status(ctx, copy.ID, 0) // stores a changed state; the change is pushed to the page
-				}
-			}
-		}
-		if c.Kind == protocol.ConvKindGroup {
-			return Presence{}, true, nil
-		}
-		return l.presence(ctx, c.Peer.Address), true, nil
+	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+	defer cancel()
+	var asked sync.WaitGroup
+	for _, copy := range held {
+		asked.Go(func() { l.a.Status(ctx, copy, 0) }) // stores a changed state; the change is pushed to the page
 	}
-	return Presence{}, false, nil
+	if c.Kind == protocol.ConvKindGroup {
+		asked.Wait()
+		return Presence{}, true, nil
+	}
+	p := l.presence(ctx, c.Peer.Address)
+	asked.Wait()
+	return p, true, nil
 }

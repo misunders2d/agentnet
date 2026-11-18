@@ -286,24 +286,34 @@ func (a *Agent) PeerWords() func(address string) string {
 			labels[strings.ToLower(p.Label)]++
 		}
 	}
+	said := map[string]string{} // one person lookup per address, not per message
 	return func(address string) string {
-		if _, _, err := protocol.SplitAddress(address); err != nil {
-			return address
+		if w, ok := said[address]; ok {
+			return w
 		}
-		if address == a.Address {
-			return "this device"
-		}
-		device := DeviceWords(address)
-		if hasSelf && slices.ContainsFunc(self.roster.Devices, func(d identity.Public) bool { return d.Address == address }) {
-			return "your " + device
-		}
-		p, ok, err := a.store.personByAddress(address)
-		if err != nil || !ok || p.info.State != personPinned || p.info.Label == "" {
-			return device
-		}
-		if labels[strings.ToLower(p.info.Label)] > 1 {
-			device += " · " + shortKey(p.info.Fingerprint)
-		}
-		return "another person, who calls themselves " + promptLabel(p.info.Label) + " (" + device + ")"
+		w := a.peerWords(address, self, hasSelf, labels)
+		said[address] = w
+		return w
 	}
+}
+
+func (a *Agent) peerWords(address string, self personRow, hasSelf bool, labels map[string]int) string {
+	if _, _, err := protocol.SplitAddress(address); err != nil {
+		return address
+	}
+	if address == a.Address {
+		return "this device"
+	}
+	device := DeviceWords(address)
+	if hasSelf && slices.ContainsFunc(self.roster.Devices, func(d identity.Public) bool { return d.Address == address }) {
+		return "your " + device
+	}
+	p, ok, err := a.store.personByAddress(address)
+	if err != nil || !ok || p.info.State != personPinned || p.info.Label == "" {
+		return device
+	}
+	if labels[strings.ToLower(p.info.Label)] > 1 {
+		device += " · " + shortKey(p.info.Fingerprint)
+	}
+	return "another person, who calls themselves " + promptLabel(p.info.Label) + " (" + device + ")"
 }

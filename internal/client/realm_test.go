@@ -88,7 +88,9 @@ func realmAgent(t *testing.T, relay *realmRelay) *Agent {
 
 // Compare existing security/history rows, including all their columns, not
 // only the realm value. These table names are fixed by this synthetic test.
-func realmRows(t *testing.T, db *sql.DB) map[string][][]any {
+func realmRows(t *testing.T, db interface {
+	Query(string, ...any) (*sql.Rows, error)
+}) map[string][][]any {
 	t.Helper()
 	state := make(map[string][][]any)
 	for _, table := range []string{"config", "peers", "approvals", "task_grants", "inbox", "outbox"} {

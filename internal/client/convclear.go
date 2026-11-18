@@ -563,7 +563,7 @@ func (a *Agent) shareErased(ctx context.Context) (int, error) {
 var errShared = errors.New("conversation deletion queued already")
 
 // inTx runs f in a transaction of its own.
-func inTx(db *sql.DB, f func(*sql.Tx, string) error) error {
+func inTx(db *storeDB, f func(*sql.Tx, string) error) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err

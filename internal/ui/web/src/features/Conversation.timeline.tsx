@@ -524,24 +524,28 @@ function Activity({ ctx, messages }: { ctx: Ctx; messages: AnyMsg[] }) {
     return () => clearTimeout(t);
   }, [typing, now]);
 
-  const busy = new Map<string, { name: string; seed: string; since?: number; what: string; activity?: string; stop?: T.StopAction; stale?: boolean; terminal?: string }>();
-  for (const m of messages) {
-    const running = working(m, messages, ctx);
-    // An old decision snapshot must not hide a newer current execution.
-    const stop = m.stop && m.exec?.attempt && m.exec.attempt > m.stop.attempt ? undefined : m.stop;
-    const terminal = terminalStopLabel(stop);
-    if ((!running && !stop) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
-    const what = terminal ? "" : localRunningDetail((isThreadMsg(m) ? m.detail : m.job_detail) || "", running);
-    const nativeActivity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, running && !stop?.pending && !terminal);
-    if (isThreadMsg(m)) {
-      // In a device thread the agent works on what you sent it; what it was sent works on your side.
-      const name = m.dir === "out" ? threadAgentName(ctx) : agentName(undefined, ctx.names, ctx.overview?.person, ctx.overview?.person);
-      busy.set(stop ? m.id : m.dir, { activity:nativeActivity, stop, terminal, stale:m.exec?.stale, name, seed: m.dir === "out" ? ctx.thread?.peer || m.id : ctx.overview?.me.address || m.id, since: terminal ? undefined : m.exec?.at, what });
-      continue;
+  // Once per messages and ctx, not on every typing pulse and clock tick.
+  const busy = useMemo(() => {
+    const busy = new Map<string, { name: string; seed: string; since?: number; what: string; activity?: string; stop?: T.StopAction; stale?: boolean; terminal?: string }>();
+    for (const m of messages) {
+      const running = working(m, messages, ctx);
+      // An old decision snapshot must not hide a newer current execution.
+      const stop = m.stop && m.exec?.attempt && m.exec.attempt > m.stop.attempt ? undefined : m.stop;
+      const terminal = terminalStopLabel(stop);
+      if ((!running && !stop) || (m.actions || []).includes("cancel")) continue; // its approval card shows it, with Stop
+      const what = terminal ? "" : localRunningDetail((isThreadMsg(m) ? m.detail : m.job_detail) || "", running);
+      const nativeActivity = currentNativeActivity(isThreadMsg(m) ? m.detail : m.job_detail, m.exec, running && !stop?.pending && !terminal);
+      if (isThreadMsg(m)) {
+        // In a device thread the agent works on what you sent it; what it was sent works on your side.
+        const name = m.dir === "out" ? threadAgentName(ctx) : agentName(undefined, ctx.names, ctx.overview?.person, ctx.overview?.person);
+        busy.set(stop ? m.id : m.dir, { activity:nativeActivity, stop, terminal, stale:m.exec?.stale, name, seed: m.dir === "out" ? ctx.thread?.peer || m.id : ctx.overview?.me.address || m.id, since: terminal ? undefined : m.exec?.at, what });
+        continue;
+      }
+      const a = agentOf(ctx, m.pid);
+      if (a) busy.set(stop ? m.id : a.pid, { activity:nativeActivity, stop, terminal, stale:m.exec?.stale, name: agentLabel(a, ctx), seed: a.agent_id || a.host.address, since: terminal ? undefined : m.exec?.at, what });
     }
-    const a = agentOf(ctx, m.pid);
-    if (a) busy.set(stop ? m.id : a.pid, { activity:nativeActivity, stop, terminal, stale:m.exec?.stale, name: agentLabel(a, ctx), seed: a.agent_id || a.host.address, since: terminal ? undefined : m.exec?.at, what });
-  }
+    return busy;
+  }, [messages, ctx]);
   if (!entries.length && !busy.size) return null;
   const names = entries.map((e) => e.label || "Someone");
   return (

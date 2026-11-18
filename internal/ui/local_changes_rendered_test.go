@@ -66,3 +66,16 @@ func TestChatEntryCachedRendered(t *testing.T) {
 	}
 	t.Log(string(output))
 }
+
+// MEL-748 S5: a list reload that changes no field messages read leaves the
+// open chat's messages unrendered.
+func TestCtxOverviewRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered timeline ctx checks")
+	}
+	output, err := exec.CommandContext(t.Context(), "node", "testdata/ctx_overview_rendered.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rendered timeline ctx: %v\n%s", err, output)
+	}
+	t.Log(string(output))
+}

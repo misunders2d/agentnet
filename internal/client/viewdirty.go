@@ -1,5 +1,10 @@
 package client
 
+import (
+	"slices"
+	"strings"
+)
+
 // The chat list used to read every message of every chat again on each change:
 // 1.4 s on a real store, and with it every new message or receipt. Telegram keeps
 // each chat's summary and changes only the chat a write touched (TDLib
@@ -131,3 +136,146 @@ func (a *Agent) NoteViewChange() { a.changes.bump() }
 // SetViewCachesOff makes the device threads' list read everything afresh, leaving
 // what it keeps as it was: a cached list can then be compared with a fresh one.
 func (a *Agent) SetViewCachesOff(off bool) { a.topicCache.off.Store(off) }
+
+// The list's keys name every write its summaries read. A chat's own view reads
+// more tables: these triggers name the rest, so a change event can say which
+// chats moved and the page reads again only those (MEL-748; TDLib sends one
+// update per changed chat, updateChatLastMessage and the rest, td_api.tl at
+// 03220f6b). ViewCoverSchema is the last schema step (store.go). The
+// background flush's note after it stored rows (backgroundsend.go) is
+// noteStoredChange, not NoteChange: as NoteChange it made every received
+// message's change unscoped (measured: 0 of 20 events then spared the open
+// chat, 20 of 20 with it). ViewKeysScoped stays as a fallback: a store
+// missing any cover trigger reads every view again on each change.
+//
+// Each table names its chat, or marks everything: a missed key would show old
+// state, an extra one only reads again. viewCoverSkip are the tables no view
+// reads: copies queued for this person's other devices (their carriers mark
+// "h" through outbox), the Hub's routes, sent reports, and the dirty tables.
+var viewCoverSkip = []string{"sqlite_sequence", "unread_dirty", "view_dirty", "routes", "reported",
+	"agent_model_copies", "attention_mark_copies", "direct_topic_copies", "group_invitation_copies", "own_invitation_copies",
+	"read_mark_copies", "reminder_mark_copies", "topic_location_copies", "topic_mark_copies", "topic_title_copies"}
+
+// viewMessageKey names the chat of the message whose id is col.
+func viewMessageKey(col string) func(string) string {
+	return func(row string) string {
+		id := row + "." + col
+		return "SELECT coalesce((SELECT 'c:'||conv FROM inbox WHERE id=" + id + " AND conv IS NOT NULL),(SELECT 'c:'||conv FROM outbox WHERE id=" + id + " AND conv IS NOT NULL),'*') AS k"
+	}
+}
+
+// viewScopeKey names a topic's chat, or its direct peer's device thread.
+func viewScopeKey(row string) string {
+	return "SELECT CASE WHEN EXISTS(SELECT 1 FROM conversations WHERE id=" + row + ".scope) THEN 'c:'||" + row + ".scope ELSE 'p:'||" + row + ".scope END AS k"
+}
+
+var viewCover = []struct {
+	table string
+	key   func(string) string
+}{
+	{"alert_mutes", viewConvKey("conv")}, {"alerts", viewConvKey("conv")}, {"file_serves", viewConvKey("conv")},
+	{"group_invitation_cancellations", viewConvKey("conv")}, {"group_invitations", viewConvKey("conv")},
+	{"group_proof_records", viewConvKey("conv")}, {"group_proof_roots", viewConvKey("conv")}, {"group_publications", viewConvKey("conv")},
+	{"proposal_choices", viewConvKey("conv")}, {"proposal_sends", viewConvKey("conv")}, {"read_marks", viewConvKey("conv")},
+	{"reminder_marks", viewConvKey("conv")}, {"reminders", viewConvKey("conv")}, {"reply_receivers", viewConvKey("conv")},
+	{"room_context", viewConvKey("conv")}, {"room_membership_events", viewConvKey("conv")}, {"room_turn_readers", viewConvKey("conv")},
+	{"scheduled_sends", viewConvKey("conv")},
+	{"attachments", viewMessageKey("message_id")}, {"file_requests", viewMessageKey("message_id")},
+	{"sent_attachments", viewMessageKey("message_id")}, {"uploads", viewMessageKey("message_id")},
+	{"request_continuations", viewMessageKey("request")}, {"request_parks", viewMessageKey("request")}, {"request_waits", viewMessageKey("request")},
+	{"topic_titles", viewScopeKey}, {"topic_marks", viewScopeKey}, {"topic_locations", viewScopeKey},
+	{"history_receipts", viewFixedKey("h")}, {"history_archive_children", viewFixedKey("h")}, {"history_archive_entries", viewFixedKey("h")},
+	{"history_archive_export_errors", viewFixedKey("h")}, {"history_archive_jobs", viewFixedKey("h")}, {"device_history_sources", viewFixedKey("h")},
+	{"agent_models", viewFixedKey("*")}, {"alert_senders", viewFixedKey("*")}, {"approvals", viewFixedKey("*")}, {"attention", viewFixedKey("*")},
+	{"conversations_v1", viewFixedKey("*")}, {"device_admin_notices", viewFixedKey("*")}, {"device_links", viewFixedKey("*")},
+	{"direct_blobs", viewFixedKey("*")}, {"direct_topic_operations", viewFixedKey("*")}, {"group_invitation_refreshes", viewFixedKey("*")},
+	{"link_offers", viewFixedKey("*")}, {"native_requests", viewFixedKey("*")}, {"operator_persons", viewFixedKey("*")},
+	{"operators", viewFixedKey("*")}, {"own_invitation_views", viewFixedKey("*")}, {"person_grants", viewFixedKey("*")},
+	{"persons_v1", viewFixedKey("*")}, {"quarantine", viewFixedKey("*")}, {"reply_sessions", viewFixedKey("*")},
+	{"task_grants", viewFixedKey("*")}, {"team_chain", viewFixedKey("*")}, {"teams", viewFixedKey("*")},
+	{"topic_transfer_manifest", viewFixedKey("*")}, {"topic_transfer_plans", viewFixedKey("*")},
+}
+
+// ViewCoverSchema is the step that makes change events name their chats. Its
+// keys carry a leading "v" ("vc:<conv>", "v*", "vh"): the same scope, from a
+// table only chat views read. Readers that kept their state on the earlier keys
+// (the list, the unread count, attention's write check) ignore them, as before
+// the step; chat views (ChatViewMark) and change events (ViewScope) count them.
+var ViewCoverSchema = func() string {
+	var b strings.Builder
+	for _, c := range viewCover {
+		key := c.key
+		b.WriteString(viewTable("cover_"+c.table, c.table, func(row string) string { return "SELECT 'v'||k AS k FROM (" + key(row) + ")" }))
+	}
+	return b.String()
+}()
+
+// ViewKeysScoped reports whether every table a view reads names its scope in
+// view_dirty: then a change's keys say which views moved.
+func (a *Agent) ViewKeysScoped() bool {
+	var n int
+	err := a.store.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'view\_cover\_%' ESCAPE '\'`).Scan(&n)
+	return err == nil && n == 3*len(viewCover)
+}
+
+// ChatViewMark is what conv's view depends on in view_dirty: its own and its
+// continuity family's keys, and the newest mark of those and of every key that
+// is no one chat's ("*", "h", "p:"). The same mark means none of them moved.
+func (a *Agent) ChatViewMark(conv string) (keys []string, mark int64, err error) {
+	family, err := a.continuityDMs(conv)
+	if err != nil {
+		return nil, 0, err
+	}
+	keys = []string{"c:" + conv}
+	for _, r := range family {
+		if r.ID != conv {
+			keys = append(keys, "c:"+r.ID)
+		}
+	}
+	mark, err = chatMarkIn(a.store.db, keys)
+	return keys, mark, err
+}
+
+// chatMarkIn is ChatViewMark's mark for keys, read through q: within a write
+// transaction it sees that transaction's own marks. "h" and "vh" are left
+// out: history copying's progress, which no chat's messages read (the page's
+// skip rule says the same, store.ts scopedRefetch).
+func chatMarkIn(q querier, keys []string) (mark int64, err error) {
+	args := make([]any, 0, 2*len(keys))
+	for _, k := range keys {
+		args = append(args, k, "v"+k)
+	}
+	// "c:" keys sort between "c:" and "c;", "vc:" ones between "vc:" and
+	// "vc;": the rest is three index ranges.
+	err = q.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty WHERE (key IN (?`+strings.Repeat(",?", len(args)-1)+`) OR key<'c:' OR key>='c;' AND key<'vc:' OR key>='vc;') AND key NOT IN ('h','vh')`, args...).Scan(&mark)
+	return mark, err
+}
+
+// ViewScope returns the keys that moved after mark, as ViewDirtySince, when
+// keys are scoped; ok is false when they say nothing. Past max keys it says
+// "*": a burst that touched that many chats reads everything again anyway.
+func (a *Agent) ViewScope(mark int64, max int) (keys []string, next int64, ok bool) {
+	if !a.ViewKeysScoped() {
+		return nil, mark, false
+	}
+	keys, next, err := a.ViewDirtySince(mark)
+	if err != nil {
+		return nil, mark, false
+	}
+	scoped := make([]string, 0, len(keys))
+	for _, k := range keys { // a cover key is its scope's key to the page
+		if k = strings.TrimPrefix(k, "v"); !slices.Contains(scoped, k) {
+			scoped = append(scoped, k)
+		}
+	}
+	if len(scoped) > max {
+		scoped = []string{"*"}
+	}
+	return scoped, next, true
+}
+
+// ViewMark is the newest view_dirty mark: where a new listener starts.
+func (a *Agent) ViewMark() (int64, error) {
+	var mark int64
+	return mark, a.store.db.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty`).Scan(&mark)
+}

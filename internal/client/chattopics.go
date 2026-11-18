@@ -862,13 +862,16 @@ func mainChatMessages(msgs []ConvMessage) []ConvMessage {
 	}
 	return out
 }
-func (a *Agent) ChatMainTopicForMessages(conv string, msgs []ConvMessage) (*ThreadSummary, error) {
+
+// precomputed, when given, is ChatTopicAssignments(msgs), as for
+// ChatTopicsForMessages.
+func (a *Agent) ChatMainTopicForMessages(conv string, msgs []ConvMessage, precomputed ...map[string]string) (*ThreadSummary, error) {
 	locals, err := a.store.topicLocals(mainTopicScope(conv))
 	if err != nil {
 		return nil, err
 	}
-	ts := summarizeChatTopicView(conv, msgs, map[string]topicLocal{"": locals[mainTopicKey]}, storeNow().Unix(), true)
-	assigned := ChatTopicAssignments(msgs)
+	assigned := topicAssignmentMap(msgs, precomputed)
+	ts := summarizeChatTopicView(conv, msgs, map[string]topicLocal{"": locals[mainTopicKey]}, storeNow().Unix(), true, assigned)
 	if len(ts) > 0 {
 		for _, m := range msgs {
 			if m.Unread && assigned[m.LID] == "" {

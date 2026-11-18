@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,7 +87,8 @@ func (s *store) addConversation(root protocol.ConvRoot, raw []byte, peer string)
 	return s.done(err)
 }
 
-func (s *store) conversations() ([]ConversationInfo, error) {
+// conversations reads every chat, or only the ones named.
+func (s *store) conversations(only ...string) ([]ConversationInfo, error) {
 	rows, err := s.db.Query(`SELECT id, root, peer FROM conversations ORDER BY pinned_at DESC, id`)
 	if err != nil {
 		return nil, err
@@ -104,6 +106,9 @@ func (s *store) conversations() ([]ConversationInfo, error) {
 	rows.Close()
 	var out []ConversationInfo
 	for _, r := range rs {
+		if len(only) > 0 && !slices.Contains(only, r.id) {
+			continue
+		}
 		var root protocol.ConvRoot
 		if err := json.Unmarshal([]byte(r.raw), &root); err != nil {
 			return nil, err
@@ -776,8 +781,9 @@ type ConvMessage struct {
 	Sub               string                        `json:"sub,omitempty"`
 	Replica           bool                          `json:"replica,omitempty"`
 	OtherDM           bool                          `json:"other_dm,omitempty"` // from another DM with the same person (continuity): outside the requested DM's scope
-	Origin            string                        `json:"origin,omitempty"`   // the sender's assertion ("" for none)
-	Emotion           string                        `json:"emotion,omitempty"`  // "" means none sent
+	conv              string                        // the chat whose rows it came from, for RereadRead
+	Origin            string                        `json:"origin,omitempty"`  // the sender's assertion ("" for none)
+	Emotion           string                        `json:"emotion,omitempty"` // "" means none sent
 	Target            *envelope.Target              `json:"target,omitempty"`
 	PID               string                        `json:"pid,omitempty"`         // the agent participation it is for, from or about
 	AgentID           string                        `json:"agent_id,omitempty"`    // the named answer/result author, asserted by its host

@@ -1,6 +1,8 @@
 package ui
 
-import "github.com/misunders2d/agentnet/internal/sqlitedb/schematest"
+import (
+	"github.com/misunders2d/agentnet/internal/sqlitedb/schematest"
+)
 
 // No test here is about schema steps, upgrades or backups; they are proved one by one in
 // sqlitedb, hub, cmd/agentnet and itest, and row by row in client. Starting each of these fixtures' stores

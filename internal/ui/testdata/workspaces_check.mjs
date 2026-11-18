@@ -27,6 +27,17 @@ await assert.rejects(bh.api("/api/send",{}),/Stale/);
 assert.equal(shell.active,a.id);
 console.log("workspace transport, drafts, staged files, endpoints and stale handles PASS");
 
+// "scope" names the keys of the next "change" of its seq; a mismatched, malformed or absent scope yields a change with no keys (read everything).
+{const ev={};const sh=new WorkspaceShell({fetch:async()=>({ok:true,json:async()=>({})}),eventSource:()=>({addEventListener:(k,f)=>ev[k]=f,close(){}})});
+ const seen=[];sh.register({...a,id:"c".repeat(32),handle:"3".repeat(32)}).listen(e=>seen.push(e));
+ ev.scope({data:JSON.stringify({seq:4,keys:["c:A"]})});ev.change({data:"4"});
+ ev.scope({data:JSON.stringify({seq:5,keys:["c:B"]})});ev.change({data:"6"});
+ ev.scope({data:"{bad"});ev.change({data:"7"});ev.change({data:"8"});
+ ev.scope({data:JSON.stringify({seq:9,keys:[]})});ev.typing({data:"9"});ev.change({data:"9"});
+ assert.deepEqual(seen.map(e=>e.keys),[["c:A"],undefined,undefined,undefined,undefined,[]]);
+ assert.equal(seen[4].hint,"typing");}
+console.log("change events carry their scope keys only when they match PASS");
+
 // Structured native verification waits retain their code across the host transport.
 {
  const words='Updating verified group details. Sending is paused until verification finishes.';
