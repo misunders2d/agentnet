@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
 // A background pass runs at once after a quiet moment; wakes within
@@ -54,5 +56,18 @@ func TestPaceUrgentWakeRunsAtOnce(t *testing.T) {
 	at = time.Now()
 	if !pace(context.Background(), &last, a.workerUrgent) || time.Since(at) > passEvery*7/10 {
 		t.Fatalf("an urgent wake during the wait did not end it: %s", time.Since(at))
+	}
+}
+
+// A received request, answer or result is waited on (its run or its
+// follow-up); a plain message, a burst's bulk, is not.
+func TestWaitedOnKinds(t *testing.T) {
+	for kind, want := range map[string]bool{
+		envelope.KindQuestion: true, envelope.KindTask: true, envelope.KindAnswer: true, envelope.KindResult: true,
+		envelope.KindMessage: false, "": false,
+	} {
+		if waitedOnKind(kind) != want {
+			t.Errorf("waitedOnKind(%q) = %v", kind, !want)
+		}
 	}
 }

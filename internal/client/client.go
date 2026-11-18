@@ -1316,7 +1316,8 @@ func (a *Agent) RevokePerson(ctx context.Context, person string) ([]string, erro
 }
 
 // wakeWorkerNow is wakeWorker for a wake a person or a job waits on: a job
-// stored or finished, a received request, a command from another process.
+// stored or finished, a received request, answer or result
+// (waitedOnKind), a command from another process.
 // The worker's next pass then runs at once, not at the end of its pace
 // window (changes.go passEvery); other wakes still fold into that pass.
 func (a *Agent) wakeWorkerNow() {
@@ -1327,4 +1328,11 @@ func (a *Agent) wakeWorkerNow() {
 		default:
 		}
 	}
+}
+
+// waitedOnKind reports whether a received message of kind is one a job
+// waits on: a question or task to run, an answer or result a follow-up runs
+// on. Plain messages, a burst's bulk, still fold into the paced pass.
+func waitedOnKind(kind string) bool {
+	return kind == envelope.KindQuestion || kind == envelope.KindTask || kind == envelope.KindAnswer || kind == envelope.KindResult
 }

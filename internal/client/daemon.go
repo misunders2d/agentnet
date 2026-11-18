@@ -904,7 +904,9 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		if !in.Replica && (in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask) {
 			a.convWork.due(convRecipients)
 			a.kickNow()
-			a.wakeWorkerNow() // a request: its pickup does not wait for the pace window
+		}
+		if !in.Replica && waitedOnKind(in.Kind) {
+			a.wakeWorkerNow() // a request, or the answer or result its follow-up runs on
 		} else {
 			a.wakeWorker()
 		}
