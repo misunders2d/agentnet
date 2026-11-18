@@ -1,5 +1,84 @@
 # Next-release interaction coverage and responsiveness
 
+## Send path: stored at once, sent at once — unreleased, November 18, 2026
+
+Owner: sent messages took dozens of seconds to actually send. This branch
+(`perf/send-path`) stores a message and starts its live send at once.
+Counterpart sources read for every touched path: TDLib 03220f6b and Telegram
+Desktop a532622b.
+
+| Path | Counterpart (file:line) | AgentNet now | Reused / adapted |
+|---|---|---|---|
+| Receive acks | TDLib `SessionConnection.cpp:897-910`: acks gather and leave together, at most 100 (`MAX_UNACKED_PACKETS`) | receipts leave in pages of 100 (`receiptPage`), 8 POSTs in flight (`receiptLanes`), one `markAcked` transaction per page; own lane (`receipting`) beside the outbox lane, never in front of it | adapted: TDLib's ack is a transport ack; ours is a delivery receipt over a per-message Hub route |
+| Receive DB writes | TDLib `MessageDb.cpp:1192-1221`: writes batch, 50 or 10 ms per transaction | **not done, blocked** (see below) | open |
+| Catch-up vs live | TDLib `UpdatesManager.cpp:2165-2180`: getDifference slices, then back to live updates | sync lane already interleaves with live; live lane at the Hub stays strictly in seq order | Hub work, H2 below |
+| Send | TDLib `MessagesManager.cpp:21930-22019`: message object built and saved locally (`save_send_message_log_event`) before `do_send_message`; the call returns the local message at once | text sends no longer wait for the spool lock; files take it only after the network checks; rosters and keys fetched once and at once; new-topic first messages queue like every other (`sendWait` 0) | reused |
+| Retry | TDLib `NetQueryDelayer.cpp:77-83`: retry delay doubles to 60 s | unchanged: the queued worker waits 1 s, doubling to 45 s (`queuedsend.go:492-510`, `sendRetryMax`, the stream's reconnect cap) | reused; cap adapted to the stream's |
+| Edit while pending | TDLib `MessagesManager.cpp:23390` `can_edit_message` false for `is_yet_unsent()`; tdesktop `history_item.cpp:3479` `canBeEdited` needs a regular (not local) item | unchanged: a pending message cannot be edited; it becomes editable once in the outbox — measured below | reused (Telegram behavior), owner 2026-11-18: "I'm ok NOT being able to edit messages until they are sent - I just don't want to wait 10 seconds" |
+| Delete while pending | TDLib `MessagesManager.cpp:21595-21672` `cancel_send_message_query`: delete of a yet-unsent message cancels its send | existing `DiscardQueuedSend` (`queuedsend.go:348`): races the attempt in the database, exactly one wins; now also for a queued new-topic first message | reused; `TestDiscardCancelsQueuedNewTopicSend` |
+
+**Receive batching, blocked.** One transaction per received page would mean
+threading one transaction through every admit path (`verifyAndStore` →
+admit conv / control / inbox, each its own transaction) and through
+`sqlitedb`, which the read worker owns. Profile of a 300-message drain:
+~25 ms per message, ~55% of it waiting for the single SQLite connection held
+by change-driven loops (remind, alert, worker, review attention). Not simple
+or safe in this branch. The ack half is done.
+
+**H2, Hub route (described, not built).** (1) One page-ack request: a POST
+with a list of `{id, state}`, answering per id; the client's `ackPage` is the
+one place it plugs in, and stays on the per-message route until the Hub
+advertises it. (2) Reconnect backlog through the interleaving path, so a live
+message is not queued behind 1000 missed ones in the live lane.
+
+**Reply receiver sends directly.** `queueDM` still sends a reply-receiver
+message directly: it needs the network catalog check before it can be
+stored. It now logs why a send was not queued instead of falling back
+silently.
+
+**Group send, recovered person (S6e).** A group send checks only its own
+group's recovered devices, and only when the continuity token or the
+group's signed context changed since they were last found complete
+(`groupsSynced`). The spool lock is taken only when a context copy is made.
+A context copy that lapses (failed, expired, not delivered) renews the
+continuity token by trigger, so the group's next send queues it again, as
+before. The daemon's background pass still checks every group. Open, same as
+before this branch: a person change landing between the check and the turn's
+fan-out reaches the new device through the next send or the background pass.
+
+**Native hooks (S8).** A Claude hook event reads the Claude executable once
+(its capture) instead of three times; a Codex capture once instead of twice.
+Every other route check still runs; the daemon's own verify still reads the
+executable. Unchanged events (UserPromptSubmit, PostToolUse, Stop) only read,
+without a write transaction. No file-metadata shortcut.
+
+**Save first, check after (S6f): not done.** Precondition fails: handover
+does not refuse removed and changed-key devices uniformly for every kind.
+`deliver` refuses a changed reader key only for follow-ups, proposals,
+reactions, controls, continuations and own-sync v3 (`client.go:747`);
+reactions, device history and history archives have their own gates; an
+ordinary turn is sealed at send to the key checked then, and removed
+recipients are retired by the `reconcileRecipientLifecycle` sweep. Moving the
+checks after the store would mean sealing at handover, so plaintext at rest
+in the outbox, and one gate per kind with a regression each. The visible goal
+already holds through the queued lane: a page send is stored in
+`scheduled_sends` at once, and the worker checks, seals and stores it.
+
+| Inventory | Intended local feedback | Completion/recovery | Executed evidence |
+|---|---|---|---|
+| `send.text-spool-held` | text turn stored at once while a file transfer holds the spool lock | file turns wait for the lock, then go | `TestTextSendIsNotBlockedByHeldSpoolLock` (group, human turn) |
+| `receive.ack-pages` | live send not delayed by an ack backlog | backlog of 200 drains, ≤8 acks in flight | `TestReceiptBacklogDoesNotDelayLivePost` |
+| `send.new-topic-first` | accepted under 1.1 s with every relay request 2 s slow, state queued | stored once, in its own topic, also when sent twice | `TestNewTopicFirstMessageIsQueuedAtOnce` |
+| `send.editable-soon` (S7) | in the outbox, where it can be edited, ~350 ms after Send, relay requests 150 ms | — | `TestSentMessageEditableWithinASecond` (349/342/347 ms) |
+| `send.discard-pending` | Discard of a queued new-topic message | nothing stored or sent | `TestDiscardCancelsQueuedNewTopicSend` |
+| `send.reply-topic-lookup` | reply's topic and topic head by index | same answer as the whole-history computation | `TestTopicLookupsMatchWholeHistory` |
+| `group.recovered-context` (S6e) | a text send in an already complete group does not wait on the spool lock | context queued ahead of the turn for a recovered or newly linked device, also with sends running during the change; another group untouched; a lapsed copy queued again | `TestGroupSendSyncsOnlyItsGroupWhenContinuityChanged`; fails on the previous code (other group's context queued) |
+| `native.hook-once` (S8) | a tool call's hook reads the executable once, does not wait behind a held write | changed executable still refused | `TestClaudeHookReadsBinaryOnceWithoutWriteLock` (old shape: SQLITE_BUSY after 5 s), `TestClaudeRouteCaptureAnyBuildOwnDigest` (1 read), `TestClaudeRegistrationRefusesChangedExecutable` |
+
+Not run: race shards, full suites, the Codex capture's read count (needs a
+live Codex daemon record; same two-line change as Claude's), skins, native
+shells, Android.
+
 ## Agent needs_human result is a chat message — unreleased, November 9, 2026
 
 Owner, 2026-11-09: "we need to remove these idiotic popup windows with 'asks' -

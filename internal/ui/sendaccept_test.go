@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -82,5 +83,25 @@ func TestSentMessageEditableWithinASecond(t *testing.T) {
 	}
 	if worst >= 1100*time.Millisecond {
 		t.Fatalf("send to editable took up to %v", worst)
+	}
+}
+
+// Delete while pending cancels the send, as in Telegram (TDLib
+// cancel_send_message_query): Discard of a queued new-topic first message
+// wins over its attempt, and nothing is stored or sent.
+func TestDiscardCancelsQueuedNewTopicSend(t *testing.T) {
+	bob, live, hub, conv, _ := queuedSendWorld(t)
+	delayRelay(t, hub, bob.Address, 2*time.Second)
+	id := protocol.NewID()
+	if _, err := live.SendDM(DMDraft{ID: id, Conv: conv, Topic: "new", Body: "never sent"}); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := bob.DiscardQueuedSend(id); err != nil || row.State != client.ScheduledCancelled {
+		t.Fatalf("discard: %+v %v", row, err)
+	}
+	hub.SetHold(nil)
+	time.Sleep(3 * time.Second) // a held attempt finishes or gives up
+	if copies, err := bob.SentCopies(id); err != nil || len(copies) != 0 {
+		t.Fatalf("a discarded message was stored: %+v %v", copies, err)
 	}
 }
