@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -405,6 +406,14 @@ func (a *Agent) sendKeyExpected(ctx context.Context, address, expected string) (
 	if err != nil {
 		return identity.Public{}, err
 	}
+	if found {
+		// What is known here holds whatever the directory answered, or a
+		// cached answer from earlier in this action: a pending key change and
+		// a recorded revocation refuse (currentSendKey).
+		if err := currentSendKey(a.store.db, address, pinned.Fingerprint()); err != nil {
+			return identity.Public{}, err
+		}
+	}
 	e, err := a.directory(ctx, address)
 	if err != nil {
 		if found && retryable(err) {
@@ -428,6 +437,34 @@ func (a *Agent) sendKeyExpected(ctx context.Context, address, expected string) (
 		return identity.Public{}, err
 	}
 	return identity.Public{}, &KeyChangedError{address, pinned.Fingerprint(), e.Public.Fingerprint()}
+}
+
+// currentSendKey: fp is still the exact key pinned here for address, with no
+// pending change and no recorded revocation of it. A local read, so a store
+// can repeat it inside its own transaction.
+func currentSendKey(q dbq, address, fp string) error {
+	pinned, found, err := pinnedKey(q, address)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("no trusted key for %s", address)
+	}
+	var pending sql.NullString
+	if err = q.QueryRow(`SELECT pending FROM peers WHERE address=?`, address).Scan(&pending); err != nil {
+		return err
+	}
+	if pending.Valid {
+		var offered identity.Public
+		if err = json.Unmarshal([]byte(pending.String), &offered); err != nil {
+			return err
+		}
+		return &KeyChangedError{address, pinned.Fingerprint(), offered.Fingerprint()}
+	}
+	if pinned.Fingerprint() != fp {
+		return &KeyChangedError{address, fp, pinned.Fingerprint()}
+	}
+	return currentDeliveryRecipient(q, address, fp)
 }
 
 // SendResult reports what is known about a message after Send.

@@ -39,6 +39,9 @@ var (
 	ErrScheduledStale      = errors.New("the scheduled message changed; review it again")
 	ErrScheduledAudience   = errors.New("the scheduled audience changed; review it again")
 	errScheduledEarly      = errors.New("the scheduled message is not due")
+	// A recipient key changed (pending, trusted anew or revoked) after this
+	// message was sealed: nothing is stored, and it is prepared again.
+	errSendKeyMoved = errors.New("a recipient's key changed while the message was prepared")
 )
 
 // ScheduledAudience is the approved ceiling, not a pinned device list. Current
@@ -636,6 +639,11 @@ func (a *Agent) scheduledCommit(s ScheduledSend) beforeConvStore {
 			if !valid(c.in) || c.env.To != c.in.To {
 				return ErrScheduledAudience
 			}
+			// The key it was sealed to is still the one pinned here, with
+			// no pending change or revocation recorded since it was checked.
+			if err := currentSendKey(tx, c.env.To, c.recipientFP); err != nil {
+				return errors.Join(errSendKeyMoved, err)
+			}
 			allowed := asked(c)
 			for _, person := range s.Audience.Persons {
 				if p, ok := m.persons[person]; ok && p.has(c.env.To, c.recipientFP) {
@@ -844,7 +852,7 @@ func (a *Agent) dispatchFail(s ScheduledSend, state, detail string, cause error)
 }
 
 func scheduledWait(err error) bool {
-	return hubUnreachable(err) || transient(err) || errors.Is(err, ErrGroupContextPending) || errors.Is(err, errParticipationTopicPending) || errors.Is(err, ErrParticipationScopePending) || errors.Is(err, errScheduledEarly)
+	return hubUnreachable(err) || transient(err) || errors.Is(err, errSendKeyMoved) || errors.Is(err, ErrGroupContextPending) || errors.Is(err, errParticipationTopicPending) || errors.Is(err, ErrParticipationScopePending) || errors.Is(err, errScheduledEarly)
 }
 
 // scheduledDue is called by the existing reminder loop. Overdue schedules that

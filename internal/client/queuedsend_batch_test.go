@@ -1,6 +1,8 @@
 package client
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -182,5 +185,52 @@ func TestQueuedBatchMatchesOneAtATime(t *testing.T) {
 			t.Fatalf("batched differs from one at a time:\n%s\n---\n%s", strings.Join(serial, "\n"), strings.Join(batched, "\n"))
 		}
 		t.Logf("%s", strings.Join(batched, "; "))
+	}
+}
+
+// A key change recorded between a batch's checks and its commit stores
+// nothing for that recipient: the message is held and prepared again, and then
+// refused as any send to a changed key is.
+func TestQueuedBatchRechecksKeyAtCommit(t *testing.T) {
+	w, _, _, _ := groupTurnsFixture(t)
+	dm := newDM(t, w.alice, w.bob)
+	q := &w.alice.queued
+	q.Lock()
+	q.closed = true
+	q.Unlock()
+	id := protocol.NewID()
+	if _, err := w.alice.QueueSend(ScheduledSendInput{ID: id, Conv: dm, Body: "checked, then the key moved"}, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := w.alice.nextQueuedSends(dm)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("queued: %d %v", len(rows), err)
+	}
+	b := &sendBatch{}
+	ctx := context.WithValue(withRoundTrips(tctx(t)), sendBatchKey{}, b)
+	if _, err = w.alice.dispatchScheduledLocked(ctx, id, nil); err != nil || len(b.rows) != 1 {
+		t.Fatalf("not staged: %d %v", len(b.rows), err)
+	}
+	// Another worker meets bob's new key in the directory meanwhile.
+	replacement, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.alice.store.setPending(replacement.Public(w.bob.Address)); err != nil {
+		t.Fatal(err)
+	}
+	out, waiting := w.alice.storeSendBatch(b)
+	if n := queuedLIDCopies(t, w.alice, id); n != 0 {
+		t.Fatalf("%d copies stored for a key marked changed", n)
+	}
+	if len(out) != 1 || out[0].row.State != ScheduledPending || !waiting {
+		t.Fatalf("not held: %+v waiting=%v", out, waiting)
+	}
+	// Prepared again: the cached directory answer still names the old key,
+	// and the pending change refuses it.
+	row, err := w.alice.dispatchScheduledLocked(ctx, id, nil)
+	var changed *KeyChangedError
+	if !errors.As(err, &changed) || row.State != ScheduledNeedsReview || queuedLIDCopies(t, w.alice, id) != 0 {
+		t.Fatalf("second attempt: %s %v, %d copies", row.State, err, queuedLIDCopies(t, w.alice, id))
 	}
 }
