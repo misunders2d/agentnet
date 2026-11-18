@@ -27,6 +27,64 @@ func remotePrepared(t *testing.T, w *world, phone *Agent, kind string) (SendResu
 	return sent, setup
 }
 
+// The original can reach the host and its deletion pass the ordinary
+// control check before the approved import runs (the worker is paced). The
+// import then still records the deletion, as when it releases a held one.
+func TestReceiverImportAfterRetractionStored(t *testing.T) {
+	w, phone, _, _ := remoteReceiverWorld(t)
+	sent, setup := remotePrepared(t, w, phone, envelope.KindMessage)
+	if _, e := phone.Retract(tctx(t), ControlRef{ID: sent.ID, Fingerprint: phone.Self().Fingerprint()}, "delete own original"); e != nil {
+		t.Fatal(e)
+	}
+	key, e := replyReceiverHostIn(w.alice.store.db, ReplyReceiverHost{Address: phone.Address, Fingerprint: phone.Self().Fingerprint()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, "the deletion stored before approval", func() bool {
+		if retractedRef(w.alice.store.db, "", sent.ID, phone.Self().Fingerprint()) {
+			return true
+		}
+		rows, e := w.alice.store.db.Query(`SELECT envelope FROM quarantine WHERE sender=? AND reason=?`, phone.Address, reasonProof)
+		if e != nil {
+			return false
+		}
+		var held []envelope.Envelope
+		for rows.Next() {
+			var raw string
+			var env envelope.Envelope
+			if rows.Scan(&raw) == nil && json.Unmarshal([]byte(raw), &env) == nil {
+				held = append(held, env)
+			}
+		}
+		rows.Close()
+		for _, env := range held {
+			in, e := envelope.Open(env, w.alice.id, w.alice.Address, key)
+			if e == nil && in.Sub == envelope.SubRetraction && in.Ref != nil && in.Ref.ID == sent.ID {
+				if e = w.alice.store.addControlInbox(in, key.Fingerprint(), true); e != nil {
+					t.Fatal(e)
+				}
+			}
+		}
+		return retractedRef(w.alice.store.db, "", sent.ID, phone.Self().Fingerprint())
+	})
+	if e := w.alice.Accept(setup); e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, "approved import records the stored deletion", func() bool { b, e := replyReceiverIn(w.alice.store.db, setup); return e == nil && b.remote != nil })
+	b, e := replyReceiverIn(w.alice.store.db, setup)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if b.State != "canceled" || !b.remote.Redacted || b.remote.Request.Body != "" {
+		t.Fatalf("deleted ordinary original imported %+v", b)
+	}
+	var n int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE reply_to=? AND state=?`, setup, stateQueued).Scan(&n)
+	if n != 0 {
+		t.Fatal("deleted ordinary original emitted executable ready")
+	}
+}
+
 func TestReceiverRetractionBeforeApproval(t *testing.T) {
 	for _, kind := range []string{envelope.KindMessage, envelope.KindQuestion, envelope.KindTask} {
 		t.Run(kind, func(t *testing.T) {
