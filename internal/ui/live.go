@@ -22,7 +22,7 @@ import (
 // goes through the client's existing operation for it, with the same rules
 // as the CLI: nothing here grants, approves or runs anything on its own.
 type Live struct {
-	sendWait       time.Duration // how long SendDM stays to hear a first attempt; the message does not depend on it
+	sendWait       time.Duration // how long SendDM stays to hear a first attempt (0: answers once stored); the message does not depend on it
 	a              *client.Agent
 	assistantSetup AssistantSetupFunc
 	// timeout bounds each network request an action makes.
@@ -73,7 +73,7 @@ func NewLive(a *client.Agent) *Live {
 	if err := a.CleanStaging(); err != nil && a.Logf != nil {
 		a.Logf("messenger page: files left from an earlier run: %v", err)
 	}
-	return &Live{a: a, timeout: 20 * time.Second, sendWait: 250 * time.Millisecond}
+	return &Live{a: a, timeout: 20 * time.Second, sendWait: 0}
 }
 
 // Changed implements Provider.

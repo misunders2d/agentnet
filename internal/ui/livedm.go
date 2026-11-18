@@ -738,10 +738,11 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 }
 
 // queueDM accepts an ordinary message durably before anything can make it wait
-// (client.QueueSend). done is false when this device cannot accept it that way
-// (a new topic, a reply it cannot resolve here, a recovered person's chat not
-// created yet, no author here): the ordinary sender then decides, and its
-// refusal stays authoritative.
+// (client.QueueSend); a message that opens a topic is queued too. done is
+// false when this device cannot accept it that way (a reply it cannot resolve
+// here, a recovered person's chat not created yet, no author here): the
+// ordinary sender then decides, and its refusal stays authoritative. Each such
+// case is logged, so a send that waits on the network is never silent.
 func (l *Live) queueDM(d DMDraft, body string, files []client.OutgoingFile) (Sent, bool, error) {
 	id := d.ID
 	if id == "" {
@@ -752,6 +753,7 @@ func (l *Live) queueDM(d DMDraft, body string, files []client.OutgoingFile) (Sen
 		return Sent{}, true, Refuse(sentence(err))
 	}
 	if err != nil {
+		l.a.Logf("send %s not queued, sending directly: %v", id, err)
 		return Sent{}, false, nil
 	}
 	if res.Sent != nil {

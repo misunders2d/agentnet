@@ -305,9 +305,11 @@ func (a *Agent) prepareScheduled(in ScheduledSendInput, keep []ScheduledFile) (S
 	if !protocol.ValidHash(in.Conv) {
 		return ScheduledSend{}, errors.New("invalid conversation")
 	}
-	if in.Topic == "new" {
+	if in.Topic == "new" && !in.immediate {
 		return ScheduledSend{}, errors.New("open the topic before scheduling a message")
 	}
+	// A message that opens a topic gets the topic's id when it is accepted
+	// (outgoingTopic), so a repeat of the same send reaches the same topic.
 	topic, err := a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo)
 	if err != nil {
 		return ScheduledSend{}, err
@@ -391,9 +393,11 @@ func (a *Agent) sameScheduledCreate(old ScheduledSend, in ScheduledSendInput) (b
 	if old.Immediate != in.immediate || old.Conv != in.Conv || old.Body != in.Body || !old.Immediate && (!old.Due.Equal(in.Due) || old.Timezone != timezone) || !sameScheduledAsk(old.Ask, in.ask) {
 		return false, nil
 	}
-	topic, err := a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo)
-	if err != nil {
-		return false, err
+	topic, err := old.Topic, error(nil) // a repeat of a send that opened a topic opens the same one
+	if in.Topic != "new" {
+		if topic, err = a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo); err != nil {
+			return false, err
+		}
 	}
 	if old.Topic != topic {
 		return false, nil
