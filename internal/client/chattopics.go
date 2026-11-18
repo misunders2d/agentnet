@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,12 +405,17 @@ func (a *Agent) outgoingTopic(conv, topic, reply string) (string, error) {
 	if reply == "" {
 		return "", nil
 	}
+	// A reply without an explicit topic keeps its signed original placement;
+	// display organization never expands old chains or task scope.
+	if topic, ok, err := a.store.replyTopic(conv, reply, a.Self().Fingerprint()); err != nil || ok {
+		return topic, err
+	}
+	// The chain passes a turn only the shown history resolves (a shared
+	// excerpt, an erased or missing turn): decide from it, as before.
 	msgs, err := a.ConversationMessages(conv)
 	if err != nil {
 		return "", err
 	}
-	// A reply without an explicit topic keeps its signed original placement;
-	// display organization never expands old chains or task scope.
 	originals := make([]ConvMessage, 0, len(msgs))
 	for _, m := range msgs {
 		if !envelope.TopicOrganization(m.TopicEvent) {
@@ -423,6 +429,61 @@ func (a *Agent) outgoingTopic(conv, topic, reply string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// turnRows are a conversation's stored turns as ConversationMessages shows
+// them: no controls, records, own-job copies, erased turns or topic
+// metadata. Arguments: conv, then the outbox's self fingerprint last.
+const turnRowsIn = ` FROM inbox i WHERE i.conv=? AND i.local=0 AND i.ref_id IS NULL AND coalesce(i.sub,'')='' AND NOT ` + `EXISTS (SELECT 1 FROM conv_erased e WHERE e.conv = coalesce(i.conv, '') AND e.key = coalesce(i.verified_by, i.claimed_fp, '') AND e.lid = i.lid)`
+const turnRowsOut = ` FROM outbox o WHERE o.conv=? AND o.ref_id IS NULL AND coalesce(o.sub,'')='' AND NOT ` + erasedOut
+
+// notOrganized leaves out move, merge, rename and resources events: the
+// signed original placement is what a reply inherits.
+const notOrganized = ` AND coalesce(json_extract(nullif(%s.topic_event,''),'$.action'),'') NOT IN ('move','merge','rename','resources')`
+
+// replyTopic is the topic a reply to ref inherits: ChatTopicAssignments over
+// the conversation's original turns, walked up ref's reply chain alone, a
+// few indexed lookups per hop instead of loading the whole history. ok is
+// false when the chain reaches a turn that is not a plain stored turn here.
+func (s *store) replyTopic(conv, ref, selfFP string) (topic string, ok bool, err error) {
+	in, out := fmt.Sprintf(notOrganized, "i"), fmt.Sprintf(notOrganized, "o")
+	seen := map[string]bool{}
+	for cur := ref; cur != "" && !seen[cur]; {
+		seen[cur] = true
+		// A copy's own id names its logical turn.
+		var lid string
+		err = s.db.QueryRow(`SELECT i.lid`+turnRowsIn+in+` AND i.id=? UNION ALL SELECT o.lid`+turnRowsOut+out+` AND o.id=? LIMIT 1`, conv, cur, conv, selfFP, cur).Scan(&lid)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", false, err
+		}
+		if lid != "" {
+			cur = lid
+		}
+		var reply string
+		err = s.db.QueryRow(`SELECT coalesce(i.topic,''), coalesce(i.reply_to,'')`+turnRowsIn+in+` AND i.lid=? UNION ALL SELECT coalesce(o.topic,''), coalesce(o.reply_to,'')`+turnRowsOut+out+` AND o.lid=? LIMIT 1`, conv, cur, conv, selfFP, cur).Scan(&topic, &reply)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if topic != "" {
+			return topic, true, nil
+		}
+		promoted, err := s.topicCreated(conv, cur)
+		if err != nil || promoted {
+			return cur, err == nil, err
+		}
+		cur = reply
+	}
+	return "", true, nil
+}
+
+// topicCreated reports whether a create event promoted topic in conv.
+func (s *store) topicCreated(conv, topic string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE conv=? AND topic=? AND json_extract(nullif(topic_event,''),'$.action')='create') OR EXISTS(SELECT 1 FROM outbox WHERE conv=? AND topic=? AND json_extract(nullif(topic_event,''),'$.action')='create')`, conv, topic, conv, topic).Scan(&n)
+	return n != 0, err
 }
 
 func (a *Agent) ChangeChatTopic(ctx context.Context, conv, id, what, title string, count int) (bool, error) {
@@ -701,15 +762,20 @@ func sortChatEvents(g []ConvMessage) {
 	})
 }
 func (a *Agent) chatTopicHead(conv, topic string) (string, error) {
-	msgs, err := a.ConversationMessages(conv)
+	g, err := a.store.topicTurns(conv, topic, a.Self().Fingerprint())
 	if err != nil {
 		return "", err
 	}
-	assigned := ChatTopicAssignments(msgs)
-	g := []ConvMessage{}
-	for _, m := range msgs {
-		if assigned[m.LID] == topic && m.Sub == "" && m.TopicEvent == nil {
-			g = append(g, m)
+	if g == nil { // organized or promoted: only the whole history decides
+		msgs, err := a.ConversationMessages(conv)
+		if err != nil {
+			return "", err
+		}
+		assigned := ChatTopicAssignments(msgs)
+		for _, m := range msgs {
+			if assigned[m.LID] == topic && m.Sub == "" && m.TopicEvent == nil {
+				g = append(g, m)
+			}
 		}
 	}
 	sortChatTurns(g)
@@ -717,6 +783,44 @@ func (a *Agent) chatTopicHead(conv, topic string) (string, error) {
 		return "", nil
 	}
 	return g[len(g)-1].LID, nil
+}
+
+// topicTurns loads only the turns that name topic, with what their order
+// needs. While no move, merge or promotion touches the conversation, those
+// are exactly the turns ChatTopicAssignments places in it; otherwise it
+// returns nil and the caller decides from the whole history.
+func (s *store) topicTurns(conv, topic, selfFP string) ([]ConvMessage, error) {
+	var organized int
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE conv=? AND topic IS NOT NULL AND json_extract(nullif(topic_event,''),'$.action') IN ('move','merge')) OR EXISTS(SELECT 1 FROM outbox WHERE conv=? AND topic IS NOT NULL AND json_extract(nullif(topic_event,''),'$.action') IN ('move','merge'))`, conv, conv).Scan(&organized); err != nil {
+		return nil, err
+	}
+	if organized != 0 {
+		return nil, nil
+	}
+	if promoted, err := s.topicCreated(conv, topic); err != nil || promoted {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT i.id, i.lid, coalesce(i.reply_to,''), i.ts`+turnRowsIn+` AND coalesce(i.topic_event,'')='' AND (i.topic=? OR i.lid=?)
+		UNION ALL SELECT o.id, o.lid, coalesce(o.reply_to,''), json_extract(o.envelope,'$.ts')`+turnRowsOut+` AND coalesce(o.topic_event,'')='' AND (o.topic=? OR o.lid=?)`, conv, topic, topic, conv, selfFP, topic, topic)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	g := []ConvMessage{}
+	at := map[string]int{}
+	for rows.Next() {
+		var m ConvMessage
+		if err := rows.Scan(&m.ID, &m.LID, &m.ReplyTo, &m.Sent); err != nil {
+			return nil, err
+		}
+		if i, ok := at[m.LID]; ok {
+			g[i].Copies = append(g[i].Copies, ConvCopy{ID: m.ID})
+			continue
+		}
+		at[m.LID] = len(g)
+		g = append(g, m)
+	}
+	return g, rows.Err()
 }
 
 // Main-flow names use the existing own-device preference channel with a stable
