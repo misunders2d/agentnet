@@ -366,19 +366,15 @@ func (a *Agent) sync(ctx context.Context) {
 		// The Hub refuses this build (updaterequired.go): it still takes
 		// receipts and the answers and results of admitted work; the rest
 		// waits for the program it serves.
-		if err := a.flushReceipts(ctx); err != nil {
-			a.Logf("receipts: %v", err)
-		}
+		a.postReceiptsBackground()
 		if err := a.FlushOutbox(ctx); err != nil {
 			a.Logf("outbox: %v", err)
 		}
 		return
 	}
-	// Durable receipts get a turn before bulk history and proof recovery.
-	if err := a.flushReceipts(ctx); err != nil {
-		a.Logf("receipts: %v", err)
-	}
-	a.postOutboxBackground() // live sends do not await bulk proof/history work or its transport
+	// Live sends and receipts, each on its own lane, do not await bulk
+	// proof/history work, its transport or each other.
+	a.postOutboxBackground()
 	// Give queued inert copies a turn before preparing more history. Empty
 	// wakes use the existing pending-state index instead of handover scans.
 	var queuedSync bool
@@ -399,9 +395,7 @@ func (a *Agent) sync(ctx context.Context) {
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}
-	if err := a.flushReceipts(ctx); err != nil {
-		a.Logf("receipts: %v", err)
-	}
+	a.postReceiptsBackground() // dispositions the upkeep above stored
 }
 
 func (a *Agent) dispatch(ctx context.Context, event, data string) error {
@@ -655,6 +649,10 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 	return nil
 }
 
+// receiptLanes acknowledgements travel at once, so a backlog after catch-up
+// costs a few round trips, not one per message.
+const receiptLanes = 8
+
 // flushReceipts sends every stored disposition the Hub has not acknowledged.
 func (a *Agent) flushReceipts(ctx context.Context) error {
 	a.receiptOnce.Do(func() { a.receiptLock = make(chan struct{}, 1) })
@@ -665,23 +663,51 @@ func (a *Agent) flushReceipts(ctx context.Context) error {
 	}
 	defer func() { <-a.receiptLock }()
 	pending, err := a.store.unsentReceipts()
-	if err != nil {
+	if err != nil || len(pending) == 0 {
 		return err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	lanes := make(chan struct{}, receiptLanes)
 	for _, r := range pending {
-		err := a.hub.do(ctx, "POST", "/v1/messages/"+url.PathEscape(r.id)+"/ack", protocol.AckRequest{State: r.state}, nil)
-		var he *HubError
-		if errors.As(err, &he) && he.Status == 404 {
-			err = nil // the Hub no longer holds it; nothing to report
+		select {
+		case lanes <- struct{}{}:
+		case <-ctx.Done():
 		}
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			break // the first failure stops the rest; the next pass retries
 		}
-		if err := a.store.markAcked(r); err != nil {
-			return err
-		}
+		wg.Add(1)
+		go func() {
+			defer func() { <-lanes; wg.Done() }()
+			err := a.hub.do(ctx, "POST", "/v1/messages/"+url.PathEscape(r.id)+"/ack", protocol.AckRequest{State: r.state}, nil)
+			var he *HubError
+			if errors.As(err, &he) && he.Status == 404 {
+				err = nil // the Hub no longer holds it; nothing to report
+			}
+			if err == nil {
+				err = a.store.markAcked(r)
+			}
+			if err != nil {
+				mu.Lock()
+				if first == nil {
+					first = err
+					cancel()
+				}
+				mu.Unlock()
+			}
+		}()
 	}
-	return nil
+	wg.Wait()
+	if first == nil {
+		first = ctx.Err()
+	}
+	return first
 }
 
 func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error {

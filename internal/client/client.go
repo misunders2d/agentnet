@@ -64,6 +64,7 @@ type Agent struct {
 	receiptLock      chan struct{} // dispositions never wait for history upkeep
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
+	receipting       backgroundPosts // acknowledgements, beside posting, never in front of it
 	queued           queuedSends
 	topicCache       topicCache
 	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
