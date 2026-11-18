@@ -821,8 +821,18 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 		}
 		confirmable := l.a.ProposalConfirmer()
 		shown := shownRows(msgs, people)
+		// Messages waiting to go take their place before the page is cut: a
+		// page holds at most its limit, and a waiting one anchors a page too.
+		order := pageOrder(shown, queued)
 		anchor, unread := -1, -1
-		for i, m := range shown {
+		for i, o := range order {
+			if o.row < 0 {
+				if page.From != "" && queued[o.queued].ID == page.From {
+					anchor = i
+				}
+				continue
+			}
+			m := shown[o.row]
 			if page.From != "" && (m.ID == page.From || m.LID == page.From) {
 				anchor = i
 			}
@@ -833,9 +843,18 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 		if page.From != "" && anchor < 0 {
 			return DMThread{}, NotFound("no message with that id in this chat")
 		}
-		start, end := pageBounds(len(shown), anchor, unread, page)
-		t.Older, t.Newer = start > 0, end < len(shown)
-		for _, m := range shown[start:end] {
+		start, end := pageBounds(len(order), anchor, unread, page)
+		t.Older, t.Newer = start > 0, end < len(order)
+		var rows []client.ConvMessage
+		var waiting []client.ScheduledSend
+		for _, o := range order[start:end] {
+			if o.row < 0 {
+				waiting = append(waiting, queued[o.queued])
+			} else {
+				rows = append(rows, shown[o.row])
+			}
+		}
+		for _, m := range rows {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
 				Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, JobDetail: m.JobDetail, At: time.Unix(m.At, 0), Unread: m.Unread, Attention: m.Attention, Replica: m.Replica, OtherDM: m.OtherDM, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
@@ -930,9 +949,7 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 			t.Messages = append(t.Messages, dm)
 		}
 		linkReplies(msgs, t.Messages)
-		if !t.Newer { // a message waiting to go belongs at the end
-			t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
-		}
+		t.Messages = withQueuedSends(t.Messages, waiting, l.a.Address)
 		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
 	}
@@ -1029,6 +1046,31 @@ func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self strin
 		rows = slices.Insert(rows, at, m)
 	}
 	return rows
+}
+
+// pageSlot is one row of a chat page: shown[row], or queued[queued] when row
+// is negative.
+type pageSlot struct{ row, queued int }
+
+// pageOrder is the chat's rows with the messages waiting to go placed as
+// withQueuedSends places them, so pageBounds counts both.
+func pageOrder(shown []client.ConvMessage, queued []client.ScheduledSend) []pageSlot {
+	order := make([]pageSlot, len(shown))
+	at := make([]time.Time, len(shown))
+	for i := range shown {
+		order[i], at[i] = pageSlot{i, -1}, time.Unix(shown[i].At, 0)
+	}
+	for q, s := range queued {
+		if slices.ContainsFunc(shown, func(m client.ConvMessage) bool { return m.Dir == "out" && m.LID == s.ID }) {
+			continue
+		}
+		i := len(order)
+		for i > 0 && at[i-1].After(s.Created) {
+			i--
+		}
+		order, at = slices.Insert(order, i, pageSlot{-1, q}), slices.Insert(at, i, s.Created)
+	}
+	return order
 }
 
 // refreshDM is Refresh for a DM or group (ok false when id is not one): once
