@@ -251,7 +251,7 @@ func (a *Agent) releaseExecutor(id string) {
 	a.appUpdateMu.RUnlock()
 	a.noteBusyQueue() // the last run ended: queued requests are no longer "busy with another request" (MEL-580)
 	a.changes.bump()  // broadcast completion even if terminal state was stored earlier
-	a.wakeWorker()
+	a.wakeWorkerNow() // a queued request or a follow-up may take the lane now
 }
 func (a *Agent) executorsIdle() bool {
 	a.workerLanes.Lock()

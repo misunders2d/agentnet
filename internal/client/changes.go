@@ -131,10 +131,17 @@ func (s *store) done(err error) error {
 // first wake after a quiet moment runs at once, further wakes within it run
 // once, at its end. Nothing is missed: a pass captures the next change
 // before it looks, as before.
+//
+// Only the churn waits. A wake that a person or a job is waiting on (a job
+// stored or finished, a received request, a command from another process:
+// wakeWorkerNow) ends the wait at once, as TDLib runs a lone update at once
+// and folds only what is already queued; a burst of sends and receipts
+// brings none of those.
 const passEvery = 100 * time.Millisecond
 
-// pace waits until passEvery after the last pass began; false: ctx ended.
-func pace(ctx context.Context, last *time.Time) bool {
+// pace waits until passEvery after the last pass began, or until urgent
+// (nil: never) has a wake; false: ctx ended.
+func pace(ctx context.Context, last *time.Time, urgent <-chan struct{}) bool {
 	if wait := passEvery - time.Since(*last); wait > 0 {
 		t := time.NewTimer(wait)
 		defer t.Stop()
@@ -142,6 +149,7 @@ func pace(ctx context.Context, last *time.Time) bool {
 		case <-ctx.Done():
 			return false
 		case <-t.C:
+		case <-urgent:
 		}
 	}
 	*last = time.Now()

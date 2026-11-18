@@ -1958,7 +1958,11 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			a.kickNow()
 			a.consentAway(ctx, in.PID) // an invite of this person's own agent, hosted here
 		}
-		a.wakeWorker() // a request, or an event that may let one run or stop
+		if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
+			a.wakeWorkerNow() // a request: its pickup does not wait for the pace window
+		} else {
+			a.wakeWorker() // an event or message that may let one run or stop
+		}
 		if statusDue(state, in.Kind) != 0 {
 			a.wakeStatus() // its requester hears it waits here (stored with it)
 		}

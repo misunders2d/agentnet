@@ -904,8 +904,10 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		if !in.Replica && (in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask) {
 			a.convWork.due(convRecipients)
 			a.kickNow()
+			a.wakeWorkerNow() // a request: its pickup does not wait for the pace window
+		} else {
+			a.wakeWorker()
 		}
-		a.wakeWorker()
 		if in.ReceiverRoute == nil || in.ReceiverRoute.Op == "request" {
 			a.noteStatus(in.ID)
 			a.convWork.due(convHistory)
@@ -981,10 +983,14 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	// its own work (notifyOwnWork) brings no new evidence for held messages.
 	a.selfKicks.Store(0)
 	stopKicks, err := listenKicks(a.home, func() {
-		a.wakeWorker()
+		ownKick := a.ownKick()
+		if ownKick {
+			a.wakeWorker()
+		} else {
+			a.wakeWorkerNow() // a command (accept, resolve, send) from another process
+		}
 		a.wakeStatus() // a status another process noted (noteStatus)
 		work := convHistory | convServe | convFetch | convRelease | convRecipients
-		ownKick := a.ownKick()
 		if ownKick {
 			// Its own work was told by its store; an unscoped bump on each
 			// received message made every change unscoped (GET /events
