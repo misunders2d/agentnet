@@ -11,8 +11,8 @@ Telegram Desktop `a532622b`.
 | Path | Telegram (source) | AgentNet before | Now |
 |---|---|---|---|
 | Store reads | not compared (SQLite WAL: readers do not wait for the writer) | one SQLite connection: a page read waited behind every write | plain reads on a read-only pool beside the one writer (S1) |
-| Open a chat | messages kept per chat, read once (`MessagesManager::Dialog::store`, `MessagesManager.cpp:3010`) | whole chat projected 3 times per open (DM, read mark, list, refresh); each projection re-read every chat for continuity and every sender's person | one projection per change, shared by the chat and its list row; one chat looked up, not all (S3). Still 3 per open: the open's own read mark and refresh each write, and each write projects the chat once more (see Unread) |
-| Unread / read mark | read state patched on the kept chat (`updateChatReadInbox`, `td_api.tl:11430`); nothing re-read | read mark re-projected the whole chat | mismatch kept: the read mark still re-projects (one projection, not three re-reads). Patching needs the projection's unread fields split out; MEL-692/693 semantics unchanged |
+| Open a chat | messages kept per chat, read once (`MessagesManager::Dialog::store`, `MessagesManager.cpp:3010`) | whole chat projected 3 times per open (DM, read mark, list, refresh); each projection re-read every chat for continuity and every sender's person | one projection per change, shared by the chat and its list row; one chat looked up, not all (S3). One per open with the scoped step (R1, `92d36c86`): the open's read mark patches it (see Unread). Without the step, 2: the read's write moves the content revision |
+| Unread / read mark | read state patched on the kept chat (`updateChatReadInbox`, `td_api.tl:11430`); nothing re-read | read mark re-projected the whole chat | patched on the kept chat (R1): the read records the chat's mark inside its own transactions (`MarkReadWatching`); when nothing else wrote in between, only the rows sharing a marked logical id read their `read_at` and attention again (`RereadRead`), as TDLib sets `last_read_inbox_message_id` and the counts and leaves history alone (`read_history_inbox`, `MessagesManager.cpp:9618`; `set_dialog_last_read_inbox_message_id`, `:9981`; at `03220f6`). Anything else moving the mark projects as before; MEL-692/693 semantics unchanged (read marks and their copies are the same writes). Needs the scoped step |
 | Refresh on open | — | every held copy's status, one by one | ≤20 held copies from one indexed query, asked in parallel (S3) |
 | History paging | `getChatHistory(from_message_id, offset −99..0, limit ≤100)` (`td_api.tl:12959`); first page 30, later 50, around the unread message at `offset = −limit/2` (`history_widget.cpp:231–232`, `firstLoadMessages` 5067) | whole chat only | `/api/dm?from&offset&limit`, same bounds, opening at the unread message (S4 host). Mismatch: the host's first page is 50 where tdesktop asks 30 (a page costs what the kept chat costs, so the size saves nothing yet). Comic still loads the whole chat: see below |
 | Chat list | last message and read state kept per chat, sent as `updateChatLastMessage` / `updateChatReadInbox` (`td_api.tl:11413`, `11430`) | kept per chat since `ac2ec42c` (`view_dirty`) | unchanged; its row now reuses the open chat's projection |
@@ -22,10 +22,15 @@ Telegram Desktop `a532622b`.
 **State of the targets.** S1 and S5 done. S3 partial: the unread page and the
 badge do not reuse the projection (the badge is the list's, already kept per
 chat; the unread page reads its own rows). S2 partial: the mechanism is in and
-tested, inactive until `ViewCoverSchema` is appended; projections per open stay
-3, not lower (above). S4 partial: host API only (`abacd697`, one commit with
+tested, inactive until `ViewCoverSchema` is appended; with it, one projection
+per open (R1), without it two. S4 partial: host API only (`abacd697`, one commit with
 S3, as both change `dmPage`); Comic does not page, and `SelectGroupHistory` stays
 eager (Comic never asks `group_refs=0`, so lazy refs would save nothing).
+S4 web is deferred, not built: a first page of 50 costs what the whole first
+read costs (370–540 ms at 6400 against 250–290 ms for the messages alone), as
+projection, topics and continuity are of the whole chat; paging the browser
+would not shorten the host's open. Indexed paging (host rows by page) is the
+step that would.
 
 **Adaptations, and why.**
 - Typed per-message patches were not taken: they need a per-message change log
@@ -79,9 +84,54 @@ throughout; shared 8-core laptop, so ±30%). "Chat shown" is `/api/dm` on open;
 Under 1100 ms for the chat shown at every size and load at the branch head;
 the whole open at 10x busy (3 s, max 8 s) is not.
 
+After R1, same session, 15 opens per cell (`AGENTNET_OPEN_RUNS=15`), p50 / max.
+"Step on" means `ViewCoverSchema` appended and the background flush's note as
+`noteStoredChange` (both applied for the run, then reverted), which is what
+integration ships:
+
+| Size, load | `b38ba420`, step on: shown / whole | R1 `92d36c86`, step on: shown / whole | R1, step off: whole |
+|---|---|---|---|
+| 640 idle | 48 / 60 ms; 139 ms / 1.01 s | 45 / 64 ms; 93 / 344 ms | 126 / 303 ms |
+| 640 busy | 101 / 228 ms; 350 / 602 ms | 131 / 376 ms; 308 / 571 ms | 399 ms / 1.32 s |
+| 6400 idle | 420 / 608 ms; 1.16 / 1.53 s | 440 / 540 ms; 645 / 857 ms | 1.16 / 1.77 s |
+| 6400 busy | 735 ms / 1.36 s; 2.11 / 5.74 s | 670 ms / 1.40 s; **1.09 / 2.20 s** | 2.33 / 3.08 s |
+| chat projections per open | 2–3 | 1 every open | 2–3 |
+
+10x busy with the step on: whole open p50 1.09 s, meeting ≤1100 ms; max 2.20 s
+does not. The tail is the first read after new messages: the whole chat is
+projected again (6400 rows) for the rows that changed. TDLib appends a new
+message to the kept chat instead. Appending new rows to the kept projection
+is the next step; S4 web paging would not shorten it (below). Without the
+step, the read mark and the daemon wake still re-project, so R1's gain lands
+with integration.
+
 A first page of 50 costs about the same as the whole kept chat (66–75 ms at
 640, 320–510 ms at 6400). The remaining host cost at 6400 is topic summaries
 (25% of `dmPage` CPU).
+
+**Where the 10x-busy seconds went (R2).** Per phase, with a goroutine dump of
+the first open past 1 s, CPU, block and mutex profiles and an execution trace:
+- The read mark: 640 autocommits (`store.markRead`, each compiling the
+  triggers) took 1.2 s even idle. One transaction now.
+- Projections: 2–3 per open. After the read mark, the list and the chat read
+  all 6400 messages again, because the read's write moved the chat's mark and
+  its daemon wake was counted foreign (an unscoped change: every kept chat
+  dropped). The mark is patched now and the wake is the daemon's own.
+- Derivation per read: topic assignments computed about 4 times per chat read
+  (now once per projection, kept with it), and the read's re-read projected
+  attention over every row (now only the rows sharing a marked logical id).
+- Left at 10x busy, from a trace of 5 opens (7.6 s): 0.77 s runnable but not
+  running, 0.41 s in sync waits, 0.12 s in syscalls, the rest on CPU. Blocked
+  time over 20 opens: about 0.54 s waiting for the writer, in two places. One
+  is the read mark's `Begin`, behind received messages' admission writes (the
+  send branch's lane: one transaction per received page is its work). The other
+  is the list's `Reminders`: `reconcileReminders` takes the writer for a
+  transaction that usually writes nothing. An exact read-only precheck also has
+  to cover `projectReminders` (late originals, legacy aliases), so it is left
+  as a finding. Waiting for a reader connection was about 20 ms.
+- Harness, not product: the sender (alice) and the Hub run in the measured
+  process. They used 5.4 s of its 32.7 s CPU during busy opens and add
+  scheduler latency a real device does not see.
 
 | Fix | Commit | Regression |
 |---|---|---|
@@ -92,6 +142,8 @@ A first page of 50 costs about the same as the whole kept chat (66–75 ms at
 | Render work per change; two missed ctx fields | `3f1bdb61`, `b9865ec9` | `TestCtxOverviewRendered` (a list reload naming another chat: timeline render time under a React Profiler about 10x below the raw overview; fails with `useCtxOverview` passing the overview through), `TestAnswerIndexMatchesTheScan` (the old whole-chat scan against the index over 3000 random chats; fails without the logical-id candidates); the field list type-checked by narrowing `Ctx.overview` to a `Pick` of it (found `agent_devices`, `group_invitations` missing) |
 | Skip rule proven | `860e67df` | `TestOtherChatWritesLeaveTheOpenChat`: with the step, messages and mutes in another chat leave the open chat as it was, 4–5 of 6 reads proven by `checkSkip` (fails with the `v` keys unread as their scope: 0 of 6); with `AGENTNET_TEST_VIEW_COVER=1` every UI test runs the same check (fails when a chat's own key is treated as skippable) |
 | Read actions not refused by the step's keys | `860e67df` | `TestViewCoverNamesEveryTable` (cover writes in the chat and in none leave attention's scope unmoved; a message edit moves it; fails with `v` keys counted) |
+| Read mark patched, not re-projected; read in one transaction; own daemon wake; assignments kept with the projection; reread only marked rows | `92d36c86` | `TestReadMarkKeepsTheOpenChat` (no re-read after the mark, a scoped change, oracle parity, a read stored elsewhere still reads again; fails with the old daemon wake: an unscoped change; 30 of 30), `TestReadMarkCopiesLeaveTheChatMark` (with a linked phone the copies leave the chat's mark and the read reaches the phone; 10 of 10) |
+| Measure per phase, stacks, longer tail | `32e9e77c` | opt-in `TestOpenChatMeasure` |
 
 ## Agent needs_human result is a chat message — unreleased, November 9, 2026
 
