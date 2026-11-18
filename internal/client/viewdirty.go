@@ -1,5 +1,7 @@
 package client
 
+import "strings"
+
 // The chat list used to read every message of every chat again on each change:
 // 1.4 s on a real store, and with it every new message or receipt. Telegram keeps
 // each chat's summary and changes only the chat a write touched (TDLib
@@ -131,3 +133,26 @@ func (a *Agent) NoteViewChange() { a.changes.bump() }
 // SetViewCachesOff makes the device threads' list read everything afresh, leaving
 // what it keeps as it was: a cached list can then be compared with a fresh one.
 func (a *Agent) SetViewCachesOff(off bool) { a.topicCache.off.Store(off) }
+
+// ChatViewMark is what conv's view depends on in view_dirty: its own and its
+// continuity family's keys, and the newest mark of those and of every key that
+// is no one chat's ("*", "h", "p:"). The same mark means none of them moved.
+func (a *Agent) ChatViewMark(conv string) (keys []string, mark int64, err error) {
+	family, err := a.continuityDMs(conv)
+	if err != nil {
+		return nil, 0, err
+	}
+	keys = []string{"c:" + conv}
+	for _, r := range family {
+		if r.ID != conv {
+			keys = append(keys, "c:"+r.ID)
+		}
+	}
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+	// "c:" keys sort between "c:" and "c;": the rest is two index ranges.
+	err = a.store.db.QueryRow(`SELECT coalesce(max(seq),0) FROM view_dirty WHERE key IN (?`+strings.Repeat(",?", len(keys)-1)+`) OR key<'c:' OR key>='c;'`, args...).Scan(&mark)
+	return keys, mark, err
+}

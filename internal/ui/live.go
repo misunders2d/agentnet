@@ -43,6 +43,8 @@ type Live struct {
 	historyKept    bool
 	historyDirty   bool
 	historyWake    atomic.Bool
+	msgsMu         sync.Mutex
+	msgs           map[string]keptMessages // each chat's projected messages at one content revision (livedm.go)
 	unreadMu       sync.Mutex
 	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards
 	count          unreadCount  // the app badge's running total (liveunreadcount.go)
@@ -135,10 +137,13 @@ func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 // overviewOracle, set only by tests, hears of any difference between a list built
 // from what is kept and one read afresh: a scope view_dirty fails to mark. An
 // empty string says a comparison ran and found none. overviewChatBuilt hears
-// which chat's summary was read again.
+// which chat's summary was read again; dmProjected, which chat's messages a
+// DM read projected.
 var (
 	overviewOracle    func(string)
 	overviewChatBuilt func(string)
+	dmProjected       func(string)
+	dmOracle          func(string) // as overviewOracle, for a chat read from its kept messages
 )
 
 func (l *Live) compareFresh(listArchived bool, kept Overview, content uint64) {

@@ -341,6 +341,61 @@ type HistoryCopy struct {
 	Deferred      int    `json:"deferred"`
 }
 
+// DMPage asks for one page of a DM, as TDLib's getChatHistory does
+// (td_api.tl at 03220f6b): Limit (1-100) messages ending at From and its
+// -Offset (0 to -99) newer ones; From "" is the newest message, or the first
+// unread when the newest page would not reach it (tdesktop loadAroundId,
+// offset -limit/2). Limit 0 is the whole chat; GroupRefs adds what the invite
+// sheet selects.
+type DMPage struct {
+	From          string
+	Offset, Limit int
+	GroupRefs     bool
+}
+
+// DMPager is implemented by providers that page a DM themselves; the server
+// pages any other provider's whole chat (pageMessages).
+type DMPager interface {
+	DMPage(id string, p DMPage) (DMThread, error)
+}
+
+// pageBounds is the page [start, end) of n shown rows for p; anchor is From's
+// index (or -1 for none).
+func pageBounds(n, anchor, firstUnread int, p DMPage) (start, end int) {
+	if p.Limit <= 0 || n == 0 {
+		return 0, n
+	}
+	offset := p.Offset
+	if anchor < 0 {
+		anchor = n - 1
+		if firstUnread >= 0 && firstUnread < n-p.Limit {
+			anchor, offset = firstUnread, -p.Limit/2
+		}
+	}
+	end = min(n, anchor-offset+1)
+	return max(0, end-p.Limit), end
+}
+
+// pageMessages pages a whole DM another provider returned.
+func pageMessages(t DMThread, p DMPage) (DMThread, error) {
+	anchor, unread := -1, -1
+	for i, m := range t.Messages {
+		if p.From != "" && (m.ID == p.From || m.LID == p.From) {
+			anchor = i
+		}
+		if unread < 0 && m.Unread {
+			unread = i
+		}
+	}
+	if p.From != "" && anchor < 0 {
+		return DMThread{}, NotFound("no message with that id in this chat")
+	}
+	start, end := pageBounds(len(t.Messages), anchor, unread, p)
+	t.Older, t.Newer = start > 0, end < len(t.Messages)
+	t.Messages = t.Messages[start:end]
+	return t, nil
+}
+
 // Persons is implemented by providers that hold human DMs.
 type Persons interface {
 	// CreatePerson creates this installation's person, once, as the person
@@ -453,7 +508,9 @@ type DMThread struct {
 	Mine            bool                          `json:"mine"`
 	Frozen          string                        `json:"frozen,omitempty"` // why nothing can be sent in it
 	Messages        []DMMessage                   `json:"messages"`
-	Agents          []AgentView                   `json:"agents"` // agents invited into it, oldest first
+	Older           bool                          `json:"older,omitempty"` // a page (DMPage): earlier messages are not in it
+	Newer           bool                          `json:"newer,omitempty"` // a page: later messages are not in it
+	Agents          []AgentView                   `json:"agents"`          // agents invited into it, oldest first
 	Guests          []GuestView                   `json:"guests,omitempty"`
 	AudiencePending bool                          `json:"audience_pending,omitempty"`
 }

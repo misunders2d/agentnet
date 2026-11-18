@@ -473,8 +473,11 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 }
 
 // Conversations lists the conversations this installation holds.
-func (a *Agent) Conversations() ([]ConversationInfo, error) {
-	rows, err := a.store.conversations()
+func (a *Agent) Conversations() ([]ConversationInfo, error) { return a.conversationsIn() }
+
+// conversationsIn is Conversations for every chat, or only the ones named.
+func (a *Agent) conversationsIn(only ...string) ([]ConversationInfo, error) {
+	rows, err := a.store.conversations(only...)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +511,7 @@ func (a *Agent) Conversations() ([]ConversationInfo, error) {
 			}
 		}
 	}
-	out, err := a.projectGroupConversations(rows)
+	out, err := a.projectGroupConversations(rows, only...)
 	if err != nil {
 		return nil, err
 	}

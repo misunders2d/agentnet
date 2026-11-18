@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,6 +79,23 @@ func (e *ExecView) settle(connected bool, answerStatus string, answerAt int64, n
 		e.State, e.At, e.Detail = answerStatus, answerAt, ""
 	}
 	e.Stale = !connected || (e.State == stateRunning && now-e.At > int64(ExecRunningMaxAge/time.Second))
+}
+
+// Resettled is a kept copy of a chat's messages as of now: whether each
+// request's report is old news depends on its host being connected and on the
+// clock (settle), which no store write marks. The kept rows are not changed.
+func (a *Agent) Resettled(msgs []ConvMessage) []ConvMessage {
+	out := slices.Clone(msgs)
+	now := time.Now().Unix()
+	for i := range out {
+		if e := out[i].Exec; e != nil {
+			c := *e
+			revoked := c.State == "unavailable" && c.Stale // projectRevokedExec: a stored fact
+			c.Stale = revoked || !a.hostConnected(c.Host) || (c.State == stateRunning && now-c.At > int64(ExecRunningMaxAge/time.Second))
+			out[i].Exec = &c
+		}
+	}
+	return out
 }
 
 // legacyAnswer finds, among a device thread's messages, the received answer

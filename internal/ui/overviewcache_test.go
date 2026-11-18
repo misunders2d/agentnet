@@ -35,6 +35,7 @@ func init() {
 		overviewDiffered.Add(1)
 		fmt.Fprintln(os.Stderr, "OVERVIEW CACHE:", diff)
 	}
+	dmOracle = overviewOracle
 	overviewChatBuilt = func(conv string) {
 		n, _ := chatBuilds.LoadOrStore(conv, new(atomic.Int64))
 		n.(*atomic.Int64).Add(1)

@@ -32,7 +32,7 @@ func groupTurnPacketIn(q dbq, conv string) (GroupContext, error) {
 	return packet, err
 }
 
-func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]ConversationInfo, error) {
+func (a *Agent) projectGroupConversations(rows []ConversationInfo, only ...string) ([]ConversationInfo, error) {
 	data, err := a.store.db.Query(`SELECT conv FROM group_context ORDER BY conv`)
 	if err != nil {
 		return nil, err
@@ -52,6 +52,9 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 		return nil, err
 	}
 	for _, conv := range ids {
+		if len(only) > 0 && !slices.Contains(only, conv) {
+			continue
+		}
 		packet, err := groupTurnPacketIn(a.store.db, conv)
 		if err != nil {
 			return nil, err

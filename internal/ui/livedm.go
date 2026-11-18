@@ -1,12 +1,16 @@
 package ui
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -254,12 +258,69 @@ func (l *Live) keptChats(convs []client.ConversationInfo) map[string]*chatEntry 
 	return kept
 }
 
+// keptMessages is one chat's projected messages as read at one mark: the
+// content revision (client ViewChanges) and the chat's view_dirty mark.
+type keptMessages struct {
+	rev  uint64
+	seq  int64
+	msgs []client.ConvMessage
+}
+
+// chatMessages is a chat's projected messages, read once per mark and shared
+// by its open view and its list row: opening a chat, marking it read and the
+// list after that write then read the chat once, not three times (TDLib keeps
+// each chat's messages in memory and the list row reads its kept last message,
+// MessagesManager.cpp Dialog::store at 03220f6b). The chat's view_dirty mark
+// moves with any write its keys name, a write no process told of included;
+// the content revision moves with any write or wake. What no write marks
+// (a host's connection, the clock) is settled again on every read (client
+// Resettled). fresh reads afresh, keeping nothing (overviewOracle's
+// comparison). scope is the chat's view_dirty keys.
+func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage, scope []string, err error) {
+	v, _ := l.a.ViewChanges() // before reading: a write meanwhile moves it past this
+	rev := v.Content
+	scope, seq, err := l.a.ChatViewMark(conv)
+	if err != nil {
+		return nil, nil, err
+	}
+	l.msgsMu.Lock()
+	kept, ok := l.msgs[conv]
+	l.msgsMu.Unlock()
+	if fresh || !ok || kept.rev != rev || kept.seq != seq {
+		if dmProjected != nil && !fresh {
+			dmProjected(conv)
+		}
+		msgs, err := l.a.MessagingConversationMessages(conv)
+		if err != nil {
+			return nil, nil, err
+		}
+		if fresh {
+			return msgs, scope, nil
+		}
+		kept = keptMessages{rev, seq, msgs}
+		l.msgsMu.Lock()
+		for k, v := range l.msgs { // an older revision serves no one again
+			if v.rev < rev {
+				delete(l.msgs, k)
+			}
+		}
+		if l.msgs == nil {
+			l.msgs = map[string]keptMessages{}
+		}
+		if old := l.msgs[conv]; old.rev < rev || old.rev == rev && old.seq <= seq {
+			l.msgs[conv] = kept
+		}
+		l.msgsMu.Unlock()
+	}
+	return l.a.Resettled(kept.msgs), scope, nil
+}
+
 // buildChatSummary reads one chat's messages for its list row.
 func (l *Live) buildChatSummary(c client.ConversationInfo, e *chatEntry, participations func(string) ([]client.ParticipationInfo, error)) error {
 	if overviewChatBuilt != nil && !l.viewCachesOff {
 		overviewChatBuilt(c.ID)
 	}
-	msgs, err := l.a.MessagingConversationMessages(c.ID)
+	msgs, _, err := l.chatMessages(c.ID, l.viewCachesOff)
 	if err != nil {
 		return err
 	}
@@ -495,27 +556,46 @@ func (l *Live) NewDM(address string) (string, error) {
 }
 
 // DM implements Persons.
-func (l *Live) DM(id string) (DMThread, error) {
+func (l *Live) DM(id string) (DMThread, error) { return l.DMPage(id, DMPage{GroupRefs: true}) }
+
+// DMPage implements DMPager: one projection of the chat, its rows built only
+// for the page asked.
+func (l *Live) DMPage(id string, page DMPage) (DMThread, error) {
+	rev, _ := l.a.ViewChanges()
+	t, err := l.dmPage(id, page, false)
+	if dmOracle != nil && err == nil {
+		fresh, e := l.dmPage(id, page, true)
+		if now, _ := l.a.ViewChanges(); now.Content == rev.Content { // nothing changed under the comparison
+			x, _ := json.Marshal(t)
+			y, _ := json.Marshal(fresh)
+			if e != nil || !bytes.Equal(x, y) {
+				dmOracle(fmt.Sprintf("chat %s differs from a fresh read (%v):\nkept  %s\nfresh %s", id, e, x, y))
+			} else {
+				dmOracle("")
+			}
+		}
+	}
+	return t, err
+}
+
+func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 	if resolved, err := l.a.ContinuityConversation(id); err != nil {
 		return DMThread{}, err
 	} else {
 		id = resolved
 	}
-	convs, err := l.a.MessagingConversations()
+	c, found, err := l.a.MessagingConversation(id) // this chat only, not the whole list
 	if err != nil {
 		return DMThread{}, err
 	}
-	for _, c := range convs {
-		if c.ID != id {
-			continue
-		}
+	if found {
 		// Before the messages: a send stored between the two reads is then seen
 		// twice and shown once, where the other order would lose it from this view.
 		queued, err := l.a.QueuedSends(id)
 		if err != nil {
 			return DMThread{}, err
 		}
-		msgs, err := l.a.MessagingConversationMessages(id)
+		msgs, _, err := l.chatMessages(id, fresh)
 		if err != nil {
 			return DMThread{}, err
 		}
@@ -562,7 +642,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Topics = append(t.Topics, threadSummary(topic, false))
 		}
 		var groupRefs []protocol.GroupHistoryRef
-		if c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
+		if page.GroupRefs && c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
 			ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 			groupRefs, err = l.a.SelectGroupHistory(ctx, id, client.GroupHistorySelection{Last: 64})
 			cancel()
@@ -604,7 +684,22 @@ func (l *Live) DM(id string) (DMThread, error) {
 			labels[p.Person] = p.Label
 		}
 		confirmable := l.a.ProposalConfirmer()
-		for _, m := range shownRows(msgs, people) {
+		shown := shownRows(msgs, people)
+		anchor, unread := -1, -1
+		for i, m := range shown {
+			if page.From != "" && (m.ID == page.From || m.LID == page.From) {
+				anchor = i
+			}
+			if unread < 0 && m.Unread {
+				unread = i
+			}
+		}
+		if page.From != "" && anchor < 0 {
+			return DMThread{}, NotFound("no message with that id in this chat")
+		}
+		start, end := pageBounds(len(shown), anchor, unread, page)
+		t.Older, t.Newer = start > 0, end < len(shown)
+		for _, m := range shown[start:end] {
 			dm := DMMessage{SendGroup: m.SendGroup, SendGroupAuthor: cmp.Or(m.Key, m.Claimed), Status: m.Status(), Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
 				Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, JobDetail: m.JobDetail, At: time.Unix(m.At, 0), Unread: m.Unread, Attention: m.Attention, Replica: m.Replica, OtherDM: m.OtherDM, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
@@ -699,7 +794,9 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Messages = append(t.Messages, dm)
 		}
 		linkReplies(msgs, t.Messages)
-		t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
+		if !t.Newer { // a message waiting to go belongs at the end
+			t.Messages = withQueuedSends(t.Messages, queued, l.a.Address)
+		}
 		t.Agents = l.agentViews(infos, people, msgs)
 		return t, nil
 	}
@@ -800,43 +897,30 @@ func withQueuedSends(rows []DMMessage, queued []client.ScheduledSend, self strin
 // per open, ask the Hub about copies it still holds, and, for a DM, about the
 // person's device.
 func (l *Live) refreshDM(id string) (Presence, bool, error) {
-	convs, err := l.a.MessagingConversations()
+	c, found, err := l.a.MessagingConversation(id)
+	if err != nil || !found {
+		return Presence{}, found, err
+	}
+	// A message shows its least advanced copy's state, so every copy still
+	// held is asked about, not only the first one (often the other person's,
+	// long delivered, while a copy to one of this person's own devices stays
+	// shown as held forever). The push stream carries receipts the Hub sends;
+	// these asks cover copies it holds for a device that has not answered.
+	held, err := l.a.HeldCopies(id, 20)
 	if err != nil {
-		return Presence{}, false, err
+		return Presence{}, true, err
 	}
-	for _, c := range convs {
-		if c.ID != id {
-			continue
-		}
-		msgs, err := l.a.MessagingConversationMessages(id)
-		if err != nil {
-			return Presence{}, true, err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
-		defer cancel()
-		// A message shows its least advanced copy's state, so every copy
-		// still held is asked about, not only the first one (often the other
-		// person's, long delivered, while a copy to one of this person's own
-		// devices stays shown as held forever), and also the held copies of
-		// a message shown by a less advanced one (failed, or kept here).
-		const maxReceipts = 20
-		asked := 0
-		for i := len(msgs) - 1; i >= 0 && asked < maxReceipts; i-- {
-			m := msgs[i]
-			if m.Dir != "out" {
-				continue
-			}
-			for _, copy := range m.Copies { // none: sent from another device of this person
-				if copy.State == protocol.StateCustody && asked < maxReceipts {
-					asked++
-					l.a.Status(ctx, copy.ID, 0) // stores a changed state; the change is pushed to the page
-				}
-			}
-		}
-		if c.Kind == protocol.ConvKindGroup {
-			return Presence{}, true, nil
-		}
-		return l.presence(ctx, c.Peer.Address), true, nil
+	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+	defer cancel()
+	var asked sync.WaitGroup
+	for _, copy := range held {
+		asked.Go(func() { l.a.Status(ctx, copy, 0) }) // stores a changed state; the change is pushed to the page
 	}
-	return Presence{}, false, nil
+	if c.Kind == protocol.ConvKindGroup {
+		asked.Wait()
+		return Presence{}, true, nil
+	}
+	p := l.presence(ctx, c.Peer.Address)
+	asked.Wait()
+	return p, true, nil
 }
