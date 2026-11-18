@@ -464,8 +464,15 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		// connected since it started) is no proof that it cannot read this.
 		// The members push that announces the record wakes the next pass.
 		a.statusAwaitsCaps.Store(true)
-		if !a.peerAdvertised(sctx, sender) {
+		advertised, reads := a.peerReads(sctx, sender, capability)
+		if !advertised {
 			return true // still due; later requests still progress
+		}
+		if reads && strings.Contains(err.Error(), WaitPeerUpdate) {
+			// The refusal read the profile before the record arrived (the
+			// push may have come before this pass set the flag): ask again.
+			a.wakeStatus()
+			return true
 		}
 	}
 	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) && unreachableNow(err) {
@@ -479,15 +486,19 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	return true
 }
 
-// peerAdvertised reports whether the relay shows the pinned device at
-// address with a capability record for each of its sessions.
-func (a *Agent) peerAdvertised(ctx context.Context, address string) bool {
+// peerReads reports whether the relay shows the pinned device at address
+// with a capability record for each of its sessions, and whether they read
+// capability.
+func (a *Agent) peerReads(ctx context.Context, address, capability string) (advertised, reads bool) {
 	key, err := a.sendKey(ctx, address)
 	if err != nil {
-		return false
+		return false, false
 	}
 	prof, err := a.peerProfile(ctx, address)
-	return err == nil && prof.Advertised(address, key.SignKey)
+	if err != nil || !prof.Advertised(address, key.SignKey) {
+		return false, false
+	}
+	return true, prof.Supports(address, key.SignKey, capability)
 }
 
 // unreachableNow reports an error from not reaching the Hub (no
