@@ -219,8 +219,10 @@ export function NothingOpen() {
 // message render again: per change, the whole chat. Now a reload that changes
 // none of these keeps the same object (MEL-748 S5). Header and topic bar keep
 // the live overview (they read the list, presence and invitations too).
-const ctxFields = (o: T.Overview) => [o.me, o.person, o.people, o.role, o.files, o.needs_you, o.notify, o.topic_list, o.remind, o.reminders, o.review, o.directory];
-function useCtxOverview(o: T.Overview | null): T.Overview | null {
+// Checked by narrowing Ctx.overview to a Pick of exactly these fields: every
+// message helper type-checks (agent_devices and group_invitations were missed).
+const ctxFields = (o: T.Overview) => [o.me, o.person, o.people, o.role, o.files, o.needs_you, o.notify, o.topic_list, o.remind, o.reminders, o.review, o.directory, o.agent_devices, o.group_invitations];
+export function useCtxOverview(o: T.Overview | null): T.Overview | null {
   const kept = useRef<{ key: string; o: T.Overview | null } | null>(null);
   const key = o ? JSON.stringify(ctxFields(o)) : "";
   if (!kept.current || kept.current.key !== key || !o !== !kept.current.o) kept.current = { key, o };
