@@ -11,12 +11,21 @@ Telegram Desktop `a532622b`.
 | Path | Telegram (source) | AgentNet before | Now |
 |---|---|---|---|
 | Store reads | not compared (SQLite WAL: readers do not wait for the writer) | one SQLite connection: a page read waited behind every write | plain reads on a read-only pool beside the one writer (S1) |
-| Open a chat | messages kept per chat, read once (`MessagesManager::Dialog::store`, `MessagesManager.cpp:3010`) | whole chat projected 3+ times per open (DM, read mark, list, refresh); each projection re-read every chat for continuity and every sender's person | one projection per change, shared by the chat and its list row; one chat looked up, not all (S3) |
+| Open a chat | messages kept per chat, read once (`MessagesManager::Dialog::store`, `MessagesManager.cpp:3010`) | whole chat projected 3 times per open (DM, read mark, list, refresh); each projection re-read every chat for continuity and every sender's person | one projection per change, shared by the chat and its list row; one chat looked up, not all (S3). Still 3 per open: the open's own read mark and refresh each write, and each write projects the chat once more (see Unread) |
+| Unread / read mark | read state patched on the kept chat (`updateChatReadInbox`, `td_api.tl:11430`); nothing re-read | read mark re-projected the whole chat | mismatch kept: the read mark still re-projects (one projection, not three re-reads). Patching needs the projection's unread fields split out; MEL-692/693 semantics unchanged |
 | Refresh on open | — | every held copy's status, one by one | ≤20 held copies from one indexed query, asked in parallel (S3) |
-| History paging | `getChatHistory(from_message_id, offset −99..0, limit ≤100)` (`td_api.tl:12959`); first page 30, later 50, around the unread message at `offset = −limit/2` (`history_widget.cpp:231–232`, `firstLoadMessages` 5067) | whole chat only | `/api/dm?from&offset&limit`, same bounds, opening at the unread message (S4 host). Comic still loads the whole chat: see below |
+| History paging | `getChatHistory(from_message_id, offset −99..0, limit ≤100)` (`td_api.tl:12959`); first page 30, later 50, around the unread message at `offset = −limit/2` (`history_widget.cpp:231–232`, `firstLoadMessages` 5067) | whole chat only | `/api/dm?from&offset&limit`, same bounds, opening at the unread message (S4 host). Mismatch: the host's first page is 50 where tdesktop asks 30 (a page costs what the kept chat costs, so the size saves nothing yet). Comic still loads the whole chat: see below |
 | Chat list | last message and read state kept per chat, sent as `updateChatLastMessage` / `updateChatReadInbox` (`td_api.tl:11413`, `11430`) | kept per chat since `ac2ec42c` (`view_dirty`) | unchanged; its row now reuses the open chat's projection |
 | Updates | one typed update per changed chat or message (`updateNewMessage` 11295, `updateMessageContent` 11316) | "something changed": the page read the open chat and the list again on every write anywhere | the event names the scopes it moved; the page reads the open chat only when its own moved (S2, inactive until the schema step) |
 | Render | — | every list reload re-rendered every mounted message; per request, a scan of the whole chat (nested for logical ids) | messages see a stable overview; answers found through a per-chat index; activity computed once per messages (S5) |
+
+**State of the targets.** S1 and S5 done. S3 partial: the unread page and the
+badge do not reuse the projection (the badge is the list's, already kept per
+chat; the unread page reads its own rows). S2 partial: the mechanism is in and
+tested, inactive until `ViewCoverSchema` is appended; projections per open stay
+3, not lower (above). S4 partial: host API only (`abacd697`, one commit with
+S3, as both change `dmPage`); Comic does not page, and `SelectGroupHistory` stays
+eager (Comic never asks `group_refs=0`, so lazy refs would save nothing).
 
 **Adaptations, and why.**
 - Typed per-message patches were not taken: they need a per-message change log
@@ -45,6 +54,15 @@ Telegram Desktop `a532622b`.
   `NoteChange`, 20 of 20 with `noteStoredChange`.
 - `h` (the list's history-copy progress) does not reload an open chat: no chat
   projection reads those tables. No keys, or empty keys, read everything.
+- The step's own keys carry a leading `v` (`vc:<conv>`, `v*`, `vh`) inside the
+  store; change events send them without it. The list, the unread count and the
+  read/unread actions' write check keep reading only the earlier keys, exactly as
+  before the step: with plain keys, busy agents' writes to `attention`,
+  requests or uploads would have refused Mark unread and read ("this chat
+  changed; try again") and cleared the kept list. `TestLiveUnreadProvider`
+  failed that way once with the step on (passed 10 of 10 alone): the mechanism
+  is proven by `TestViewCoverNamesEveryTable`, that failure's cause is not
+  reproduced.
 
 **Measured** (`TestOpenChatMeasure`, `AGENTNET_OPEN_MEASURE=1`: a DM plus a group,
 received rows copied to 640 and 6400; "busy" = the peer sending into the group
@@ -66,8 +84,11 @@ A first page of 50 costs about the same as the whole kept chat (66–75 ms at
 |---|---|---|
 | Reads beside the writer | `ff1bbb5e` | `TestChatProjectionReadsBesideAHeldWrite` (fails at 10 s with reads on the writer), `TestReaderReadsBesideAHeldWriteAndRefusesWrites` |
 | One projection per change; one chat looked up; held copies indexed; sender words memoized; paging API | `abacd697` | every UI test compares each kept DM with a fresh read (`dmOracle`), `TestResettledSettlesKeptRowsAgain`, `TestDMPageBounds` |
+| List continuity in one pass (569 ms → 3 ms at 3000 chats; 7.6 ms at 300) | `4285fa07` | `TestContinuityViewsMatchEachFamily` (fails with the tie-break dropped) |
 | Scoped change events | `10f15fc9` | `TestViewCoverNamesEveryTable`, `TestScopeEventPrecedesItsChange`, `TestScopedChangeReadsOnlyTouchedViews` (fails with keys ignored), `workspaces_check.mjs`; the UI suite passes with `AGENTNET_TEST_VIEW_COVER=1` |
-| Render work per change | `3f1bdb61` | the rendered and Comic suites |
+| Render work per change; two missed ctx fields | `3f1bdb61`, `b9865ec9` | `TestCtxOverviewRendered` (a list reload naming another chat: timeline render time under a React Profiler about 10x below the raw overview; fails with `useCtxOverview` passing the overview through), `TestAnswerIndexMatchesTheScan` (the old whole-chat scan against the index over 3000 random chats; fails without the logical-id candidates); the field list type-checked by narrowing `Ctx.overview` to a `Pick` of it (found `agent_devices`, `group_invitations` missing) |
+| Skip rule proven | `860e67df` | `TestOtherChatWritesLeaveTheOpenChat`: with the step, messages and mutes in another chat leave the open chat as it was, 4–5 of 6 reads proven by `checkSkip` (fails with the `v` keys unread as their scope: 0 of 6); with `AGENTNET_TEST_VIEW_COVER=1` every UI test runs the same check (fails when a chat's own key is treated as skippable) |
+| Read actions not refused by the step's keys | `860e67df` | `TestViewCoverNamesEveryTable` (cover writes in the chat and in none leave attention's scope unmoved; a message edit moves it; fails with `v` keys counted) |
 
 ## Agent needs_human result is a chat message — unreleased, November 9, 2026
 
