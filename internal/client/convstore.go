@@ -186,12 +186,24 @@ const (
 // (a participation event's own record): a duplicate or conflicting message
 // has no effect at all, and if also fails nothing is stored.
 func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQuarantine bool, also func(*sql.Tx) error) (string, error) {
-	hash := contentHash(in)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
+	res, keep, err := addConvInboxTx(tx, nil, in, verifiedBy, state, fromQuarantine, also)
+	if err != nil || !keep {
+		return res, err
+	}
+	return res, s.done(tx.Commit())
+}
+
+// addConvInboxTx is addConvInbox within tx; keep reports whether what it
+// wrote stands (a duplicate stored nothing new, a conflict nothing at all,
+// and tx must be rolled back to before the call). st prepares its insert
+// once for a page of messages (receivepage.go); nil runs it directly.
+func addConvInboxTx(tx *sql.Tx, st txStmts, in envelope.Inner, verifiedBy, state string, fromQuarantine bool, also func(*sql.Tx) error) (res string, keep bool, err error) {
+	hash := contentHash(in)
 	// A copy forwarded as history of this message (same claimed key and
 	// logical id) gives way to the one received directly: the direct copy
 	// is stored in its place, under its own authority (history never did
@@ -202,31 +214,31 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	switch err := tx.QueryRow(`SELECT id, read_at, send_group,send_group_conflict FROM inbox WHERE verified_by IS NULL AND claimed_fp = ? AND lid = ?`, verifiedBy, in.LID).Scan(&histID, &histRead, &histGroup, &histGroupConflict); {
 	case err == nil:
 		if _, err := tx.Exec(`DELETE FROM attachments WHERE message_id = ?`, histID); err != nil {
-			return "", err
+			return "", false, err
 		}
 		if _, err := tx.Exec(`DELETE FROM inbox WHERE id = ?`, histID); err != nil {
-			return "", err
+			return "", false, err
 		}
 	case !errors.Is(err, sql.ErrNoRows):
-		return "", err
+		return "", false, err
 	}
 	var storedID, stored, storedPID string
 	err = tx.QueryRow(`SELECT id, coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&storedID, &stored, &storedPID)
 	if err == nil && stored != hash && in.PID != "" && storedPID == in.PID && stored == legacyContentHash(in) {
 		// Stored before the participation id was hashed: the same message.
 		if _, err := tx.Exec(`UPDATE inbox SET content_hash = ? WHERE verified_by = ? AND lid = ?`, hash, verifiedBy, in.LID); err != nil {
-			return "", err
+			return "", false, err
 		}
 		stored = hash
 	}
 	switch {
 	case err == nil && stored == hash:
 		if err := mergeSendGroup(tx, in, verifiedBy); err != nil {
-			return "", err
+			return "", false, err
 		}
 		if fromQuarantine {
 			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
-				return "", err
+				return "", false, err
 			}
 		}
 		// The same logical message under another envelope ID (a re-sent fan
@@ -234,14 +246,14 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		// it in custody and pushes it again on every connection (MIXED-1).
 		if storedID != in.ID {
 			if err := receiptCarrier(tx, in.ID); err != nil {
-				return "", err
+				return "", false, err
 			}
 		}
-		return admittedAgain, s.done(tx.Commit())
+		return admittedAgain, true, nil
 	case err == nil:
-		return admitConflict, nil
+		return admitConflict, false, nil
 	case !errors.Is(err, sql.ErrNoRows):
-		return "", err
+		return "", false, err
 	}
 	now := time.Now()
 	// A request for this device's agent is told where it stands from its
@@ -250,7 +262,7 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	due := statusDue(state, in.Kind)
 	duplicate := ""
 	if proposal, prior, err := claimProposalChoice(tx, in, verifiedBy); err != nil {
-		return "", err
+		return "", false, err
 	} else if proposal != "" {
 		duplicate = prior
 		if duplicate != "" {
@@ -259,72 +271,74 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	in = tombstoned(tx, in, verifiedBy) // deleted already (whatever order things arrive in): no text stored
 	refID, refFP := refCols(in.Ref)
-	res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by,
-		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, ref_id, ref_fp, agent_id, receiver_route, status_due)
-		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, nullif(?, ''),nullif(?,''), ?)`,
+	// The topic columns go in with the row: a follow-up UPDATE ran the
+	// view and unread triggers a second time for the same keys.
+	inserted, err := st.exec(tx, `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by,
+		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, ref_id, ref_fp, agent_id, receiver_route, status_due,
+		topic, topic_event, quote, topic_done)
+		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, nullif(?, ''),nullif(?,''), ?,
+		nullif(?,''), nullif(?,''), nullif(?,''), ?)`,
 		in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy,
-		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID, refID, refFP, in.AgentID, receiverRouteJSON(in.ReceiverRoute), due)
+		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID, refID, refFP, in.AgentID, receiverRouteJSON(in.ReceiverRoute), due,
+		in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return admittedAgain, nil // this envelope id is stored already
+	if n, _ := inserted.RowsAffected(); n == 0 {
+		return admittedAgain, false, nil // this envelope id is stored already
 	}
 	if duplicate != "" {
 		if _, err := tx.Exec(`UPDATE inbox SET detail=? WHERE id=?`, "that proposal was confirmed already, as task "+duplicate+": not run twice", in.ID); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE inbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, in.ID); err != nil {
-		return "", err
-	}
 	if err := storeRequestFollowup(tx, "inbox", in.ID, in.Followup); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if histID != "" {
 		if _, err := tx.Exec(`UPDATE inbox SET send_group=?,send_group_conflict=? WHERE id=?`, histGroup, histGroupConflict, in.ID); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	if err := mergeSendGroup(tx, in, verifiedBy); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if in.Human != nil {
 		if _, err := tx.Exec(`UPDATE inbox SET human=? WHERE id=?`, humanJSON(in.Human), in.ID); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	if histRead.Valid {
 		if _, err := tx.Exec(`UPDATE inbox SET read_at = ? WHERE id = ?`, histRead.Int64, in.ID); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	if also != nil {
 		if err := also(tx); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	for _, a := range in.Attachments {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO attachments(message_id, blob_id, name, size, sha256, ct_size, ct_sha256) VALUES(?, ?, ?, ?, ?, ?, ?)`,
 			in.ID, a.Blob.ID, a.Name, a.Size, a.SHA256, a.Blob.Size, a.Blob.SHA256); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	if err := recordRoomContext(tx, in, verifiedBy, in.To); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := bindReplyReceiverInput(tx, in, verifiedBy); err != nil {
-		return "", err
+		return "", false, err
 	}
-	if err := eraseArrivalIn(tx, in.ID); err != nil { // a turn deleted here keeps no text (convclear.go)
-		return "", err
+	if _, err := st.exec(tx, eraseArrival, in.ID); err != nil { // a turn deleted here keeps no text (convclear.go)
+		return "", false, err
 	}
 	if fromQuarantine {
 		if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
-	return admitted, s.done(tx.Commit())
+	return admitted, true, nil
 }
 
 // addHistoryInbox stores in, a message forwarded as history by via (a

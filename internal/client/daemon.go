@@ -288,11 +288,39 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.kickMu.Unlock()
 	a.kick()
 
-	return readStream(resp.Body, touch, func(event, data string) error { return a.dispatch(ctx, event, data) })
+	// Messages are taken a page at a time (receivepage.go): what the reader
+	// has buffered, up to receivePageMax; anything else stores the page so
+	// far first, in stream order.
+	var page []envelope.Envelope
+	flush := func() error {
+		if len(page) == 0 {
+			return nil
+		}
+		envs := page
+		page = nil
+		defer a.kickNow() // one receipt pass for the page
+		return a.receivePage(ctx, envs)
+	}
+	return readStream(resp.Body, touch, func(event, data string) error {
+		var env envelope.Envelope
+		paged := event == "message" && json.Unmarshal([]byte(data), &env) == nil
+		if paged {
+			a.updateServed(event)
+			if page = append(page, env); len(page) < receivePageMax {
+				return nil
+			}
+		}
+		if err := flush(); err != nil || paged {
+			return err
+		}
+		return a.dispatch(ctx, event, data)
+	}, flush)
 }
 
 // readStream parses the push stream body with go-sse and hands each event
-// to dispatch in order, synchronously; a dispatch error ends the stream as
+// to dispatch in order, synchronously, calling idle (when given) whenever
+// nothing more has been read yet and before it returns; a dispatch or idle
+// error ends the stream as
 // unhealthy (the Hub redelivers). It returns (true, io.EOF) when the Hub
 // closed the stream, and (true, err) for a read error. touch is called on
 // every read that brings bytes, comments and keepalives included, so the
@@ -308,10 +336,54 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 // writes single-line frames and every frame type must stay under this
 // limit: the member and team directories are bounded by protocol.MaxMembers
 // and MaxTeams; group heads are emitted as bounded batches by the Hub.
-func readStream(body io.Reader, touch func(), dispatch func(event, data string) error) (healthy bool, err error) {
-	r := &streamBody{r: body, touch: touch}
-	for e, rerr := range sse.Read(r, &sse.ReadConfig{MaxEventSize: streamEventLimit}) {
-		if rerr != nil {
+func readStream(body io.Reader, touch func(), dispatch func(event, data string) error, idle func() error) (healthy bool, err error) {
+	type read struct {
+		e   sse.Event
+		err error
+	}
+	// The body is read ahead of dispatch, so that idle can tell what is
+	// already here (a page of messages) from what is still to come.
+	reads := make(chan read, receivePageMax)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		defer close(reads)
+		r := &streamBody{r: body, touch: touch}
+		for e, rerr := range sse.Read(r, &sse.ReadConfig{MaxEventSize: streamEventLimit}) {
+			select {
+			case reads <- read{e, rerr}:
+			case <-done:
+				return
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	for {
+		var next read
+		var ok bool
+		select {
+		case next, ok = <-reads:
+		default:
+			if idle != nil {
+				if err := idle(); err != nil {
+					return false, err
+				}
+			}
+			next, ok = <-reads
+		}
+		if !ok || next.err != nil {
+			if idle != nil {
+				if err := idle(); err != nil { // what came before the end is stored
+					return false, err
+				}
+			}
+		}
+		if !ok {
+			return true, io.EOF
+		}
+		if rerr := next.err; rerr != nil {
 			if errors.Is(rerr, errStreamEnd) || errors.Is(rerr, sse.ErrUnexpectedEOF) {
 				return true, io.EOF // the Hub closed; an unfinished event or line is dropped
 			}
@@ -320,11 +392,10 @@ func readStream(body io.Reader, touch func(), dispatch func(event, data string) 
 			}
 			return true, rerr
 		}
-		if err := dispatch(e.Type, e.Data); err != nil {
+		if err := dispatch(next.e.Type, next.e.Data); err != nil {
 			return false, err
 		}
 	}
-	return true, io.EOF
 }
 
 // streamEventLimit is the most one push event may take on the wire, all its
@@ -759,7 +830,7 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		}
 		sender = e.Public
 	}
-	in, err := envelope.Open(env, a.id, a.Address, sender)
+	in, err := a.open(ctx, env, sender) // opened once if its page did (receivepage.go)
 	if err == nil {
 		allowed, e := a.revokedIngressAllowed(ctx, env, in, sender)
 		if e != nil {

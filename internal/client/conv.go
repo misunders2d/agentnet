@@ -1928,17 +1928,19 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			// A request to another device's agent: history here.
 		}
 	}
-	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
-	if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
-		return hold(reasonInvalid, err.Error())
-	}
-	if err != nil {
-		return err
-	}
-	if res == admitConflict {
-		return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
-	}
-	if res == admitted {
+	settle := func(res string, err error) error {
+		if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
+			return hold(reasonInvalid, err.Error())
+		}
+		if err != nil {
+			return err
+		}
+		if res == admitConflict {
+			return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
+		}
+		if res != admitted {
+			return nil
+		}
 		a.convWork.due(convHistory)
 		a.retryHeldFor(in)
 		a.kickNow()
@@ -1959,8 +1961,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			a.convWork.due(convFetch) // keep its files here (historyfiles.go)
 			a.kickNow()
 		}
+		return nil
 	}
-	return nil
+	if p := receivingPage(ctx); p != nil { // stored with its page, settled after (receivepage.go)
+		p.stage(in, func(tx *sql.Tx, st txStmts) (string, bool, error) {
+			return addConvInboxTx(tx, st, in, sender.Fingerprint(), state, fromQuarantine, also)
+		}, settle)
+		return nil
+	}
+	return settle(a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also))
 }
 
 // retryHeldFor looks again at messages held for proof when request in has

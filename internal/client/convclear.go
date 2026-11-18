@@ -258,10 +258,12 @@ func eraseCoveredIn(tx *sql.Tx, conv, selfFP string) error {
 // late copy of an erased turn never shows (views leave erased turns out) and
 // keeps no text.
 func eraseArrivalIn(tx *sql.Tx, id string) error {
-	_, err := tx.Exec(`UPDATE inbox SET body = '' WHERE id IN (SELECT i.id FROM inbox i WHERE i.id = ? AND i.local = 0
-		AND coalesce(i.sub, '') IN `+erasableSubs+` AND i.body <> '' AND `+erasedIn+` AND NOT `+retainedIn+`)`, id)
+	_, err := tx.Exec(eraseArrival, id)
 	return err
 }
+
+var eraseArrival = `UPDATE inbox SET body = '' WHERE id IN (SELECT i.id FROM inbox i WHERE i.id = ? AND i.local = 0
+		AND coalesce(i.sub, '') IN ` + erasableSubs + ` AND i.body <> '' AND ` + erasedIn + ` AND NOT ` + retainedIn + `)`
 
 // residualCount counts erased rows of conv whose text no unfinished work
 // needs any more but is still here: what eraseCoveredIn would blank now

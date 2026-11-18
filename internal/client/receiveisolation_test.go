@@ -108,7 +108,7 @@ func TestAdmissionErrorIsHeldNotStreamEnding(t *testing.T) {
 	answer("/" + name + "/profile")
 	env := turn("an unreadable profile answer")
 	raw, _ := json.Marshal(env)
-	healthy, err := readStream(strings.NewReader("event: message\ndata: "+string(raw)+"\n\nevent: ping\ndata: {}\n\n"), nil, func(ev, data string) error { return carol.dispatch(tctx(t), ev, data) })
+	healthy, err := readStream(strings.NewReader("event: message\ndata: "+string(raw)+"\n\nevent: ping\ndata: {}\n\n"), nil, func(ev, data string) error { return carol.dispatch(tctx(t), ev, data) }, nil)
 	if !healthy || err != io.EOF {
 		t.Fatalf("the stream ended on an admission error: healthy %v, %v", healthy, err)
 	}

@@ -30,7 +30,7 @@ func collect(t *testing.T, r io.Reader) (events []got, touches int, healthy bool
 	healthy, err = readStream(r, func() { touches++ }, func(e, d string) error {
 		events = append(events, got{e, d})
 		return nil
-	})
+	}, nil)
 	return
 }
 
@@ -77,7 +77,7 @@ func TestStreamDispatchErrorIsUnhealthy(t *testing.T) {
 	healthy, err := readStream(strings.NewReader("event: message\ndata: a\n\nevent: ping\ndata: b\n\n"), nil, func(e, d string) error {
 		seen = append(seen, e)
 		return boom
-	})
+	}, nil)
 	if healthy || !errors.Is(err, boom) || len(seen) != 1 {
 		t.Fatalf("healthy=%v err=%v seen=%v", healthy, err, seen)
 	}
