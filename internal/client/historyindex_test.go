@@ -37,7 +37,7 @@ func TestHistoryDedupIndexUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	s := &store{db: db}
+	s := &store{db: readsOn(db)}
 	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)

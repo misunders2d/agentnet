@@ -959,7 +959,7 @@ func TestAttentionScopeSnapshotRevalidatedBeforeWrite(t *testing.T) {
 	for _, writer := range []struct {
 		name string
 		db   *sql.DB
-	}{{"same-connection", a.store.db}, {"external-connection", other}} {
+	}{{"same-connection", a.store.db.DB}, {"external-connection", other}} {
 		t.Run("continuous-"+writer.name, func(t *testing.T) {
 			resetLegacy()
 			calls := 0

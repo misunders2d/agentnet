@@ -35,6 +35,11 @@ func androidSQLiteDSN(dsn string) (string, error) {
 				return "", fmt.Errorf("invalid Android SQLite busy timeout %q", value)
 			}
 			key = "_busy_timeout"
+		case "query_only":
+			if value != "1" {
+				return "", fmt.Errorf("unsupported Android SQLite query_only setting %q", value)
+			}
+			key = "_query_only"
 		case "foreign_keys":
 			if value != "1" {
 				return "", fmt.Errorf("unsupported Android SQLite foreign key setting %q", value)

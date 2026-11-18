@@ -70,6 +70,26 @@ func Open(path string, steps []string) (*sql.DB, error) {
 	return db, nil
 }
 
+// OpenReader opens up to conns read-only connections to a database Open has
+// already brought up to date. In WAL mode they read beside the one writer Open
+// returns, each statement from the last committed state, so a reader never
+// waits behind a write transaction. query_only refuses any write through them;
+// everything connection-scoped (total_changes, transactions that write) stays
+// on the writer.
+func OpenReader(path string, conns int) (*sql.DB, error) {
+	dsn, err := FileURI(path, "_pragma=busy_timeout(5000)&_pragma=query_only(1)")
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(conns)
+	db.SetMaxIdleConns(conns)
+	return db, nil
+}
+
 // ReuseFreshSchema is for test fixtures whose subject is not the schema: with it on, a
 // new empty store starts as a copy of the first one fully upgraded under exactly the same
 // steps, instead of running every step again. again runs on each copy, for anything a

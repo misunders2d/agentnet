@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -364,17 +365,67 @@ const (
 
 type store struct {
 	continuityDirty atomic.Bool
-	db              *sql.DB
+	db              *storeDB
 	onChange        func() // set by the Agent: local state changed (changes.go)
 	onJobReady      func() // local own-agent request committed; wake before remote delivery
 }
 
+// storeDB is the store's one writer, which serialises every write and
+// transaction, with read-only connections beside it for plain reads. A UI read
+// then never queues behind sync, catch-up or a send holding the writer (WAL: a
+// read sees everything committed before it starts). Reads that depend on the
+// connection itself, such as total_changes(), use the embedded writer.
+type storeDB struct {
+	*sql.DB
+	reads *sql.DB
+}
+
+// readsOn is a store on one handle for both, as a read-only snapshot opens it.
+func readsOn(db *sql.DB) *storeDB { return &storeDB{db, db} }
+
+func (d *storeDB) Query(query string, args ...any) (*sql.Rows, error) {
+	return d.reads.Query(query, args...)
+}
+
+func (d *storeDB) QueryRow(query string, args ...any) *sql.Row {
+	return d.reads.QueryRow(query, args...)
+}
+
+func (d *storeDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return d.reads.QueryContext(ctx, query, args...)
+}
+
+func (d *storeDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return d.reads.QueryRowContext(ctx, query, args...)
+}
+
+// BeginTx starts a read-only snapshot on a reader, anything else on the writer.
+func (d *storeDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	if opts != nil && opts.ReadOnly {
+		return d.reads.BeginTx(ctx, opts)
+	}
+	return d.DB.BeginTx(ctx, opts)
+}
+
+func (d *storeDB) Close() error {
+	err := d.DB.Close()
+	if d.reads != d.DB {
+		err = errors.Join(err, d.reads.Close())
+	}
+	return err
+}
+
 func openStore(path string) (*store, error) {
-	db, err := sqlitedb.Open(path, schema)
+	writer, err := sqlitedb.Open(path, schema)
 	if err != nil {
 		return nil, err
 	}
-	s := &store{db: db}
+	reads, err := sqlitedb.OpenReader(path, 4)
+	if err != nil {
+		writer.Close()
+		return nil, err
+	}
+	s := &store{db: &storeDB{writer, reads}}
 	s.continuityDirty.Store(true)
 	return s, nil
 }

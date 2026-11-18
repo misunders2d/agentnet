@@ -15,6 +15,7 @@ func TestAndroidSQLiteDSNPreservesStoreAndReadonlySettings(t *testing.T) {
 		{"file:/private/agent.db?mode=ro&_pragma=busy_timeout(2000)", map[string]string{"mode": "ro", "_busy_timeout": "2000"}},
 		{"file:/private/snapshot.db?mode=ro&immutable=1", map[string]string{"mode": "ro", "immutable": "1"}},
 		{"file:/private/agent.db?_pragma=busy_timeout(0)", map[string]string{"_busy_timeout": "0"}},
+		{"file:/private/agent.db?_pragma=busy_timeout(5000)&_pragma=query_only(1)", map[string]string{"_busy_timeout": "5000", "_query_only": "1"}},
 		{"/private/agent.db", nil},
 	} {
 		got, err := androidSQLiteDSN(tc.dsn)
@@ -42,7 +43,7 @@ func TestAndroidSQLiteDSNPreservesStoreAndReadonlySettings(t *testing.T) {
 }
 func TestAndroidSQLiteDSNRejectsUnsupportedOrWeakenedSettings(t *testing.T) {
 	for _, query := range []string{
-		"_pragma=synchronous(OFF)", "_pragma=unknown(1)", "_pragma=foreign_keys(0)",
+		"_pragma=synchronous(OFF)", "_pragma=unknown(1)", "_pragma=foreign_keys(0)", "_pragma=query_only(0)",
 		"_pragma=journal_mode(DELETE)", "_pragma=busy_timeout(-1)", "_pragma=busy_timeout(99999999999999)",
 		"_pragma=busy_timeout", "_pragma=busy_timeout(1)&_busy_timeout=2", "_synchronous=NORMAL", "_sync=OFF", "%broken=value",
 	} {
