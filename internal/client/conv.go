@@ -1002,6 +1002,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	// Fresh evidence first: newer roster steps of both persons decide the
 	// devices, and each device's profile what it can read.
+	a.prefetchGroup(ctx, []string{peerID, me.info.Person}) // rosters, keys and profiles at once; the checks below read the answers
 	feats, ferr := a.relayFeatures(ctx)
 	if ferr == nil {
 		for _, id := range []string{peerID, me.info.Person} {
@@ -1043,31 +1044,12 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			return ConvSent{}, err
 		}
 	}
-	if len(m.Files) > 0 {
-		// Files go with a turn a person sends, encrypted to each device; the
-		// ciphertext waits in the private spool until the Hub holds the
-		// message (files.go). Cleanup must not see it before the outbox
-		// refers to it.
-		release, err := lockfile.Wait(a.spoolLockPath())
-		if err != nil {
-			return ConvSent{}, err
-		}
-		stored := false
-		defer func() {
-			if !stored {
-				for _, c := range copies {
-					a.releaseSpool(envelope.Envelope{ID: c.in.ID, Blobs: blobsOf(c.in.Attachments)})
-				}
-			}
-			release()
-		}()
-		m.stored = func() { stored = true; release() } // idempotent release, before delivery
-	}
 	// A turn is for the other member: it fails, as a device send does, when
 	// a key changed (until trusted) or none of their devices can get a copy.
 	// Records go to the devices that can take them.
 	turn := m.sub == "" && !m.selfJob
 	var peerErr error // why a device of the other member got no copy
+	var seals []sealing // one per copy, sealed once the checks are done
 	for _, dev := range devices {
 		key, err := a.sendKey(ctx, dev.Address)
 		var changed *KeyChangedError
@@ -1095,16 +1077,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
 		}
-		copies = append(copies, outCopy{in: in}) // listed before spooling, so a failure releases what it spooled
+		copies = append(copies, outCopy{in: in})
 		c := &copies[len(copies)-1]
 		c.recipientFP = key.Fingerprint()
-		for _, f := range m.Files {
-			att, err := a.spoolNamed(f, recipient)
-			if err != nil {
-				return ConvSent{}, err
-			}
-			c.in.Attachments = append(c.in.Attachments, att)
-		}
 		supported, why, notify := false, WaitServerUnavailable+"cannot reach the Hub", false
 		if ferr == nil {
 			supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
@@ -1117,14 +1092,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if c.in.SendGroup != "" && !a.sendGroupSupported(ctx, key) {
 			c.in.SendGroup = ""
 		}
-		if notify && !own[dev.Address] && asksAttention(c.in) {
-			c.env, err = envelope.SealAttention(c.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, dev.Fingerprint()))
-		} else {
-			c.env, err = envelope.Seal(c.in, a.id.Sign, recipient)
-		}
-		if err != nil {
-			return ConvSent{}, err
-		}
+		seals = append(seals, sealing{recipient, notify && !own[dev.Address] && asksAttention(c.in), protocol.NotifyChannel(conv, dev.Fingerprint())})
 		c.state, c.why = stateQueued, ""
 		if !supported {
 			c.state, c.why = stateConvWaiting, why
@@ -1143,6 +1111,31 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		return ConvSent{}, err
 	} else if now.info.State == personConflict { // a profile just showed a different record
 		return ConvSent{}, errPersonConflict
+	}
+	// The network checks are done: only now does a file turn take the spool
+	// lock, and a text turn never does.
+	if len(m.Files) > 0 {
+		// Files go with a turn a person sends, encrypted to each device; the
+		// ciphertext waits in the private spool until the Hub holds the
+		// message (files.go). Cleanup must not see it before the outbox
+		// refers to it.
+		release, err := lockfile.Wait(a.spoolLockPath())
+		if err != nil {
+			return ConvSent{}, err
+		}
+		stored := false
+		defer func() {
+			if !stored {
+				for _, c := range copies {
+					a.releaseSpool(envelope.Envelope{ID: c.in.ID, Blobs: blobsOf(c.in.Attachments)})
+				}
+			}
+			release()
+		}()
+		m.stored = func() { stored = true; release() } // idempotent release, before delivery
+	}
+	if err := a.spoolAndSeal(copies, seals, m.Files); err != nil {
+		return ConvSent{}, err
 	}
 	jobKey := ""
 	if m.selfJob {

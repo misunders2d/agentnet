@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -107,6 +108,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if err != nil {
 		return ConvSent{}, err
 	}
+	a.prefetchGroup(ctx, slices.Collect(maps.Keys(m.persons))) // every roster and key at once; the checks below read the answers
 	for id := range m.persons {
 		if _, err := a.refreshPerson(ctx, id, false); err != nil && !(root.Kind == protocol.ConvKindGroup && hubUnreachable(err)) {
 			return ConvSent{}, err
@@ -214,27 +216,11 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if len(devices) == 0 && !out.selfJob {
 		return ConvSent{}, errors.New("human: no recipient")
 	}
-	release, err := lockfile.Wait(a.spoolLockPath())
-	if err != nil {
-		return ConvSent{}, err
-	}
-	defer release()
-	stored := false
+	// Network checks first, with no lock held: a text turn never waits for
+	// another process's file work, and a file turn holds the spool lock only
+	// while it spools, seals and stores.
 	var copies []outCopy
-	var spooled []envelope.Blob
-	defer func() {
-		if !stored {
-			a.releaseSpool(envelope.Envelope{Blobs: spooled})
-			if binding != nil && binding.setup != nil {
-				a.releaseGroupCopies([]outCopy{*binding.setup})
-			}
-		}
-	}()
-	for _, file := range out.Files {
-		if err := a.keepSent(file.Path); err != nil {
-			return ConvSent{}, err
-		}
-	}
+	var seals []sealing
 	for _, device := range devices {
 		key, err := a.sendKey(ctx, device.Address)
 		if err != nil {
@@ -270,20 +256,35 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		if request && (device.Address == x.Host.Address && device.Fingerprint() == x.Host.Fingerprint || out.selfJob && len(copies) == 0) {
 			copyIn.ID = in.LID // the host's executable copy (asked on the host: the first copy, whose ID its job takes)
 		}
-		for _, file := range out.Files {
-			attachment, err := a.spoolNamed(file, recipient)
-			if err != nil {
-				return ConvSent{}, err
-			}
-			copyIn.Attachments = append(copyIn.Attachments, attachment)
-			spooled = append(spooled, attachment.Blob)
-		}
-		sealed, err := envelope.Seal(copyIn, a.id.Sign, recipient)
-		if err != nil {
-			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(copyIn.Attachments)})
+		copies = append(copies, outCopy{in: copyIn, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
+		seals = append(seals, sealing{recipient: recipient})
+	}
+	for _, file := range out.Files {
+		if err := a.keepSent(file.Path); err != nil {
 			return ConvSent{}, err
 		}
-		copies = append(copies, outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
+	}
+	release := func() {}
+	if len(out.Files) > 0 {
+		// Cleanup must not see spooled ciphertext before the outbox refers to it.
+		unlock, err := lockfile.Wait(a.spoolLockPath())
+		if err != nil {
+			return ConvSent{}, err
+		}
+		release = unlock // safe to call twice
+	}
+	defer func() { release() }()
+	stored := false
+	defer func() {
+		if !stored {
+			a.releaseGroupCopies(copies)
+			if binding != nil && binding.setup != nil {
+				a.releaseGroupCopies([]outCopy{*binding.setup})
+			}
+		}
+	}()
+	if err := a.spoolAndSeal(copies, seals, out.Files); err != nil {
+		return ConvSent{}, err
 	}
 	guard := func(tx *sql.Tx, replyID string) error {
 		if groupAdmission != "" {

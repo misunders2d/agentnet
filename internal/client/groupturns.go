@@ -255,12 +255,8 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	}
 	raw, _ := json.Marshal(packet.Root)
 	lid, _ := sendID(ctx)
-	release, err := lockfile.Wait(a.spoolLockPath())
-	if err != nil {
-		return ConvSent{}, err
-	}
-	defer release()
 	var copies []outCopy
+	var seals []sealing // one per copy, sealed once the checks are done
 	var notifyFeatures []string
 	if waiting == "" {
 		notifyFeatures, _ = a.relayFeatures(ctx)
@@ -335,23 +331,8 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			if waiting != "" {
 				copies[len(copies)-1].state, copies[len(copies)-1].why = stateConvWaiting, waiting
 			}
-			copy := &copies[len(copies)-1]
-			for _, file := range m.Files {
-				att, e := a.spoolNamed(file, recipient)
-				if e != nil {
-					return ConvSent{}, e
-				}
-				copy.in.Attachments = append(copy.in.Attachments, att)
-			}
 			_, _, notify := a.convSupport(ctx, device.Address, key, notifyFeatures)
-			if notify && !copy.in.Replica && asksAttention(copy.in) && copy.in.TopicEvent == nil {
-				copy.env, e = envelope.SealAttention(copy.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, device.Fingerprint()))
-			} else {
-				copy.env, e = envelope.Seal(copy.in, a.id.Sign, recipient)
-			}
-			if e != nil {
-				return ConvSent{}, e
-			}
+			seals = append(seals, sealing{recipient, notify && !in.Replica && asksAttention(in) && in.TopicEvent == nil, protocol.NotifyChannel(conv, device.Fingerprint())})
 		}
 	}
 	// Not sent at all only when no device of another member can get it
@@ -362,6 +343,18 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			why += "; " + s.To + ": " + s.Detail
 		}
 		return ConvSent{}, errors.New(why)
+	}
+	// The network checks are done: only a file turn takes the spool lock,
+	// so cleanup never sees its ciphertext before the outbox refers to it.
+	release := func() {}
+	if len(m.Files) > 0 {
+		if release, err = lockfile.Wait(a.spoolLockPath()); err != nil {
+			return ConvSent{}, err
+		}
+	}
+	defer func() { release() }()
+	if err = a.spoolAndSeal(copies, seals, m.Files); err != nil {
+		return ConvSent{}, err
 	}
 	if err = a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
