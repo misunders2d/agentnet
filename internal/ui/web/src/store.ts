@@ -1364,6 +1364,7 @@ export class Store {
       if (e.type === "change") {
         if (e.hint === "typing") void this.loadTyping();
         else if (e.hint === "presence") { void this.load(false, false); void this.loadTyping(); }
+        else if (e.keys) void this.scopedRefetch(e.keys);
         else void this.refetch();
       }
       else if (e.type === "restart") { this.set({ conn: "updating" }); void this.recover(recovery.update); }
@@ -1376,6 +1377,20 @@ export class Store {
   async refetch(retryLegacy = false): Promise<void> {
     await Promise.all([this.load(false), this.refreshOpen()]);
     await this.retryMessageLanding(!retryLegacy);
+  }
+
+  // A change that names its keys reads again only what they touch, as Telegram
+  // applies one chat's update to that chat alone (TDLib updateChatLastMessage,
+  // td_api.tl at 03220f6b): the open chat only when a key is its own, or no
+  // chat's ("*", "p:" a peer's device threads), or it does not say its scope.
+  // "h" is the list's history-copy progress, which no chat's view reads.
+  scopedRefetch(keys: string[]): Promise<void> {
+    if (!keys.length) return this.refetch(); // the host sends none; any doubt reads everything
+    const open = this.state.open;
+    const scope = open?.kind === "dm" ? (this.state.views[open.id] as T.DMThread | undefined)?.scope : undefined;
+    const mine = !scope || keys.some(k => k !== "h" && (!k.startsWith("c:") || scope.includes(k)));
+    if (!mine) return this.load(false);
+    return this.refetch();
   }
 
   // A slow workspace overview never holds the open chat's receipt/arrival

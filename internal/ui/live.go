@@ -83,6 +83,17 @@ func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 
 func (l *Live) ViewChanges() (client.ViewChange, <-chan struct{}) { return l.a.ViewChanges() }
 
+// ViewScope is the view_dirty keys that moved after mark (GET /events "scope");
+// a mark below zero asks only where to start. ok is false while keys do not
+// name every view's scope (client ViewKeysScoped).
+func (l *Live) ViewScope(mark int64) (keys []string, next int64, ok bool) {
+	if mark < 0 {
+		next, err := l.a.ViewMark()
+		return nil, next, err == nil && l.a.ViewKeysScoped()
+	}
+	return l.a.ViewScope(mark, 64)
+}
+
 // Overview implements Provider: every thread, archived topics included.
 func (l *Live) Overview() (Overview, error) { return l.overview(true) }
 

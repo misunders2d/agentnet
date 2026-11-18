@@ -863,10 +863,12 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	stopKicks, err := listenKicks(a.home, func() {
 		a.wakeWorker()
 		a.wakeStatus() // a status another process noted (noteStatus)
-		a.changes.bump()
 		work := convHistory | convServe | convFetch | convRelease | convRecipients
 		ownKick := a.ownKick()
 		if !ownKick {
+			// Its own work was told by its store; telling the page again on each
+			// received message made every change unscoped (GET /events "scope").
+			a.changes.bump()
 			a.store.continuityDirty.Store(true)
 			work |= convRetry // a local participation record shares its public scope with guests now
 		}

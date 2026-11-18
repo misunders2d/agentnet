@@ -272,10 +272,12 @@ type keptMessages struct {
 // each chat's messages in memory and the list row reads its kept last message,
 // MessagesManager.cpp Dialog::store at 03220f6b). The chat's view_dirty mark
 // moves with any write its keys name, a write no process told of included;
-// the content revision moves with any write or wake. What no write marks
+// the content revision moves with any write or wake, so another chat's write
+// reads this one again too: a page told the change's keys (GET /events
+// "scope") does not ask for it then. What no write marks
 // (a host's connection, the clock) is settled again on every read (client
 // Resettled). fresh reads afresh, keeping nothing (overviewOracle's
-// comparison). scope is the chat's view_dirty keys.
+// comparison). scope is the chat's keys, for the page to match change events.
 func (l *Live) chatMessages(conv string, fresh bool) (msgs []client.ConvMessage, scope []string, err error) {
 	v, _ := l.a.ViewChanges() // before reading: a write meanwhile moves it past this
 	rev := v.Content
@@ -595,12 +597,15 @@ func (l *Live) dmPage(id string, page DMPage, fresh bool) (DMThread, error) {
 		if err != nil {
 			return DMThread{}, err
 		}
-		msgs, _, err := l.chatMessages(id, fresh)
+		msgs, scope, err := l.chatMessages(id, fresh)
 		if err != nil {
 			return DMThread{}, err
 		}
 		t := DMThread{ID: id, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
 			Messages: []DMMessage{}}
+		if l.a.ViewKeysScoped() {
+			t.Scope = scope
+		}
 		t.Kind, t.Title, t.Frozen = c.Kind, c.Title, c.Frozen
 		if c.Kind == protocol.ConvKindGroup {
 			t.Peer.Label = c.Title

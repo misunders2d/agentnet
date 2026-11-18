@@ -508,6 +508,7 @@ type DMThread struct {
 	Mine            bool                          `json:"mine"`
 	Frozen          string                        `json:"frozen,omitempty"` // why nothing can be sent in it
 	Messages        []DMMessage                   `json:"messages"`
+	Scope           []string                      `json:"scope,omitempty"` // the change-event keys this view depends on (GET /events "scope")
 	Older           bool                          `json:"older,omitempty"` // a page (DMPage): earlier messages are not in it
 	Newer           bool                          `json:"newer,omitempty"` // a page: later messages are not in it
 	Agents          []AgentView                   `json:"agents"`          // agents invited into it, oldest first

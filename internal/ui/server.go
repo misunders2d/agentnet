@@ -972,9 +972,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	var previous client.ViewChange
 	first := true
+	scoper, scoped := s.p.(interface {
+		ViewScope(mark int64) ([]string, int64, bool)
+	})
+	mark := int64(-1)
+	if scoped {
+		_, mark, _ = scoper.ViewScope(-1)
+	}
 	for {
 		seq, next := s.p.Changed()
 		names := []string{"change"}
+		var scope []byte
 		if detailed, ok := s.p.(interface {
 			ViewChanges() (client.ViewChange, <-chan struct{})
 		}); ok {
@@ -989,8 +997,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				if current.Typing != previous.Typing {
 					names = append(names, "typing")
 				}
+			} else if !first && scoped {
+				// Additive: "scope" names the keys this change moved, before its
+				// "change". A page that knows it reads again only views whose keys
+				// moved; an older page ignores the event name.
+				keys, moved, ok := scoper.ViewScope(mark)
+				mark = moved
+				if ok && len(keys) > 0 && current.Unscoped <= previous.Seq { // no key moved: a write no trigger scopes (a config key, a carrier row) may still show
+					scope, _ = json.Marshal(struct {
+						Seq  uint64   `json:"seq"`
+						Keys []string `json:"keys"`
+					}{seq, append([]string{}, keys...)})
+				}
 			}
 			previous = current
+		}
+		if scope != nil {
+			if _, err := fmt.Fprintf(w, "event: scope\ndata: %s\n\n", scope); err != nil {
+				return
+			}
 		}
 		for _, name := range names {
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %d\n\n", name, seq); err != nil {

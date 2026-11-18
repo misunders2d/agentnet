@@ -23,6 +23,17 @@ const perStore = "continuity_generation"
 // Use turns on sqlitedb's fresh image for a test process.
 func Use() { sqlitedb.ReuseFreshSchema(true, again) }
 
+// UseWith is Use with extra run on each copy too: a test run that gives its
+// fixture stores a step not yet appended (the first store, stepped, has none).
+func UseWith(extra func(*sql.DB) error) {
+	sqlitedb.ReuseFreshSchema(true, func(db *sql.DB) error {
+		if err := again(db); err != nil {
+			return err
+		}
+		return extra(db)
+	})
+}
+
 // Copies counts the stores that started from the image, so a run can say so.
 func Copies() int64 { return copies.Load() }
 

@@ -341,6 +341,7 @@ export interface DMThread {
   mine: boolean;
   frozen?: string;
   messages: DMMessage[] | null;
+  scope?: string[];
   older?: boolean;
   newer?: boolean;
   agents: AgentView[] | null;

@@ -13,16 +13,25 @@ type changeFeed struct {
 	seq                       uint64
 	ch                        chan struct{}
 	content, typing, presence uint64
+	unscoped                  uint64
 }
 
 // ViewChange keeps independent revision fences: coalescing a typing pulse after
-// a stored message must never hide that message's invalidation.
-type ViewChange struct{ Seq, Content, Typing, Presence uint64 }
+// a stored message must never hide that message's invalidation. Unscoped is the
+// last content change no view_dirty key names: state outside the store, or a
+// bump with no table write. A view keyed by scope reads again on it.
+type ViewChange struct{ Seq, Content, Typing, Presence, Unscoped uint64 }
 
 func newChangeFeed() *changeFeed { return &changeFeed{ch: make(chan struct{})} }
 
 func (f *changeFeed) bump() {
 	f.bumpKind("")
+}
+
+// bumpStored is the store's own signal after a committed write: its triggers
+// named the write's scope in view_dirty, so it is not unscoped.
+func (f *changeFeed) bumpStored() {
+	f.bumpKind("stored")
 }
 
 func (f *changeFeed) bumpKind(kind string) {
@@ -36,8 +45,10 @@ func (f *changeFeed) bumpKind(kind string) {
 		f.typing = f.seq
 	case "presence":
 		f.presence = f.seq
-	default:
+	case "stored":
 		f.content = f.seq
+	default:
+		f.content, f.unscoped = f.seq, f.seq
 	}
 	close(f.ch)
 	f.ch = make(chan struct{})
@@ -47,7 +58,7 @@ func (f *changeFeed) bumpKind(kind string) {
 func (f *changeFeed) view() (ViewChange, <-chan struct{}) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return ViewChange{f.seq, f.content, f.typing, f.presence}, f.ch
+	return ViewChange{f.seq, f.content, f.typing, f.presence, f.unscoped}, f.ch
 }
 
 func (f *changeFeed) current() (uint64, <-chan struct{}) {
@@ -74,6 +85,16 @@ func (a *Agent) NoteChange() {
 		a.store.continuityDirty.Store(true)
 	}
 	a.changes.bump()
+}
+
+// noteStoredChange is NoteChange for writes this process made through the
+// store's writer without its own signal: their view_dirty triggers named
+// their scope, so the change stays scoped (GET /events "scope").
+func (a *Agent) noteStoredChange() {
+	if a.store != nil {
+		a.store.continuityDirty.Store(true)
+	}
+	a.changes.bumpStored()
 }
 
 // changed tells the store's owner that local state changed.
