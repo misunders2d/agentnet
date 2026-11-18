@@ -1,5 +1,74 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-748 read path: chat open, list, updates — unreleased, November 18, 2026
+
+Owner: opening a chat takes seconds; every interaction lags behind Telegram and
+Slack. Branch `perf/read-path`. Counterparts read in source: TDLib `03220f6b`,
+Telegram Desktop `a532622b`.
+
+**Paths compared (C1), current shape against the counterpart.**
+
+| Path | Telegram (source) | AgentNet before | Now |
+|---|---|---|---|
+| Store reads | not compared (SQLite WAL: readers do not wait for the writer) | one SQLite connection: a page read waited behind every write | plain reads on a read-only pool beside the one writer (S1) |
+| Open a chat | messages kept per chat, read once (`MessagesManager::Dialog::store`, `MessagesManager.cpp:3010`) | whole chat projected 3+ times per open (DM, read mark, list, refresh); each projection re-read every chat for continuity and every sender's person | one projection per change, shared by the chat and its list row; one chat looked up, not all (S3) |
+| Refresh on open | — | every held copy's status, one by one | ≤20 held copies from one indexed query, asked in parallel (S3) |
+| History paging | `getChatHistory(from_message_id, offset −99..0, limit ≤100)` (`td_api.tl:12959`); first page 30, later 50, around the unread message at `offset = −limit/2` (`history_widget.cpp:231–232`, `firstLoadMessages` 5067) | whole chat only | `/api/dm?from&offset&limit`, same bounds, opening at the unread message (S4 host). Comic still loads the whole chat: see below |
+| Chat list | last message and read state kept per chat, sent as `updateChatLastMessage` / `updateChatReadInbox` (`td_api.tl:11413`, `11430`) | kept per chat since `ac2ec42c` (`view_dirty`) | unchanged; its row now reuses the open chat's projection |
+| Updates | one typed update per changed chat or message (`updateNewMessage` 11295, `updateMessageContent` 11316) | "something changed": the page read the open chat and the list again on every write anywhere | the event names the scopes it moved; the page reads the open chat only when its own moved (S2, inactive until the schema step) |
+| Render | — | every list reload re-rendered every mounted message; per request, a scan of the whole chat (nested for logical ids) | messages see a stable overview; answers found through a per-chat index; activity computed once per messages (S5) |
+
+**Adaptations, and why.**
+- Typed per-message patches were not taken: they need a per-message change log
+  (a schema step) and the browser re-deriving host-only fields (exec staleness,
+  topics, unread). Scoped keys plus the host's kept per-chat projection give the
+  same "only what changed" for the cost of one trigger step.
+- The kept projection is keyed by the content revision and the chat's
+  `view_dirty` mark: a write another process made and did not announce still
+  reads again (TestComposerOwnGroupCurrentAttempt caught a revision-only key).
+  Exec staleness depends on presence and the clock, so it is settled per read.
+- Pages slice the chat's projection, not indexed rows: topics, unread and
+  continuity are of the whole chat, and the projection is kept, so a page costs
+  what the kept chat costs. Indexed paging is a later step.
+- Comic does not page yet (S4 web not adopted): it already mounts only the
+  newest 24 message groups (`Conversation.timeline.tsx` `INITIAL_PAGE`), and the
+  measured browser cost of the whole chat (Comic's actual Store in node: JSON parse, keep, the open; React render not included) is 2 ms parse, 16 ms open and 7 ms per refresh at 640 messages (259 KiB), and 16 ms, 58 ms and 61 ms at 6400 (2.5 MiB), against under 1 ms for a page of 50. Not worth the risk at today's sizes; the step for a 10x chat. Adopting pages needs
+  jump-to-quote, topics, search, `markUnread(fromHere)` and the invite sheet to
+  load what they need, and the read-entry snapshot (MEL-692/693) kept exact.
+- Scoped keys (S2) need every table a view reads to name its scope.
+  `client.ViewCoverSchema` is that step, written here and not appended (the send
+  branch owns this phase's step); `TestViewCoverNamesEveryTable` fails on a new
+  table that chooses nothing. Until it is appended the host sends no keys and
+  the page reads everything, as before. With it, the send branch must also note
+  the background flush as `noteStoredChange` (`backgroundsend.go`): measured,
+  0 of 20 change events spare the open chat under another chat's traffic with
+  `NoteChange`, 20 of 20 with `noteStoredChange`.
+- `h` (the list's history-copy progress) does not reload an open chat: no chat
+  projection reads those tables. No keys, or empty keys, read everything.
+
+**Measured** (`TestOpenChatMeasure`, `AGENTNET_OPEN_MEASURE=1`: a DM plus a group,
+received rows copied to 640 and 6400; "busy" = the peer sending into the group
+throughout; shared 8-core laptop, so ±30%). "Chat shown" is `/api/dm` on open;
+"whole open" is DM, read mark, list, DM, refresh.
+
+| Size, load | main `4f867fae` shown / whole | S1 | S1+S3 |
+|---|---|---|---|
+| 640 idle | 157 ms / 471 ms | 334 ms / 1.08 s | 72 ms / 237 ms |
+| 640 busy | 2.22 s / 5.10 s | 661 ms / 1.40 s | 173 ms / 586 ms |
+| 6400 idle | 2.10 s / 4.98 s | 1.36 s / 3.36 s | 423 ms / 1.19 s |
+| 6400 busy | 54.0 s / 1 m 54 s | 2.81 s / 7.82 s | 630 ms / 2.40 s |
+
+A first page of 50 costs about the same as the whole kept chat (66–75 ms at
+640, 320–510 ms at 6400). The remaining host cost at 6400 is topic summaries
+(25% of `dmPage` CPU).
+
+| Fix | Commit | Regression |
+|---|---|---|
+| Reads beside the writer | `ff1bbb5e` | `TestChatProjectionReadsBesideAHeldWrite` (fails at 10 s with reads on the writer), `TestReaderReadsBesideAHeldWriteAndRefusesWrites` |
+| One projection per change; one chat looked up; held copies indexed; sender words memoized; paging API | `abacd697` | every UI test compares each kept DM with a fresh read (`dmOracle`), `TestResettledSettlesKeptRowsAgain`, `TestDMPageBounds` |
+| Scoped change events | `10f15fc9` | `TestViewCoverNamesEveryTable`, `TestScopeEventPrecedesItsChange`, `TestScopedChangeReadsOnlyTouchedViews` (fails with keys ignored), `workspaces_check.mjs`; the UI suite passes with `AGENTNET_TEST_VIEW_COVER=1` |
+| Render work per change | `3f1bdb61` | the rendered and Comic suites |
+
 ## Agent needs_human result is a chat message — unreleased, November 9, 2026
 
 Owner, 2026-11-09: "we need to remove these idiotic popup windows with 'asks' -
