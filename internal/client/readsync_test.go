@@ -1528,6 +1528,14 @@ func TestReadMarkCopiesLeaveTheChatMark(t *testing.T) {
 	eventually(t, "the turn on both own devices", func() bool {
 		return len(convBodies(t, w.alice, conv)) == 1 && len(convBodies(t, phone, conv)) == 1
 	})
+	// The laptop pins its phone's key the first time either reaches the
+	// other (peers marks every chat, "*"). Under load that came after the
+	// read and moved the mark; it is no copy of the read, so it comes first.
+	eventually(t, "the laptop has pinned its phone", func() bool {
+		var n int
+		w.alice.store.db.QueryRow(`SELECT count(*) FROM peers WHERE address = ?`, phone.Address).Scan(&n)
+		return n == 1
+	})
 	settled := func() int64 { // the chat's mark, once nothing has moved it for a while
 		_, last, _ := w.alice.ChatViewMark(conv)
 		for stable := time.Now(); time.Since(stable) < 500*time.Millisecond; time.Sleep(50 * time.Millisecond) {
