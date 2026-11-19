@@ -144,6 +144,8 @@ func deliverDeviceHistory(t *testing.T, a, b *Agent, sub string) int {
 	// sender writes its own background pages beside these). It is held for
 	// proof until that original is here; admitting the original asks b's
 	// daemon for a proof pass (admitDeviceHistory), which admits it.
+	// One deadline for the whole batch, as long as eventually waits.
+	deadline := time.Now().Add(15 * time.Second)
 	for _, env := range envs {
 		delivered := func() bool {
 			s, e := b.store.disposition(env.ID)
@@ -152,7 +154,6 @@ func deliverDeviceHistory(t *testing.T, a, b *Agent, sub string) int {
 		if delivered() {
 			continue
 		}
-		deadline := time.Now().Add(15 * time.Second)
 		for !delivered() {
 			if time.Now().After(deadline) {
 				s, e := b.store.disposition(env.ID)
