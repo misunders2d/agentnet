@@ -17,9 +17,12 @@ import (
 
 // B1: a burst accepted in one chat drains in batches: one round of Hub checks,
 // one transaction and one change for many messages, in their order.
-// AGENTNET_DRAIN_N sizes it (default 1000); DRAIN_SUMMARY reports the rates.
+// AGENTNET_DRAIN_N sizes it (default 1000, 200 under race); DRAIN_SUMMARY reports the rates.
 func TestQueuedBurstDrainsInBatches(t *testing.T) {
 	n := 1000
+	if raceOn {
+		n = 200 // still 4+ batches, 2+ pages
+	}
 	if v, e := strconv.Atoi(os.Getenv("AGENTNET_DRAIN_N")); e == nil && v > 0 {
 		n = v
 	}

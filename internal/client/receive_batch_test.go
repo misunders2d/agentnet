@@ -12,9 +12,12 @@ import (
 
 // B2: a device coming back to a backlog takes it in pages: one transaction
 // and one acknowledgement page for many messages, each stored once, in order.
-// AGENTNET_BACKLOG_N sizes it (default 1000); BACKLOG_SUMMARY reports the rate.
+// AGENTNET_BACKLOG_N sizes it (default 1000, 200 under race); BACKLOG_SUMMARY reports the rate.
 func TestReceiveBacklogInPages(t *testing.T) {
 	n := 1000
+	if raceOn {
+		n = 200 // still 4+ batches, 2+ pages
+	}
 	if v, e := strconv.Atoi(os.Getenv("AGENTNET_BACKLOG_N")); e == nil && v > 0 {
 		n = v
 	}
