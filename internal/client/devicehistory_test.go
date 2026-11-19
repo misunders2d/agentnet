@@ -138,7 +138,20 @@ func deliverDeviceHistory(t *testing.T, a, b *Agent, sub string) int {
 	rows.Close()
 	for _, env := range envs {
 		groupGovernanceDeliver(t, a, b, env)
-		if s, e := b.store.disposition(env.ID); e != nil || s != protocol.StateDelivered {
+	}
+	// A copy may come before the copy carrying the original it names (the
+	// sender writes its own background pages beside these). It is held for
+	// proof until that original is here; one proof pass then admits it.
+	for _, env := range envs {
+		delivered := func() bool {
+			s, e := b.store.disposition(env.ID)
+			return e == nil && s == protocol.StateDelivered
+		}
+		if !delivered() {
+			b.retryProof(tctx(t))
+		}
+		if !delivered() {
+			s, e := b.store.disposition(env.ID)
 			t.Fatalf("%s %s: %s %s %v", sub, env.ID, s, heldReason(t, b, env.ID), e)
 		}
 	}
