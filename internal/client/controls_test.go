@@ -581,16 +581,14 @@ func TestForeignControlNeverStoresOrDropsAnything(t *testing.T) {
 	if _, err := phone.Retract(tctx(t), pref, ""); err != nil {
 		t.Fatal(err)
 	}
+	// The deletion is stored first; its files and its text go right after.
+	var body string
 	eventually(t, "the laptop applies the author's deletion", func() bool {
 		m, ok := findLID(t, w.alice, conv, turn.LID)
 		_, err := os.Stat(w.alice.downloadPath(onLaptop.Attachments[0].BlobID))
-		return ok && m.Deleted && m.Body == "" && errors.Is(err, os.ErrNotExist)
+		w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE id = ?`, onLaptop.ID).Scan(&body)
+		return ok && m.Deleted && m.Body == "" && errors.Is(err, os.ErrNotExist) && body == ""
 	})
-	var body string
-	w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE id = ?`, onLaptop.ID).Scan(&body)
-	if body != "" {
-		t.Fatalf("the deleted text is still stored: %q", body)
-	}
 	var atts int
 	w.alice.store.db.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, onLaptop.ID).Scan(&atts)
 	if atts != 1 {
