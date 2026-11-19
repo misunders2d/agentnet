@@ -294,8 +294,11 @@ func (a *Agent) admitGroupControlHistory(ctx context.Context, env envelope.Envel
 		return hold(reasonInvalid, err.Error())
 	}
 	result, err := a.store.addHistoryInbox(item.inner(in.Conv), item.At, item.FromKey, env.From, env.ID, fromQuarantine, func(tx *sql.Tx) error {
-		_, e := tx.Exec(`UPDATE inbox SET group_admission=? WHERE id=?`, item.GroupAdmission, item.ID)
-		return e
+		if _, e := tx.Exec(`UPDATE inbox SET group_admission=? WHERE id=?`, item.GroupAdmission, item.ID); e != nil {
+			return e
+		}
+		// A deletion's text goes in this commit; applyRetraction does the rest.
+		return redactRetractionIn(tx, item.inner(in.Conv), a.Self().Fingerprint())
 	}, func(tx *sql.Tx) error { return check(tx) })
 	if err != nil {
 		return err
