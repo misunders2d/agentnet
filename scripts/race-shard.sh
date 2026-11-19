@@ -39,6 +39,8 @@ run_partition() {
 				if ($0=="TestGroupHistoryWitnessMissingOriginalCiphertext") part=5
 				if ($0=="TestWorkerStartupTimingAndLaunchFailure") part=23
 				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=2
+				if ($0=="TestRoomReciprocalRootQuestions") part=19
+				if ($0=="TestGroupParticipationHistoryInvalidUpgradeRecovery") part=21
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
