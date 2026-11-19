@@ -461,7 +461,9 @@ func currentSendKey(q dbq, address, fp string) error {
 		if err = json.Unmarshal([]byte(pending.String), &offered); err != nil {
 			return err
 		}
-		return &KeyChangedError{address, pinned.Fingerprint(), offered.Fingerprint()}
+		if !sameKeys(offered, pinned) { // a record naming the pinned key itself is no change
+			return &KeyChangedError{address, pinned.Fingerprint(), offered.Fingerprint()}
+		}
 	}
 	if pinned.Fingerprint() != fp {
 		return &KeyChangedError{address, fp, pinned.Fingerprint()}
