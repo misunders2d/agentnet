@@ -186,7 +186,12 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 	if err != nil {
 		return nil, err
 	}
-	defer st.db.Close()
+	handedOver := false
+	defer func() {
+		if !handedOver {
+			st.db.Close()
+		}
+	}()
 	if enrolled, _ := st.config("enrolled"); enrolled == "1" {
 		return nil, fmt.Errorf("%s already holds an enrolled agent", home)
 	}
@@ -245,8 +250,8 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 	if err := st.deleteConfig("join_secret"); err != nil {
 		return nil, err
 	}
-	st.db.Close()
-	return Open(home)
+	handedOver = true
+	return openAgent(home, id, st)
 }
 
 // ErrAddressTaken means the Hub refused a join because the address is
@@ -267,6 +272,14 @@ func Open(home string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openAgent(home, id, st)
+}
+
+// openAgent is Open on a store already open: join hands over the one it
+// enrolled with rather than closing it and opening the file again (each
+// opening parses the whole schema on the writer and on the reader). st is
+// closed on any error.
+func openAgent(home string, id *identity.Identity, st *store) (*Agent, error) {
 	if enrolled, _ := st.config("enrolled"); enrolled != "1" {
 		st.db.Close()
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run `agentnet join` again with the same invitation "+
@@ -293,6 +306,7 @@ func Open(home string) (*Agent, error) {
 	st.onChange = a.changes.bumpStored
 	st.onJobReady = func() { a.wakeWorkerNow(); a.notifyOwnWork() }
 	var hubURL, cert string
+	var err error
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
 			cert, err = st.config("hub_cert")
