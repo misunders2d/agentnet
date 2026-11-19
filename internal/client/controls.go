@@ -1285,7 +1285,10 @@ func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in en
 		if err = topicAudienceAuthorization(tx, in, members, a.Address); err != nil {
 			return err
 		}
-		return humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint())
+		if err = humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+		return redactRetractionIn(tx, in, a.Self().Fingerprint())
 	})
 	if err != nil {
 		return hold(reasonProof, err.Error())
@@ -1778,6 +1781,16 @@ func controlAuthorized(q dbq, m dmMembers, in envelope.Inner, author string) (re
 const controlOtherPerson = "only the person who sent a message edits or deletes it"
 
 // applyRetraction does what an authorized, stored retraction does here.
+// redactRetractionIn is applyRetraction's text part, run inside the
+// transaction that stores in: a stored deletion never sits beside its text.
+// The rest (requests, cached files, history copies) follows the commit.
+func redactRetractionIn(q execer, in envelope.Inner, self string) error {
+	if in.Sub != envelope.SubRetraction || in.Ref == nil {
+		return nil
+	}
+	return redactRetractedText(q, ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}, self)
+}
+
 func (a *Agent) applyRetraction(in envelope.Inner) {
 	if in.Sub != envelope.SubRetraction {
 		return
