@@ -1780,7 +1780,6 @@ func controlAuthorized(q dbq, m dmMembers, in envelope.Inner, author string) (re
 // is refused (held diagnostic control_target_person_mismatch).
 const controlOtherPerson = "only the person who sent a message edits or deletes it"
 
-// applyRetraction does what an authorized, stored retraction does here.
 // redactRetractionIn is applyRetraction's text part, run inside the
 // transaction that stores in: a stored deletion never sits beside its text.
 // The rest (requests, cached files, history copies) follows the commit.
@@ -1791,6 +1790,7 @@ func redactRetractionIn(q execer, in envelope.Inner, self string) error {
 	return redactRetractedText(q, ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}, self)
 }
 
+// applyRetraction does what an authorized, stored retraction does here.
 func (a *Agent) applyRetraction(in envelope.Inner) {
 	if in.Sub != envelope.SubRetraction {
 		return
