@@ -388,6 +388,10 @@ type store struct {
 	db              *storeDB
 	onChange        func() // set by the Agent: local state changed (changes.go)
 	onJobReady      func() // local own-agent request committed; wake before remote delivery
+	// committed, when set, runs on the committing goroutine right after each
+	// commit that signals a change, before anything that follows the commit:
+	// tests check there what a reader sees at that moment.
+	committed atomic.Pointer[func()]
 }
 
 // storeDB is the store's one writer, which serialises every write and

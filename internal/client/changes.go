@@ -103,6 +103,9 @@ func (a *Agent) noteStoredChange() {
 
 // changed tells the store's owner that local state changed.
 func (s *store) changed() {
+	if f := s.committed.Load(); f != nil {
+		(*f)()
+	}
 	if s.onChange != nil {
 		s.onChange()
 	}
