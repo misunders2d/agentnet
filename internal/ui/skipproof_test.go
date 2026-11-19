@@ -133,7 +133,12 @@ func TestReadMarkKeepsTheOpenChat(t *testing.T) {
 		}
 		return ids
 	}
-	waitOpen(t, func() bool { return len(unread(mustDM(t, live, conv))) == 3 })
+	// Bob's copy of the DM arrives with the first message; until then there is
+	// no conversation to read.
+	waitOpen(t, func() bool {
+		th, err := live.DM(conv)
+		return err == nil && len(unread(th)) == 3
+	})
 	side, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(10000)")
 	if err != nil {
 		t.Fatal(err)
