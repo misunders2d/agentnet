@@ -581,14 +581,25 @@ func TestForeignControlNeverStoresOrDropsAnything(t *testing.T) {
 	if _, err := phone.Retract(tctx(t), pref, ""); err != nil {
 		t.Fatal(err)
 	}
-	// The deletion is stored first; its files and its text go right after.
-	var body string
 	eventually(t, "the laptop applies the author's deletion", func() bool {
+		// The deletion and the removal of its text are one commit: once a
+		// reader sees the deletion stored, the text is gone (read in that order).
+		var stored int
+		w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv = ? AND sub = ? AND ref_id = ?`, conv, envelope.SubRetraction, turn.LID).Scan(&stored)
+		var text string
+		w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE id = ?`, onLaptop.ID).Scan(&text)
+		if stored > 0 && text != "" {
+			t.Fatalf("the deletion is stored beside its text: %q", text)
+		}
 		m, ok := findLID(t, w.alice, conv, turn.LID)
 		_, err := os.Stat(w.alice.downloadPath(onLaptop.Attachments[0].BlobID))
-		w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE id = ?`, onLaptop.ID).Scan(&body)
-		return ok && m.Deleted && m.Body == "" && errors.Is(err, os.ErrNotExist) && body == ""
+		return ok && m.Deleted && m.Body == "" && errors.Is(err, os.ErrNotExist)
 	})
+	var body string
+	w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE id = ?`, onLaptop.ID).Scan(&body)
+	if body != "" {
+		t.Fatalf("the deleted text is still stored: %q", body)
+	}
 	var atts int
 	w.alice.store.db.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, onLaptop.ID).Scan(&atts)
 	if atts != 1 {
