@@ -600,7 +600,11 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 				return err
 			}
 		}
-		return saveSharedTopicMetadata(tx, orig, item.FromKey)
+		if err := saveSharedTopicMetadata(tx, orig, item.FromKey); err != nil {
+			return err
+		}
+		// A deletion's text goes in this commit; applyRetraction does the rest.
+		return redactRetractionIn(tx, orig, a.Self().Fingerprint())
 	}
 	var guards []func(*sql.Tx) error
 	if envelope.TopicOrganization(orig.TopicEvent) {

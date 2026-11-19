@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -261,6 +263,12 @@ func (a *Agent) continuityDMs(conv string) ([]ConversationInfo, error) {
 	if e != nil {
 		return nil, e
 	}
+	return continuityFamily(rows, aliases, conv), nil
+}
+
+// continuityFamily is conv's DM and, when its person was recovered, the
+// person's earlier DMs, oldest first: one pass over rows read once.
+func continuityFamily(rows []ConversationInfo, aliases map[string]string, conv string) []ConversationInfo {
 	var peer string
 	for _, r := range rows {
 		if r.ID == conv && r.Kind == protocol.ConvKindDM {
@@ -269,7 +277,7 @@ func (a *Agent) continuityDMs(conv string) ([]ConversationInfo, error) {
 		}
 	}
 	if peer == "" {
-		return nil, nil
+		return nil
 	}
 	recovered := false
 	for id, to := range aliases {
@@ -289,8 +297,36 @@ func (a *Agent) continuityDMs(conv string) ([]ConversationInfo, error) {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out, nil
+	return out
 }
+
+// continuityViews is continuityFamily's first chat for every DM at once, in
+// one pass: the list asked each DM's family over all rows (O(chats²): 570 ms
+// at 3000 chats). A DM not in a recovered person's family is its own view.
+func continuityViews(rows []ConversationInfo, aliases map[string]string) map[string]string {
+	recovered := map[string]bool{}
+	for id, to := range aliases {
+		if id != to {
+			recovered[to] = true
+		}
+	}
+	first := map[string]ConversationInfo{}
+	for _, r := range rows {
+		if p := aliases[r.Peer.Person]; r.Kind == protocol.ConvKindDM && recovered[p] {
+			if f, ok := first[p]; !ok || r.Created < f.Created || r.Created == f.Created && r.ID < f.ID {
+				first[p] = r
+			}
+		}
+	}
+	views := map[string]string{}
+	for _, r := range rows {
+		if p := aliases[r.Peer.Person]; r.Kind == protocol.ConvKindDM && recovered[p] {
+			views[r.ID] = first[p].ID
+		}
+	}
+	return views
+}
+
 func (a *Agent) ContinuityConversation(conv string) (string, error) {
 	rows, e := a.continuityDMs(conv)
 	if e != nil {
@@ -309,6 +345,11 @@ func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInf
 	if e != nil {
 		return nil, e
 	}
+	stored, e := a.store.conversations() // once, not once per DM
+	if e != nil {
+		return nil, e
+	}
+	views := continuityViews(stored, aliases)
 	seen := map[string]bool{}
 	out := rows[:0]
 	for _, r := range rows {
@@ -316,9 +357,9 @@ func (a *Agent) projectContinuityDMs(rows []ConversationInfo) ([]ConversationInf
 			out = append(out, r)
 			continue
 		}
-		view, e := a.ContinuityConversation(r.ID)
-		if e != nil {
-			return nil, e
+		view := r.ID
+		if v := views[r.ID]; v != "" {
+			view = v
 		}
 		if seen[view] {
 			continue
@@ -611,6 +652,70 @@ func (a *Agent) MessagingConversations() ([]ConversationInfo, error) {
 	return a.projectContinuityDMs(rows)
 }
 
+// MessagingConversation is the one chat MessagingConversations lists under id
+// (a recovered person's chat resolves to its continuity view), reading only
+// that chat and its continuity family instead of every chat.
+func (a *Agent) MessagingConversation(id string) (ConversationInfo, bool, error) {
+	family, e := a.continuityDMs(id)
+	if e != nil {
+		return ConversationInfo{}, false, e
+	}
+	only, view := []string{id}, id
+	if len(family) > 0 {
+		only, view = nil, family[0].ID
+		for _, r := range family {
+			only = append(only, r.ID)
+		}
+	}
+	rows, e := a.conversationsIn(only...)
+	if e != nil {
+		return ConversationInfo{}, false, e
+	}
+	if rows, e = a.projectContinuityDMs(rows); e != nil {
+		return ConversationInfo{}, false, e
+	}
+	for _, c := range rows {
+		if c.ID == view {
+			return c, true, nil
+		}
+	}
+	return ConversationInfo{}, false, nil
+}
+
+// HeldCopies are up to limit of the chat's sent copies the Hub still holds,
+// newest first, over its continuity family as its messages show it: what
+// opening the chat asks the Hub about. One indexed read, not the whole chat.
+func (a *Agent) HeldCopies(conv string, limit int) ([]string, error) {
+	family, e := a.continuityDMs(conv)
+	if e != nil {
+		return nil, e
+	}
+	convs := []any{conv}
+	if len(family) > 0 {
+		convs = convs[:0]
+		for _, r := range family {
+			convs = append(convs, r.ID)
+		}
+	}
+	args := append(append([]any{}, convs...), a.Self().Fingerprint(), limit)
+	rows, e := a.store.db.Query(`SELECT o.id FROM outbox o WHERE o.state='custody' AND o.conv IN (?`+strings.Repeat(",?", len(convs)-1)+`)
+		AND coalesce(o.sub,'') NOT IN ('read-sync','root-sync','history','file','drive-space','group-proof','group-context','group-invite','group-consent','group-withdrawal')
+		AND o.ref_id IS NULL AND NOT `+erasedOut+` ORDER BY o.created_ms DESC, o.id LIMIT ?`, args...)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if e := rows.Scan(&id); e != nil {
+			return nil, e
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // Local-only rows are excluded from signed history and native work. Their
 // deterministic IDs survive retries, duplicate catch-up and process restarts.
 func (a *Agent) continuityNotices(conv string, family []ConversationInfo) ([]ConvMessage, error) {
@@ -749,8 +854,18 @@ func logicalGroupMember(q dbq, p GroupContext, person string) (protocol.GroupMem
 // Reuse the existing proof/current-context carriers and durable outbox batch
 // markers. Recovery shares current group state, never historical ciphertext or
 // execution grants, and never asks a group admin to sign another membership.
-func (a *Agent) syncContinuityGroups(ctx context.Context) error {
+// syncContinuityGroups gives a recovered person's current devices each
+// group's signed context before any turn of it. A send checks only its own
+// group (only), and only when the continuity inputs or the group's context
+// changed since its devices were last found complete; "" checks every group.
+func (a *Agent) syncContinuityGroups(ctx context.Context, only string) error {
 	if have, e := hasContinuity(a.store.db); e != nil || !have {
+		return e
+	}
+	// Read before every other input: a change during this pass leaves a
+	// stale key behind, so the next send checks again.
+	var token string
+	if e := a.store.db.QueryRow(`SELECT token FROM continuity_generation`).Scan(&token); e != nil {
 		return e
 	}
 	aliases, e := logicalPersons(a.store)
@@ -766,32 +881,32 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 	if len(recovered) == 0 {
 		return nil
 	}
-	rows, e := a.store.db.Query(`SELECT conv FROM group_context ORDER BY conv`)
-	if e != nil {
-		return e
-	}
-	var convs []string
-	for rows.Next() {
-		var conv string
-		if e = rows.Scan(&conv); e != nil {
-			rows.Close()
+	convs := []string{only}
+	if only == "" {
+		if convs, e = groupContextConvs(a.store.db); e != nil {
 			return e
 		}
-		convs = append(convs, conv)
 	}
-	e = rows.Err()
-	rows.Close()
-	if e != nil {
-		return e
-	}
-	release, e := lockfile.Wait(a.spoolLockPath())
-	if e != nil {
-		return e
-	}
-	defer release()
+	var release func() // the spool lock, only once a copy is made
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	for _, conv := range convs {
-		packet, e := groupTurnPacketIn(a.store.db, conv)
-		if e != nil {
+		var raw []byte
+		if e = a.store.db.QueryRow(`SELECT payload FROM group_context WHERE conv=?`, conv).Scan(&raw); errors.Is(e, sql.ErrNoRows) {
+			continue
+		} else if e != nil {
+			return e
+		}
+		sum := sha256.Sum256(raw)
+		key := token + "/" + hex.EncodeToString(sum[:])
+		if done, _ := a.groupsSynced.Load(conv); done == key {
+			continue
+		}
+		var packet GroupContext
+		if e = json.Unmarshal(raw, &packet); e != nil {
 			return e
 		}
 		if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
@@ -824,6 +939,11 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 				if present {
 					continue
 				}
+				if release == nil {
+					if release, e = lockfile.Wait(a.spoolLockPath()); e != nil {
+						return e
+					}
+				}
 				copies, e := a.groupDeliveryTo(ctx, packet, payloads, dev)
 				if e != nil {
 					return e
@@ -852,8 +972,26 @@ func (a *Agent) syncContinuityGroups(ctx context.Context) error {
 				}
 			}
 		}
+		a.groupsSynced.Store(conv, key)
 	}
 	return nil
+}
+
+func groupContextConvs(q dbq) ([]string, error) {
+	rows, e := q.Query(`SELECT conv FROM group_context ORDER BY conv`)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	var convs []string
+	for rows.Next() {
+		var conv string
+		if e = rows.Scan(&conv); e != nil {
+			return nil, e
+		}
+		convs = append(convs, conv)
+	}
+	return convs, rows.Err()
 }
 
 // UI controls keep the selected message's original signed conversation. A

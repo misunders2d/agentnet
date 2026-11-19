@@ -321,7 +321,9 @@ func TestDMLiveExternalPeerContext(t *testing.T) {
 	})
 	// An already queued captured-audience reply still rechecks its parent.
 	faults := injectFaults(peerHost)
-	faults.add("POST", "/v1/messages", 3, false)
+	// Every post fails until the reply is queued: the host's own background
+	// posts share these faults, so a fixed count could be used up elsewhere.
+	faults.add("POST", "/v1/messages", 1<<20, false)
 	queued, err := peerHost.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindAnswer, PID: peer.PID, AgentID: record.ID, ReplyTo: q.ID, Body: "QUEUED_PEER_ANSWER", Origin: envelope.OriginAgentPrefix + "stub", Emotion: "neutral"})
 	if err != nil || queued.State != stateQueued {
 		t.Fatalf("queued reply: %+v %v", queued, err)
@@ -329,6 +331,9 @@ func TestDMLiveExternalPeerContext(t *testing.T) {
 	if _, err := peerHost.store.db.Exec(`UPDATE outbox SET reply_to=? WHERE lid=?`, protocol.NewID(), queued.LID); err != nil {
 		t.Fatal(err)
 	}
+	faults.mu.Lock()
+	faults.rules = nil
+	faults.mu.Unlock()
 	if err := peerHost.FlushOutbox(tctx(t)); err != nil {
 		t.Fatal(err)
 	}

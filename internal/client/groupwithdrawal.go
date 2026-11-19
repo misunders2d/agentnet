@@ -31,7 +31,7 @@ func (a *Agent) latestGroupWithdrawal(ctx context.Context, w protocol.GroupWithd
 	return nil
 }
 
-func groupWithdrawalRows(db *sql.DB, table, conv string) ([]protocol.GroupWithdrawal, error) {
+func groupWithdrawalRows(db dbq, table, conv string) ([]protocol.GroupWithdrawal, error) {
 	// Only these private constant table names are supplied by callers.
 	rows, err := db.Query("SELECT record FROM "+table+" WHERE conv=?", conv)
 	if err != nil {

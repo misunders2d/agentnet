@@ -35,7 +35,9 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 		}
 	}
 unwrapped:
-	if db, ok := source.(*sql.DB); ok {
+	if db, ok := source.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	}); ok {
 		tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return err
@@ -959,13 +961,13 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err := a.prepareRemoteCopies(ctx, binding, copies, out.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutboxGuarded(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, out.beforeStore, binding); err != nil {
+	if err := a.storeConvOutbox(ctx, copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
 	if queuedSend(ctx) {
-		return a.queuedConv(copies, copies[0].env.ID, in.LID), nil
+		return a.queuedConv(ctx, copies, copies[0].env.ID, in.LID), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {

@@ -77,6 +77,7 @@ func TestClaudeRouteCaptureAnyBuildOwnDigest(t *testing.T) {
 	var got struct {
 		Route claudeNativeRoute `json:"route"`
 		Error string            `json:"error"`
+		Reads int               `json:"reads"`
 	}
 	if e = json.Unmarshal(bytes.TrimSpace(raw), &got); e != nil {
 		t.Fatalf("%v %s", e, raw)
@@ -85,6 +86,9 @@ func TestClaudeRouteCaptureAnyBuildOwnDigest(t *testing.T) {
 	real, _ := filepath.EvalSymlinks(config)
 	if got.Error != "" || got.Route.Binary != claude || got.Route.SHA256 != digest || got.Route.PID < 1 || got.Route.Projects != filepath.Join(real, "projects") || got.Route.Source != claudeChannelSource {
 		t.Fatalf("captured %+v %q", got.Route, got.Error)
+	}
+	if got.Reads != 1 {
+		t.Fatalf("capture read the executable %d times, want 1", got.Reads)
 	}
 }
 

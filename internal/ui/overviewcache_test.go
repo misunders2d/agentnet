@@ -35,6 +35,7 @@ func init() {
 		overviewDiffered.Add(1)
 		fmt.Fprintln(os.Stderr, "OVERVIEW CACHE:", diff)
 	}
+	dmOracle = overviewOracle
 	overviewChatBuilt = func(conv string) {
 		n, _ := chatBuilds.LoadOrStore(conv, new(atomic.Int64))
 		n.(*atomic.Int64).Add(1)
@@ -45,6 +46,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	fmt.Fprintf(os.Stderr, "overview cache: %d kept lists equal a fresh read\n", overviewCompared.Load())
 	fmt.Fprintf(os.Stderr, "schema image: %d fixture stores started from a copy, not schema proof\n", schematest.Copies())
+	fmt.Fprintf(os.Stderr, "scoped keys: %d skipped chat reads left the chat as it was\n", skipsChecked.Load())
 	if n := overviewDiffered.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "overview cache: %d kept lists differed from a fresh read\n", n)
 		code = 1

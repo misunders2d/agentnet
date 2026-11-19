@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,6 +79,23 @@ func (e *ExecView) settle(connected bool, answerStatus string, answerAt int64, n
 		e.State, e.At, e.Detail = answerStatus, answerAt, ""
 	}
 	e.Stale = !connected || (e.State == stateRunning && now-e.At > int64(ExecRunningMaxAge/time.Second))
+}
+
+// Resettled is a kept copy of a chat's messages as of now: whether each
+// request's report is old news depends on its host being connected and on the
+// clock (settle), which no store write marks. The kept rows are not changed.
+func (a *Agent) Resettled(msgs []ConvMessage) []ConvMessage {
+	out := slices.Clone(msgs)
+	now := time.Now().Unix()
+	for i := range out {
+		if e := out[i].Exec; e != nil {
+			c := *e
+			revoked := c.State == "unavailable" && c.Stale // projectRevokedExec: a stored fact
+			c.Stale = revoked || !a.hostConnected(c.Host) || (c.State == stateRunning && now-c.At > int64(ExecRunningMaxAge/time.Second))
+			out[i].Exec = &c
+		}
+	}
+	return out
 }
 
 // legacyAnswer finds, among a device thread's messages, the received answer
@@ -440,6 +458,23 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	if errors.Is(err, errNativeActivityDeferred) {
 		return true // keep only latest detail due; other requests still progress
 	}
+	if errors.Is(err, ErrNoControls) && res.ID == "" && ref.Conv == "" {
+		// Not told, and not "never to be told" either, until the requester's
+		// record says what it reads: one still to come (its daemon has not
+		// connected since it started) is no proof that it cannot read this.
+		// The members push that announces the record wakes the next pass.
+		a.statusAwaitsCaps.Store(true)
+		advertised, reads := a.peerReads(sctx, sender, capability)
+		if !advertised {
+			return true // still due; later requests still progress
+		}
+		if reads && strings.Contains(err.Error(), WaitPeerUpdate) {
+			// The refusal read the profile before the record arrived (the
+			// push may have come before this pass set the flag): ask again.
+			a.wakeStatus()
+			return true
+		}
+	}
 	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) && unreachableNow(err) {
 		a.Logf("status of %s not told to %s yet: %v", id, sender, err)
 		return false // still due: told on a later pass
@@ -449,6 +484,21 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	}
 	told() // stored for sending (the outbox retries it), or never to be told
 	return true
+}
+
+// peerReads reports whether the relay shows the pinned device at address
+// with a capability record for each of its sessions, and whether they read
+// capability.
+func (a *Agent) peerReads(ctx context.Context, address, capability string) (advertised, reads bool) {
+	key, err := a.sendKey(ctx, address)
+	if err != nil {
+		return false, false
+	}
+	prof, err := a.peerProfile(ctx, address)
+	if err != nil || !prof.Advertised(address, key.SignKey) {
+		return false, false
+	}
+	return true, prof.Supports(address, key.SignKey, capability)
 }
 
 // unreachableNow reports an error from not reaching the Hub (no

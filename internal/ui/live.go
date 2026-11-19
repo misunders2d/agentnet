@@ -22,7 +22,7 @@ import (
 // goes through the client's existing operation for it, with the same rules
 // as the CLI: nothing here grants, approves or runs anything on its own.
 type Live struct {
-	sendWait       time.Duration // how long SendDM stays to hear a first attempt; the message does not depend on it
+	sendWait       time.Duration // how long SendDM stays to hear a first attempt (0: answers once stored); the message does not depend on it
 	a              *client.Agent
 	assistantSetup AssistantSetupFunc
 	// timeout bounds each network request an action makes.
@@ -43,6 +43,10 @@ type Live struct {
 	historyKept    bool
 	historyDirty   bool
 	historyWake    atomic.Bool
+	msgsMu         sync.Mutex
+	msgs           map[string]keptMessages // each chat's projected messages at one content revision (livedm.go)
+	lastOpen       string                  // the chat DMPage read last: the one a read mark is for (markRead)
+	msgsUsed       uint64                  // the kept projections' read clock (keptChats)
 	unreadMu       sync.Mutex
 	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards
 	count          unreadCount  // the app badge's running total (liveunreadcount.go)
@@ -73,13 +77,24 @@ func NewLive(a *client.Agent) *Live {
 	if err := a.CleanStaging(); err != nil && a.Logf != nil {
 		a.Logf("messenger page: files left from an earlier run: %v", err)
 	}
-	return &Live{a: a, timeout: 20 * time.Second, sendWait: 250 * time.Millisecond}
+	return &Live{a: a, timeout: 20 * time.Second, sendWait: 0}
 }
 
 // Changed implements Provider.
 func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 
 func (l *Live) ViewChanges() (client.ViewChange, <-chan struct{}) { return l.a.ViewChanges() }
+
+// ViewScope is the view_dirty keys that moved after mark (GET /events "scope");
+// a mark below zero asks only where to start. ok is false while keys do not
+// name every view's scope (client ViewKeysScoped).
+func (l *Live) ViewScope(mark int64) (keys []string, next int64, ok bool) {
+	if mark < 0 {
+		next, err := l.a.ViewMark()
+		return nil, next, err == nil && l.a.ViewKeysScoped()
+	}
+	return l.a.ViewScope(mark, 64)
+}
 
 // Overview implements Provider: every thread, archived topics included.
 func (l *Live) Overview() (Overview, error) { return l.overview(true) }
@@ -135,10 +150,13 @@ func (l *Live) overviewLocked(listArchived bool) (Overview, error) {
 // overviewOracle, set only by tests, hears of any difference between a list built
 // from what is kept and one read afresh: a scope view_dirty fails to mark. An
 // empty string says a comparison ran and found none. overviewChatBuilt hears
-// which chat's summary was read again.
+// which chat's summary was read again; dmProjected, which chat's messages a
+// DM read projected.
 var (
 	overviewOracle    func(string)
 	overviewChatBuilt func(string)
+	dmProjected       func(string)
+	dmChecked         func(l *Live, id string, page DMPage, t DMThread, mark int64, rev client.ViewChange) // a DM read, for the tests' fresh comparison (dmoracle_test.go)
 )
 
 func (l *Live) compareFresh(listArchived bool, kept Overview, content uint64) {
@@ -734,7 +752,9 @@ func (l *Live) Act(x Action) (string, error) {
 		count, err = l.a.ArchiveHeldNotices(x.Held)
 		note = fmt.Sprintf("Archived %d notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.", count)
 	case DoRead:
-		err = l.a.MarkReadWithAttention(x.IDs, x.Attention)
+		// The store's write says it changed (and which chat, with keys): a
+		// further unscoped note would read every kept chat again.
+		return "", l.markRead(x)
 	case DoUnread:
 		err = l.a.MarkUnread(x.ID, x.IDs)
 		note = "Marked unread."

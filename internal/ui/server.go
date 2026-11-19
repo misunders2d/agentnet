@@ -818,13 +818,46 @@ func (s *Server) dm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seq, _ := s.p.Changed()
-	t, err := p.DM(r.URL.Query().Get("id"))
+	page, ok := dmPageOf(w, r)
+	if !ok {
+		return
+	}
+	var t DMThread
+	var err error
+	if pager, paged := p.(DMPager); paged {
+		t, err = pager.DMPage(r.URL.Query().Get("id"), page)
+	} else if t, err = p.DM(r.URL.Query().Get("id")); err == nil && page.Limit > 0 {
+		t, err = pageMessages(t, page)
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	t.Seq = seq
 	writeJSON(w, t)
+}
+
+// dmPageOf reads /api/dm's optional page (from, offset, limit; group_refs=0
+// leaves out the invite sheet's selection). No limit is the whole chat.
+func dmPageOf(w http.ResponseWriter, r *http.Request) (DMPage, bool) {
+	q := r.URL.Query()
+	page := DMPage{From: q.Get("from"), GroupRefs: q.Get("group_refs") != "0"}
+	for name, to := range map[string]*int{"offset": &page.Offset, "limit": &page.Limit} {
+		if v := q.Get(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				http.Error(w, "bad "+name, http.StatusBadRequest)
+				return page, false
+			}
+			*to = n
+		}
+	}
+	if page.Limit < 0 || page.Limit > 100 || page.Offset > 0 || page.Offset < -99 || (page.Limit > 0 && page.Limit < -page.Offset) ||
+		(page.Limit == 0 && (page.From != "" || page.Offset != 0)) {
+		http.Error(w, "bad page", http.StatusBadRequest)
+		return page, false
+	}
+	return page, true
 }
 
 func (s *Server) setDMResources(w http.ResponseWriter, r *http.Request) {
@@ -939,9 +972,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	var previous client.ViewChange
 	first := true
+	scoper, scoped := s.p.(interface {
+		ViewScope(mark int64) ([]string, int64, bool)
+	})
+	mark := int64(-1)
+	if scoped {
+		_, mark, _ = scoper.ViewScope(-1)
+	}
 	for {
 		seq, next := s.p.Changed()
 		names := []string{"change"}
+		var scope []byte
 		if detailed, ok := s.p.(interface {
 			ViewChanges() (client.ViewChange, <-chan struct{})
 		}); ok {
@@ -956,8 +997,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				if current.Typing != previous.Typing {
 					names = append(names, "typing")
 				}
+			} else if !first && scoped {
+				// Additive: "scope" names the keys this change moved, before its
+				// "change". A page that knows it reads again only views whose keys
+				// moved; an older page ignores the event name.
+				keys, moved, ok := scoper.ViewScope(mark)
+				mark = moved
+				if ok && len(keys) > 0 && current.Unscoped <= previous.Seq { // no key moved: a write no trigger scopes (a config key, a carrier row) may still show
+					scope, _ = json.Marshal(struct {
+						Seq  uint64   `json:"seq"`
+						Keys []string `json:"keys"`
+					}{seq, append([]string{}, keys...)})
+				}
 			}
 			previous = current
+		}
+		if scope != nil {
+			if _, err := fmt.Fprintf(w, "event: scope\ndata: %s\n\n", scope); err != nil {
+				return
+			}
 		}
 		for _, name := range names {
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %d\n\n", name, seq); err != nil {

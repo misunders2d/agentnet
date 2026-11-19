@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -329,7 +330,27 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema, groupCarrierLapseSchema, ViewCoverSchema}
+
+// unsentReceipts runs on every wake. Without these it read all three tables
+// whole (about 96 ms on 200k rows, 0.02 ms with them).
+const unackedReceiptSchema = `CREATE INDEX inbox_unacked ON inbox(id) WHERE acked = 0;
+CREATE INDEX quarantine_unacked ON quarantine(id) WHERE acked = 0;
+CREATE INDEX history_receipts_unacked ON history_receipts(id) WHERE acked = 0;`
+
+// A group context copy that stops counting as present
+// (groupHistoryBatchPresent) gives continuity_generation a new token, so
+// the next send in that group checks its devices again (groupsSynced).
+const groupCarrierLapseSchema = `CREATE TRIGGER continuity_group_carrier_lapse AFTER UPDATE OF state ON outbox
+WHEN OLD.sub IN ('group-proof','group-context')
+ AND OLD.state IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')
+ AND NEW.state NOT IN ('queued','waiting','custody','delivered','quarantined','archive_staged','archive_accepted')
+BEGIN UPDATE continuity_generation SET token=hex(randomblob(16)); END;`
+
+// A reply's inherited topic and a topic's latest turn are looked up by
+// (conv, topic) instead of loading the conversation (chattopics.go).
+const topicLookupSchema = `CREATE INDEX inbox_conv_topic ON inbox(conv, topic) WHERE topic IS NOT NULL;
+CREATE INDEX outbox_conv_topic ON outbox(conv, topic) WHERE topic IS NOT NULL;`
 
 // Lookups by logical ID alone (a request's continuation and stop, proposal
 // confirmation, sent copies) otherwise read every outbox row with its inline
@@ -364,17 +385,83 @@ const (
 
 type store struct {
 	continuityDirty atomic.Bool
-	db              *sql.DB
+	db              *storeDB
 	onChange        func() // set by the Agent: local state changed (changes.go)
 	onJobReady      func() // local own-agent request committed; wake before remote delivery
+	// committed, when set, runs on the committing goroutine right after each
+	// commit that signals a change, before anything that follows the commit:
+	// tests check there what a reader sees at that moment.
+	committed atomic.Pointer[func()]
+}
+
+// storeDB is the store's one writer, which serialises every write and
+// transaction, with one read-only connection beside it for plain reads. A UI
+// read then never queues behind sync, catch-up or a send holding the writer
+// (WAL: a read sees everything committed before it starts). Reads that depend
+// on the connection itself, such as total_changes(), use the embedded writer.
+// One reader, not more: each new connection parses the whole schema on its
+// first statement, and a daemon's loops starting together each opened one,
+// delaying its start and the capability record peers wait for. Reads nest no
+// deeper than they did on the single connection before.
+type storeDB struct {
+	*sql.DB
+	reads *sql.DB
+}
+
+// readsOn is a store on one handle for both, as a read-only snapshot opens it.
+func readsOn(db *sql.DB) *storeDB { return &storeDB{db, db} }
+
+func (d *storeDB) Query(query string, args ...any) (*sql.Rows, error) {
+	return d.reads.Query(query, args...)
+}
+
+func (d *storeDB) QueryRow(query string, args ...any) *sql.Row {
+	return d.reads.QueryRow(query, args...)
+}
+
+func (d *storeDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return d.reads.QueryContext(ctx, query, args...)
+}
+
+func (d *storeDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return d.reads.QueryRowContext(ctx, query, args...)
+}
+
+// BeginTx starts a read-only snapshot on a reader, anything else on the writer.
+func (d *storeDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	if opts != nil && opts.ReadOnly {
+		return d.reads.BeginTx(ctx, opts)
+	}
+	return d.DB.BeginTx(ctx, opts)
+}
+
+func (d *storeDB) Close() error {
+	err := d.DB.Close()
+	if d.reads != d.DB {
+		err = errors.Join(err, d.reads.Close())
+	}
+	return err
 }
 
 func openStore(path string) (*store, error) {
-	db, err := sqlitedb.Open(path, schema)
+	writer, err := sqlitedb.Open(path, schema)
 	if err != nil {
 		return nil, err
 	}
-	s := &store{db: db}
+	reads, err := sqlitedb.OpenReader(path, 1)
+	if err != nil {
+		writer.Close()
+		return nil, err
+	}
+	// The reader parses the schema now, not on the first read: a read under a
+	// short deadline (a native request's) otherwise spent it there.
+	var objects int
+	if err := reads.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&objects); err != nil {
+		writer.Close()
+		reads.Close()
+		return nil, err
+	}
+	s := &store{db: &storeDB{writer, reads}}
 	s.continuityDirty.Store(true)
 	return s, nil
 }
@@ -1020,21 +1107,34 @@ func (s *store) resendReceipt(id string) error {
 	return err
 }
 
-func (s *store) markAcked(r receipt) error {
-	switch r.table {
-	case "inbox", "history_receipts":
-		if r.state != protocol.StateDelivered {
-			return errors.New("delivered receipt required for admitted row")
-		}
-	case "quarantine":
-		if r.state != protocol.StateQuarantined {
-			return errors.New("quarantined receipt required for held row")
-		}
-	default:
-		return errors.New("unknown receipt source")
+// markAcked records that the Hub took rs, in one transaction.
+func (s *store) markAcked(rs ...receipt) error {
+	if len(rs) == 0 {
+		return nil
 	}
-	_, err := s.db.Exec(`UPDATE `+r.table+` SET acked = 1 WHERE id = ? AND receipt_gen = ?`, r.id, r.generation)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range rs {
+		switch r.table {
+		case "inbox", "history_receipts":
+			if r.state != protocol.StateDelivered {
+				return errors.New("delivered receipt required for admitted row")
+			}
+		case "quarantine":
+			if r.state != protocol.StateQuarantined {
+				return errors.New("quarantined receipt required for held row")
+			}
+		default:
+			return errors.New("unknown receipt source")
+		}
+		if _, err := tx.Exec(`UPDATE `+r.table+` SET acked = 1 WHERE id = ? AND receipt_gen = ?`, r.id, r.generation); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // Message is a received message as shown to the user.
@@ -1168,13 +1268,36 @@ func (s *store) setSaved(messageID, blobID, path string) error {
 	return s.done(err)
 }
 
-func (s *store) markRead(ids []string) error {
+// markRead marks ids read in one transaction: one write, not one per id (640
+// at once took 1.2 s of trigger work and as many commits, MEL-748).
+func (s *store) markRead(ids []string) error { return s.markReadSpan(ids, nil) }
+
+// markReadSpan is markRead recording the chat's view mark around its write
+// in span, when set (readSpans).
+func (s *store) markReadSpan(ids []string, span *readSpans) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = span.begin(tx); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`UPDATE inbox SET read_at = ? WHERE id = ? AND read_at IS NULL`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().Unix()
 	for _, id := range ids {
-		if _, err := s.db.Exec(`UPDATE inbox SET read_at = ? WHERE id = ? AND read_at IS NULL`, time.Now().Unix(), id); err != nil {
+		if _, err := stmt.Exec(now, id); err != nil {
 			return err
 		}
 	}
-	return s.done(nil)
+	if err = span.end(tx); err != nil {
+		return err
+	}
+	return s.done(tx.Commit())
 }
 
 // markRecordsRead marks read the records between devices that the inbox

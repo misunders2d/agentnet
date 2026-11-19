@@ -184,6 +184,8 @@ func (a *Agent) retryFired(serial uint64) {
 
 // Only a wake is in memory. The encrypted outbox is the queue, including on
 // crashes. Every pass uses the same retry path and durable insertion order.
+// Receipts have their own lane: a backlog of acknowledgements never runs in
+// front of a live post.
 func (a *Agent) postOutboxBackground() {
 	a.initFlushLanes()
 	a.queued.wakeAll()
@@ -191,7 +193,26 @@ func (a *Agent) postOutboxBackground() {
 	case a.flushWake <- struct{}{}:
 	default:
 	}
-	p := &a.posting
+	a.postReceiptsBackground()
+	a.runPosts(&a.posting, func(ctx context.Context) {
+		if err := a.flushOutbox(ctx, false); err != nil && ctx.Err() == nil {
+			a.Logf("outbox: %v", err)
+		}
+	})
+}
+
+// postReceiptsBackground sends stored dispositions on the receipt lane.
+func (a *Agent) postReceiptsBackground() {
+	a.runPosts(&a.receipting, func(ctx context.Context) {
+		if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
+			a.Logf("receipts: %v", err)
+		}
+	})
+}
+
+// runPosts runs pass on p's goroutine, once more for every wake that arrived
+// during a pass.
+func (a *Agent) runPosts(p *backgroundPosts, pass func(context.Context)) {
 	p.Lock()
 	defer p.Unlock()
 	if p.closed {
@@ -208,19 +229,11 @@ func (a *Agent) postOutboxBackground() {
 		defer cancel()
 		for {
 			before, counted := a.store.rowChanges()
-			if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
-				a.Logf("receipts: %v", err)
-			}
-			if err := a.flushOutbox(ctx, false); err != nil && ctx.Err() == nil {
-				a.Logf("outbox: %v", err)
-			}
-			if err := a.flushReceipts(ctx); err != nil && ctx.Err() == nil {
-				a.Logf("receipts: %v", err)
-			}
+			pass(ctx)
 			// Every Hub ping runs this pass. One that stored nothing must
 			// not make open views rebuild (MEL-731).
 			if after, ok := a.store.rowChanges(); !counted || !ok || after != before {
-				a.NoteChange()
+				a.noteStoredChange()
 			}
 			p.Lock()
 			if p.again && !p.closed && ctx.Err() == nil {
@@ -241,25 +254,26 @@ func (a *Agent) stopBackgroundPosts() {
 	a.sendRetry.closed = true
 	a.sendRetry.disarm()
 	a.sendRetry.Unlock()
-	p := &a.posting
-	p.Lock()
-	p.closed = true
-	done, cancel := p.done, p.cancel
-	p.Unlock()
-	if done == nil {
-		return
-	}
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		cancel() // HTTP is context-bound; stop before closing the DB/spool.
-		<-done
+	for _, p := range []*backgroundPosts{&a.posting, &a.receipting} {
+		p.Lock()
+		p.closed = true
+		done, cancel := p.done, p.cancel
+		p.Unlock()
+		if done == nil {
+			continue
+		}
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-done:
+		case <-timer.C:
+			cancel() // HTTP is context-bound; stop before closing the DB/spool.
+			<-done
+		}
+		timer.Stop()
 	}
 }
 
-func (a *Agent) queuedConv(copies []outCopy, localID, lid string) ConvSent {
+func (a *Agent) queuedConv(ctx context.Context, copies []outCopy, localID, lid string) ConvSent {
 	sent := ConvSent{ID: localID, LID: lid, State: protocol.StateDelivered}
 	if len(copies) > 0 {
 		sent.ID = copies[0].env.ID
@@ -271,8 +285,10 @@ func (a *Agent) queuedConv(copies []outCopy, localID, lid string) ConvSent {
 		}
 		sent.Copies = append(sent.Copies, cp)
 	}
-	a.NoteChange()
-	a.postOutboxBackground()
+	if stagingBatch(ctx) == nil { // a batch tells once, when it is stored
+		a.NoteChange()
+		a.postOutboxBackground()
+	}
 	return sent
 }
 

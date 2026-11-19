@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -287,11 +288,39 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.kickMu.Unlock()
 	a.kick()
 
-	return readStream(resp.Body, touch, func(event, data string) error { return a.dispatch(ctx, event, data) })
+	// Messages are taken a page at a time (receivepage.go): what the reader
+	// has buffered, up to receivePageMax; anything else stores the page so
+	// far first, in stream order.
+	var page []envelope.Envelope
+	flush := func() error {
+		if len(page) == 0 {
+			return nil
+		}
+		envs := page
+		page = nil
+		defer a.kickNow() // one receipt pass for the page
+		return a.receivePage(ctx, envs)
+	}
+	return readStream(resp.Body, touch, func(event, data string) error {
+		var env envelope.Envelope
+		paged := event == "message" && json.Unmarshal([]byte(data), &env) == nil
+		if paged {
+			a.updateServed(event)
+			if page = append(page, env); len(page) < receivePageMax {
+				return nil
+			}
+		}
+		if err := flush(); err != nil || paged {
+			return err
+		}
+		return a.dispatch(ctx, event, data)
+	}, flush)
 }
 
 // readStream parses the push stream body with go-sse and hands each event
-// to dispatch in order, synchronously; a dispatch error ends the stream as
+// to dispatch in order, synchronously, calling idle (when given) whenever
+// nothing more has been read yet and before it returns; a dispatch or idle
+// error ends the stream as
 // unhealthy (the Hub redelivers). It returns (true, io.EOF) when the Hub
 // closed the stream, and (true, err) for a read error. touch is called on
 // every read that brings bytes, comments and keepalives included, so the
@@ -307,10 +336,54 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 // writes single-line frames and every frame type must stay under this
 // limit: the member and team directories are bounded by protocol.MaxMembers
 // and MaxTeams; group heads are emitted as bounded batches by the Hub.
-func readStream(body io.Reader, touch func(), dispatch func(event, data string) error) (healthy bool, err error) {
-	r := &streamBody{r: body, touch: touch}
-	for e, rerr := range sse.Read(r, &sse.ReadConfig{MaxEventSize: streamEventLimit}) {
-		if rerr != nil {
+func readStream(body io.Reader, touch func(), dispatch func(event, data string) error, idle func() error) (healthy bool, err error) {
+	type read struct {
+		e   sse.Event
+		err error
+	}
+	// The body is read ahead of dispatch, so that idle can tell what is
+	// already here (a page of messages) from what is still to come.
+	reads := make(chan read, receivePageMax)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		defer close(reads)
+		r := &streamBody{r: body, touch: touch}
+		for e, rerr := range sse.Read(r, &sse.ReadConfig{MaxEventSize: streamEventLimit}) {
+			select {
+			case reads <- read{e, rerr}:
+			case <-done:
+				return
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	for {
+		var next read
+		var ok bool
+		select {
+		case next, ok = <-reads:
+		default:
+			if idle != nil {
+				if err := idle(); err != nil {
+					return false, err
+				}
+			}
+			next, ok = <-reads
+		}
+		if !ok || next.err != nil {
+			if idle != nil {
+				if err := idle(); err != nil { // what came before the end is stored
+					return false, err
+				}
+			}
+		}
+		if !ok {
+			return true, io.EOF
+		}
+		if rerr := next.err; rerr != nil {
 			if errors.Is(rerr, errStreamEnd) || errors.Is(rerr, sse.ErrUnexpectedEOF) {
 				return true, io.EOF // the Hub closed; an unfinished event or line is dropped
 			}
@@ -319,11 +392,10 @@ func readStream(body io.Reader, touch func(), dispatch func(event, data string) 
 			}
 			return true, rerr
 		}
-		if err := dispatch(e.Type, e.Data); err != nil {
+		if err := dispatch(next.e.Type, next.e.Data); err != nil {
 			return false, err
 		}
 	}
-	return true, io.EOF
 }
 
 // streamEventLimit is the most one push event may take on the wire, all its
@@ -366,19 +438,20 @@ func (a *Agent) sync(ctx context.Context) {
 		// The Hub refuses this build (updaterequired.go): it still takes
 		// receipts and the answers and results of admitted work; the rest
 		// waits for the program it serves.
-		if err := a.flushReceipts(ctx); err != nil {
-			a.Logf("receipts: %v", err)
-		}
+		a.postReceiptsBackground()
 		if err := a.FlushOutbox(ctx); err != nil {
 			a.Logf("outbox: %v", err)
 		}
 		return
 	}
-	// Durable receipts get a turn before bulk history and proof recovery.
+	// Live sends and receipts, each on its own lane, do not await bulk
+	// proof/history work, its transport or each other.
+	a.postOutboxBackground()
+	// Durable receipts still get a turn before bulk history and proof
+	// recovery on this worker.
 	if err := a.flushReceipts(ctx); err != nil {
 		a.Logf("receipts: %v", err)
 	}
-	a.postOutboxBackground() // live sends do not await bulk proof/history work or its transport
 	// Give queued inert copies a turn before preparing more history. Empty
 	// wakes use the existing pending-state index instead of handover scans.
 	var queuedSync bool
@@ -399,9 +472,7 @@ func (a *Agent) sync(ctx context.Context) {
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}
-	if err := a.flushReceipts(ctx); err != nil {
-		a.Logf("receipts: %v", err)
-	}
+	a.postReceiptsBackground() // dispositions the upkeep above stored
 }
 
 func (a *Agent) dispatch(ctx context.Context, event, data string) error {
@@ -571,10 +642,14 @@ func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error 
 		}
 		return a.store.resendReceipt(env.ID)
 	}
+	page := receivingPage(ctx)
+	staged := len(page.staged())
 	if err = a.verifyAndStore(ctx, env); err != nil {
 		return a.admissionFailed(ctx, env, err)
 	}
-	a.receiveFails.clear(env.ID)
+	if len(page.staged()) == staged { // a staged turn's count clears once its page is stored (storePage)
+		a.receiveFails.clear(env.ID)
+	}
 	return nil
 }
 
@@ -655,6 +730,15 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 	return nil
 }
 
+// Receipts go in pages, as TDLib acknowledges up to 100 ids at a time
+// (mtproto/SessionConnection.cpp MAX_UNACKED_PACKETS): each page is sent,
+// then marked acknowledged in one transaction. Until the Hub takes a page in
+// one request, ackPage sends receiptLanes per-message acks at once.
+const (
+	receiptPage  = 100
+	receiptLanes = 8
+)
+
 // flushReceipts sends every stored disposition the Hub has not acknowledged.
 func (a *Agent) flushReceipts(ctx context.Context) error {
 	a.receiptOnce.Do(func() { a.receiptLock = make(chan struct{}, 1) })
@@ -668,20 +752,60 @@ func (a *Agent) flushReceipts(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, r := range pending {
-		err := a.hub.do(ctx, "POST", "/v1/messages/"+url.PathEscape(r.id)+"/ack", protocol.AckRequest{State: r.state}, nil)
-		var he *HubError
-		if errors.As(err, &he) && he.Status == 404 {
-			err = nil // the Hub no longer holds it; nothing to report
+	for page := range slices.Chunk(pending, receiptPage) {
+		acked, err := a.ackPage(ctx, page)
+		if e := a.store.markAcked(acked...); err == nil {
+			err = e
 		}
 		if err != nil {
-			return err
-		}
-		if err := a.store.markAcked(r); err != nil {
-			return err
+			return err // the next pass sends the rest
 		}
 	}
 	return nil
+}
+
+// ackPage tells the Hub one page of dispositions and returns those it took.
+// It is the one place a page-at-once Hub route would replace.
+func (a *Agent) ackPage(ctx context.Context, page []receipt) ([]receipt, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		acked []receipt
+		first error
+	)
+	lanes := make(chan struct{}, receiptLanes)
+	for _, r := range page {
+		select {
+		case lanes <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break // the first failure stops the rest
+		}
+		wg.Go(func() {
+			defer func() { <-lanes }()
+			err := a.hub.do(ctx, "POST", "/v1/messages/"+url.PathEscape(r.id)+"/ack", protocol.AckRequest{State: r.state}, nil)
+			var he *HubError
+			if errors.As(err, &he) && he.Status == 404 {
+				err = nil // the Hub no longer holds it; nothing to report
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				acked = append(acked, r)
+			} else if first == nil {
+				first = err
+				cancel()
+			}
+		})
+	}
+	wg.Wait()
+	if first == nil {
+		first = ctx.Err()
+	}
+	return acked, first
 }
 
 func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error {
@@ -710,7 +834,7 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		}
 		sender = e.Public
 	}
-	in, err := envelope.Open(env, a.id, a.Address, sender)
+	in, err := a.open(ctx, env, sender) // opened once if its page did (receivepage.go)
 	if err == nil {
 		allowed, e := a.revokedIngressAllowed(ctx, env, in, sender)
 		if e != nil {
@@ -785,7 +909,11 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 			a.convWork.due(convRecipients)
 			a.kickNow()
 		}
-		a.wakeWorker()
+		if !in.Replica && waitedOnKind(in.Kind) {
+			a.wakeWorkerNow() // a request, or the answer or result its follow-up runs on
+		} else {
+			a.wakeWorker()
+		}
 		if in.ReceiverRoute == nil || in.ReceiverRoute.Op == "request" {
 			a.noteStatus(in.ID)
 			a.convWork.due(convHistory)
@@ -861,12 +989,23 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	// its own work (notifyOwnWork) brings no new evidence for held messages.
 	a.selfKicks.Store(0)
 	stopKicks, err := listenKicks(a.home, func() {
-		a.wakeWorker()
-		a.wakeStatus() // a status another process noted (noteStatus)
-		a.changes.bump()
-		work := convHistory | convServe | convFetch | convRelease | convRecipients
 		ownKick := a.ownKick()
-		if !ownKick {
+		if ownKick {
+			a.wakeWorker()
+		} else {
+			a.wakeWorkerNow() // a command (accept, resolve, send) from another process
+		}
+		a.wakeStatus() // a status another process noted (noteStatus)
+		work := convHistory | convServe | convFetch | convRelease | convRecipients
+		if ownKick {
+			// Its own work was told by its store; an unscoped bump on each
+			// received message made every change unscoped (GET /events
+			// "scope"). Still a scoped one: a wake from another process can be
+			// counted as its own (ownKick), and its rows, written through the
+			// same triggers, name their scope too.
+			a.changes.bumpStored()
+		} else {
+			a.changes.bump()
 			a.store.continuityDirty.Store(true)
 			work |= convRetry // a local participation record shares its public scope with guests now
 		}

@@ -180,8 +180,8 @@ func logReviewSettlement(t *testing.T, source, reader *Agent) {
 		db    *sql.DB
 		query string
 	}{
-		{"source", source.store.db, `SELECT id,created_at,state,body FROM outbox WHERE status='review_notice' ORDER BY rowid`},
-		{"reader", reader.store.db, `SELECT id,ts,state,body FROM inbox WHERE status='review_notice' ORDER BY arrival`},
+		{"source", source.store.db.DB, `SELECT id,created_at,state,body FROM outbox WHERE status='review_notice' ORDER BY rowid`},
+		{"reader", reader.store.db.DB, `SELECT id,ts,state,body FROM inbox WHERE status='review_notice' ORDER BY arrival`},
 	} {
 		rows, err := side.db.Query(side.query)
 		if err != nil {

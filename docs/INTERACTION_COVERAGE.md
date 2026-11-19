@@ -1,5 +1,333 @@
 # Next-release interaction coverage and responsiveness
 
+## Send path: stored at once, sent at once — unreleased, November 18, 2026
+
+Owner: sent messages took dozens of seconds to actually send. This branch
+(`perf/send-path`) stores a message and starts its live send at once.
+Counterpart sources read for every touched path: TDLib 03220f6b and Telegram
+Desktop a532622b.
+
+| Path | Counterpart (file:line) | AgentNet now | Reused / adapted |
+|---|---|---|---|
+| Receive acks | TDLib `SessionConnection.cpp:897-910`: acks gather and leave together, at most 100 (`MAX_UNACKED_PACKETS`) | receipts leave in pages of 100 (`receiptPage`), 8 POSTs in flight (`receiptLanes`), one `markAcked` transaction per page; own lane (`receipting`) beside the outbox lane, never in front of it | adapted: TDLib's ack is a transport ack; ours is a delivery receipt over a per-message Hub route |
+| Receive DB writes | TDLib `MessageDb.cpp:1192-1221`: writes batch, 50 or 10 ms per transaction | a page of what the stream reader has buffered (≤100, no wait added): each verified, decrypted and checked as before, plain two-person turns stored in one transaction (savepoint each, insert prepared once), one change and one receipt pass per page (`receivepage.go`) | adapted: no 10 ms timer, only what is already read |
+| Catch-up vs live | TDLib `UpdatesManager.cpp:2165-2180`: getDifference slices, then back to live updates | sync lane already interleaves with live; live lane at the Hub stays strictly in seq order | Hub work, H2 below |
+| Send | TDLib `MessagesManager.cpp:21930-22019`: message object built and saved locally (`save_send_message_log_event`) before `do_send_message`; the call returns the local message at once | text sends no longer wait for the spool lock; files take it only after the network checks; rosters and keys fetched once and at once; new-topic first messages queue like every other (`sendWait` 0) | reused |
+| Retry | TDLib `NetQueryDelayer.cpp:77-83`: retry delay doubles to 60 s | unchanged: the queued worker waits 1 s, doubling to 45 s (`queuedsend.go:492-510`, `sendRetryMax`, the stream's reconnect cap) | reused; cap adapted to the stream's |
+| Edit while pending | TDLib `MessagesManager.cpp:23390` `can_edit_message` false for `is_yet_unsent()`; tdesktop `history_item.cpp:3479` `canBeEdited` needs a regular (not local) item | unchanged: a pending message cannot be edited; it becomes editable once in the outbox — measured below | reused (Telegram behavior), owner 2026-11-18: "I'm ok NOT being able to edit messages until they are sent - I just don't want to wait 10 seconds" |
+| Delete while pending | TDLib `MessagesManager.cpp:21595-21672` `cancel_send_message_query`: delete of a yet-unsent message cancels its send | existing `DiscardQueuedSend` (`queuedsend.go:348`): races the attempt in the database, exactly one wins; now also for a queued new-topic first message | reused; `TestDiscardCancelsQueuedNewTopicSend` |
+
+**Receive in pages (B2).** Only a plain message of a two-person chat is
+staged. Anything else (controls, sync, history, group and person turns, a
+key to look up, a failed open) and a turn replying to one staged in the same
+page first stores the page so far, so every write keeps stream order and
+every check reads what serial admission read. A failed verification is held
+as before and the page goes on. A failure inside the transaction keeps the
+prefix, settles that message as before (held, or the stream ends) and admits
+the rest one at a time. A page that never commits stores nothing; pushed
+again, a committed page stores nothing new and asks for its receipts again
+(`TestReceivePageReplayStoresOnce`). 1000 missed messages (`TestReceive-
+BacklogInPages`, this machine, load ~8): 15.7–17.2 s before this branch,
+11.9–12.9 s with B1's pacing only, 3.5–3.6 s with pages. What bounds it:
+per message ~3 ms of reader CPU (open ~0.6 ms, checks ~0.8 ms, its row
+~1.4 ms, of which statement parsing of the alert and room queries the page
+does not prepare), and the Hub's per-message acknowledgement route (H2).
+Group and person turns still go one at a time (open).
+
+**H2, Hub route (described, not built).** (1) One page-ack request: a POST
+with a list of `{id, state}`, answering per id; the client's `ackPage` is the
+one place it plugs in, and stays on the per-message route until the Hub
+advertises it. (2) Reconnect backlog through the interleaving path, so a live
+message is not queued behind 1000 missed ones in the live lane.
+
+**A burst of sends queues per chat, now drained in batches (B1).** With
+`sendWait` 0 the page answers once a send is stored, so it no longer paces
+the sender by the worker. A chat's queued worker stores about 8 sends a
+second (~120 ms each: rosters, keys, profiles, member checks). A burst
+faster than that waits in order in `scheduled_sends`; a later message waits
+behind it. Measured in the custody journey: 1000 sends accepted in 20–31 s,
+then ~150 s to drain, the same total as main's paced loop (168 s), so no
+send got slower; the wait moved from the page into the queue. Each message
+is stored and shown at once and none is lost. Send-to-editable (~350 ms) is
+for an idle chat. Now a worker pass takes up to 50 queued sends of one chat:
+one round of person and key checks, each sealed, all stored in one
+transaction (savepoint each; the good prefix kept), one change and one post
+wake. A send with files or an Ask goes alone; a send whose topic head would
+be a turn of the same batch other than its own auto-continued one starts the
+next batch (`TestQueuedBatchMatchesOneAtATime`). Background passes (job
+worker, reminders) run at most every 100 ms instead of on every change; a
+second wake inside the window, an agent job's pickup included, waits up to
+100 ms. 1000 queued sends (`TestQueuedBurstDrainsInBatches`): 20.5–21.7 s
+before at low load, 8.5–9.6 s after; 41.6 s vs 20.4 s at load ~9. What
+bounds it: the one store connection shared with handover and receipts,
+statement parsing (no statement cache in `sqlitedb`), and per-message
+sealing and in-transaction guards.
+
+**Reply receiver sends directly.** `queueDM` still sends a reply-receiver
+message directly: it needs the network catalog check before it can be
+stored. It now logs why a send was not queued instead of falling back
+silently.
+
+**Group send, recovered person (S6e).** A group send checks only its own
+group's recovered devices, and only when the continuity token or the
+group's signed context changed since they were last found complete
+(`groupsSynced`). The spool lock is taken only when a context copy is made.
+A context copy that lapses (failed, expired, not delivered) renews the
+continuity token by trigger, so the group's next send queues it again, as
+before. The daemon's background pass visits every group and checks those
+whose key changed. Open, same as
+before this branch: a person change landing between the check and the turn's
+fan-out reaches the new device through the next send or the background pass.
+
+**Native hooks (S8).** A Claude hook event reads the Claude executable once
+(its capture) instead of three times; a Codex capture once instead of twice.
+Every other route check still runs; the daemon's own verify still reads the
+executable. Unchanged events (UserPromptSubmit, PostToolUse, Stop) only read,
+without a write transaction. No file-metadata shortcut.
+
+**Save first, check after (S6f): dropped (owner decision, November 18).**
+Not built: the batched queued lane gives the visible goal. Precondition fails: handover
+does not refuse removed and changed-key devices uniformly for every kind.
+`deliver` refuses a changed reader key only for follow-ups, proposals,
+reactions, controls, continuations and own-sync v3 (`client.go:747`); its
+`readerCheck` (`copyneeds.go:171`) checks capabilities only, and nothing for
+a copy that requires none;
+reactions, device history and history archives have their own gates; an
+ordinary turn is sealed at send to the key checked then, and removed
+recipients are retired by the `reconcileRecipientLifecycle` sweep. Moving the
+checks after the store would mean sealing at handover, so plaintext at rest
+in the outbox, and one gate per kind with a regression each. The visible goal
+already holds through the queued lane: a page send is stored in
+`scheduled_sends` at once, and the worker checks, seals and stores it.
+
+| Inventory | Intended local feedback | Completion/recovery | Executed evidence |
+|---|---|---|---|
+| `send.text-spool-held` | text turn stored at once while a file transfer holds the spool lock | file turns wait for the lock, then go | `TestTextSendIsNotBlockedByHeldSpoolLock` (group, human turn) |
+| `receive.ack-pages` | live send not delayed by an ack backlog | backlog of 200 drains, ≤8 acks in flight | `TestReceiptBacklogDoesNotDelayLivePost` |
+| `send.new-topic-first` | accepted under 1.1 s with every relay request 2 s slow, state queued | stored once, in its own topic, also when sent twice | `TestNewTopicFirstMessageIsQueuedAtOnce` |
+| `send.editable-soon` (S7) | in the outbox, where it can be edited, ~350 ms after Send, relay requests 150 ms | — | `TestSentMessageEditableWithinASecond` (349/342/347 ms) |
+| `send.discard-pending` | Discard of a queued new-topic message | nothing stored or sent | `TestDiscardCancelsQueuedNewTopicSend` |
+| `send.reply-topic-lookup` | reply's topic and topic head by index | same answer as the whole-history computation | `TestTopicLookupsMatchWholeHistory` |
+| `group.recovered-context` (S6e) | a text send in an already complete group does not wait on the spool lock | context queued ahead of the turn for a recovered or newly linked device, also with sends running during the change; another group untouched; a lapsed copy queued again | `TestGroupSendSyncsOnlyItsGroupWhenContinuityChanged`; fails on the previous code (other group's context queued) |
+| `native.hook-once` (S8) | a tool call's hook reads the executable once, does not wait behind a held write | changed executable still refused | `TestClaudeHookReadsBinaryOnceWithoutWriteLock` (old shape: SQLITE_BUSY after 5 s), `TestClaudeRouteCaptureAnyBuildOwnDigest` (1 read), `TestClaudeRegistrationRefusesChangedExecutable` |
+
+Not run: race shards, full suites, the Codex capture's read count (needs a
+live Codex daemon record; same two-line change as Claude's), skins, native
+shells, Android.
+
+**Integration with the read path (`59cf183e`, November 18).** `perf/read-path`
+(head `9f2c771f`) merged into this branch. `client.ViewCoverSchema` is the last
+schema step, after this branch's own, so scoped change events (S2) are on in
+every store; the test switches `AGENTNET_TEST_VIEW_COVER` and
+`AGENTNET_OPEN_COVER` are gone. `ViewKeysScoped` stays as the fallback for a
+store whose cover triggers are missing. The background post pass notes its
+change as `noteStoredChange`. Fixes found by the integrated tree:
+- an own kick the `selfKicks` counter misattributes no longer skips the change
+  (`454bb6e8`): it bumps scoped, so the read-mark patch keeps the open chat and
+  `TestWorkerQueuedOwnRequestWakesBeforeRemoteDelivery` passes (it failed on
+  `perf/read-path` alone, 2 of 2);
+- a direct text group send whose member roster moved inside its claim reads
+  again, at most twice (`e70e7f40`): reads beside the writer widened that race
+  (`TestGroupSendSyncsOnlyItsGroupWhenContinuityChanged` failed 3 of 3 after
+  the merge, passes 3 of 3);
+- list-key expectations ignore the step's `v` keys (`75ba3ef1`); the web node
+  harnesses follow S5's timeline (`905a66f2`).
+
+Race shards (`scripts/race-shard.sh`, this machine, package timeout raised to
+1500 s because every shard needs ~590 s of test time here, main included): no
+data race. `ui-2` passes. `ui-0` failed `TestBrowserMovedTopicInvitationNativeReceiver`
+and `TestStopResultPresentation`, `ui-1` `TestBrowserNativeTopicDestinationTitle`,
+`TestComposerOwnGroupCurrentAttempt`, `TestBrowserEngineRechecksAfterProfile`
+and `TestInteractionInventory`; the two harness tests are fixed (`905a66f2`).
+The four browser-to-native tests fail with `peer_update` (the browser engine
+sees no published capabilities for the native daemon; the tests do not wait
+for its connection). They pass on main under race (8 of 8) and pre-merge, so
+this is a regression of the integrated tree, cause not established. Two
+instrumented runs: one failed with `Run`'s startup done in 35 ms and the
+session logged before the error; one waited ~800 ms at `driveQueuedSends`'s
+cleanup DELETE for the writer. What publishes the capabilities after the
+session, and when, was not located. Open, for the release tester.
+
+## MEL-748 read path: chat open, list, updates — unreleased, November 18, 2026
+
+Owner: opening a chat takes seconds; every interaction lags behind Telegram and
+Slack. Branch `perf/read-path`. Counterparts read in source: TDLib `03220f6b`,
+Telegram Desktop `a532622b`.
+
+**Paths compared (C1), current shape against the counterpart.**
+
+| Path | Telegram (source) | AgentNet before | Now |
+|---|---|---|---|
+| Store reads | not compared (SQLite WAL: readers do not wait for the writer) | one SQLite connection: a page read waited behind every write | plain reads on a read-only pool beside the one writer (S1) |
+| Open a chat | messages kept per chat, read once (`MessagesManager::Dialog::store`, `MessagesManager.cpp:3010`); messages of chats not open are unloaded from memory after a delay (60 s), never an open chat's (`unload_dialog`, `MessagesManager.cpp:8946`; `can_unload_message`, `:13321`; at `03220f6b`) | whole chat projected 3 times per open (DM, read mark, list, refresh); each projection re-read every chat for continuity and every sender's person | one projection per change, shared by the chat and its list row; one chat looked up, not all (S3). One per open with the scoped step (R1, `92d36c86`): the open's read mark patches it (see Unread). Without the step, 2: the read's write moves the content revision. Adapted unload: at most 16 kept projections (`keptChats`), the least recently read dropped first, never the open chat; no timer, since a list row's summary is kept apart and a dropped chat is read again only when it changes. Files on disk and running fetches are filled again on the rows a page serves (`FilesNow`) |
+| Unread / read mark | read state patched on the kept chat (`updateChatReadInbox`, `td_api.tl:11430`); nothing re-read | read mark re-projected the whole chat | patched on the kept chat (R1): the read records the chat's mark inside its own transactions (`MarkReadWatching`); when nothing else wrote in between, only the rows sharing a marked logical id read their `read_at` and attention again (`RereadRead`), as TDLib sets `last_read_inbox_message_id` and the counts and leaves history alone (`read_history_inbox`, `MessagesManager.cpp:9618`; `set_dialog_last_read_inbox_message_id`, `:9981`; at `03220f6`). Anything else moving the mark projects as before; MEL-692/693 semantics unchanged (read marks and their copies are the same writes). Needs the scoped step |
+| Refresh on open | — | every held copy's status, one by one | ≤20 held copies from one indexed query, asked in parallel (S3) |
+| History paging | `getChatHistory(from_message_id, offset −99..0, limit ≤100)` (`td_api.tl:12959`), returned newest first ("reverse chronological order", `td_api.tl:12951`); tdesktop's first page is 50 around the first unread message at `offset = −limit/2`, 30 only when it opens at the end, later pages 50 (`history_widget.cpp:229–230`, `firstLoadMessages` 5027–5057, at `a8de5f9`) | whole chat only | `/api/dm?from&offset&limit`, same bounds, opening at the unread message with 50 (S4 host), as tdesktop does. Adapted order: a page is oldest first, the order the chat is shown and projected in, so neither side reverses it and messages waiting to go take their place by time at its end (`pageOrder`); `older`/`newer` say what lies past each edge. Comic still loads the whole chat: see below |
+| Chat list | last message and read state kept per chat, sent as `updateChatLastMessage` / `updateChatReadInbox` (`td_api.tl:11413`, `11430`) | kept per chat since `ac2ec42c` (`view_dirty`) | unchanged; its row now reuses the open chat's projection |
+| Updates | one typed update per changed chat or message (`updateNewMessage` 11295, `updateMessageContent` 11316) | "something changed": the page read the open chat and the list again on every write anywhere | the event names the scopes it moved; the page reads the open chat only when its own moved (S2, inactive until the schema step) |
+| Render | — | every list reload re-rendered every mounted message; per request, a scan of the whole chat (nested for logical ids) | messages see a stable overview; answers found through a per-chat index; activity computed once per messages (S5) |
+
+**State of the targets.** S1 and S5 done. S3 partial: the unread page and the
+badge do not reuse the projection (the badge is the list's, already kept per
+chat; the unread page reads its own rows). S2 done at integration: `ViewCoverSchema` is
+appended (send-path section above); one projection per open (R1). S4 partial: host API only (`abacd697`, one commit with
+S3, as both change `dmPage`); Comic does not page, and `SelectGroupHistory` stays
+eager (Comic never asks `group_refs=0`, so lazy refs would save nothing).
+S4 web is deferred (decided November 18): a first page of 50 costs what the
+whole first read costs (370–540 ms at 6400 against 250–290 ms for the messages
+alone), because projection, topics and continuity span the whole chat, so
+paging the browser would save nothing on the host's open.
+
+**Adaptations, and why.**
+- Typed per-message patches were not taken: they need a per-message change log
+  (a schema step) and the browser re-deriving host-only fields (exec staleness,
+  topics, unread). Scoped keys plus the host's kept per-chat projection give the
+  same "only what changed" for the cost of one trigger step.
+- The kept projection is keyed by the content revision and the chat's
+  `view_dirty` mark: a write another process made and did not announce still
+  reads again (TestComposerOwnGroupCurrentAttempt caught a revision-only key).
+  Exec staleness depends on presence and the clock, so it is settled per read.
+- Pages slice the chat's projection, not indexed rows: topics, unread and
+  continuity are of the whole chat, and the projection is kept, so a page costs
+  what the kept chat costs. Indexed paging is a later step.
+- Comic does not page yet (S4 web not adopted): it already mounts only the
+  newest 24 message groups (`Conversation.timeline.tsx` `INITIAL_PAGE`), and the
+  measured browser cost of the whole chat (Comic's actual Store in node: JSON parse, keep, the open; React render not included) is 2 ms parse, 16 ms open and 7 ms per refresh at 640 messages (259 KiB), and 16 ms, 58 ms and 61 ms at 6400 (2.5 MiB), against under 1 ms for a page of 50. Not worth the risk at today's sizes; the step for a 10x chat. Adopting pages needs
+  jump-to-quote, topics, search, `markUnread(fromHere)` and the invite sheet to
+  load what they need, and the read-entry snapshot (MEL-692/693) kept exact.
+- Scoped keys (S2) need every table a view reads to name its scope.
+  `client.ViewCoverSchema` is that step, appended last at integration;
+  `TestViewCoverNamesEveryTable` fails on a new table that chooses nothing.
+  Without the step (a store whose cover triggers are missing) the host sends no
+  keys and the page reads everything. The background flush notes its change as
+  `noteStoredChange` (`backgroundsend.go`), done at integration: measured,
+  0 of 20 change events spare the open chat under another chat's traffic with
+  `NoteChange`, 20 of 20 with `noteStoredChange`.
+- `h` (the list's history-copy progress) does not reload an open chat: no chat
+  projection reads those tables. No keys, or empty keys, read everything.
+- The step's own keys carry a leading `v` (`vc:<conv>`, `v*`, `vh`) inside the
+  store; change events send them without it. The list, the unread count and the
+  read/unread actions' write check keep reading only the earlier keys, exactly as
+  before the step: with plain keys, busy agents' writes to `attention`,
+  requests or uploads would have refused Mark unread and read ("this chat
+  changed; try again") and cleared the kept list. `TestLiveUnreadProvider`
+  failed that way once with the step on (passed 10 of 10 alone): the mechanism
+  is proven by `TestViewCoverNamesEveryTable`, that failure's cause is not
+  reproduced.
+
+**Measured** (`TestOpenChatMeasure`, `AGENTNET_OPEN_MEASURE=1`: a DM plus a group,
+received rows copied to 640 and 6400; "busy" = the peer sending into the group
+throughout; shared 8-core laptop, so ±30%). "Chat shown" is `/api/dm` on open;
+"whole open" is DM, read mark, list, DM, refresh.
+
+| Size, load | main `4f867fae` shown / whole | S1 | S1+S3 (`abacd697`) | branch head (`860e67df`) |
+|---|---|---|---|---|
+| 640 idle | 157 ms / 471 ms | 334 ms / 1.08 s | 72 ms / 237 ms | 80 ms / 285 ms |
+| 640 busy | 2.22 s / 5.10 s | 661 ms / 1.40 s | 173 ms / 586 ms | 155 ms / 406 ms |
+| 6400 idle | 2.10 s / 4.98 s | 1.36 s / 3.36 s | 423 ms / 1.19 s | 435 ms / 1.14 s |
+| 6400 busy | 54.0 s / 1 m 54 s | 2.81 s / 7.82 s | 630 ms / 2.40 s | 968 ms / 3.02 s |
+
+Under 1100 ms for the chat shown at every size and load at the branch head;
+the whole open at 10x busy (3 s, max 8 s) is not.
+
+After R1, same session, 15 opens per cell (`AGENTNET_OPEN_RUNS=15`), p50 / max.
+"Step on" means `ViewCoverSchema` appended and the background flush's note as
+`noteStoredChange` (both applied for the run, then reverted), which is what
+integration ships:
+
+| Size, load | `b38ba420`, step on: shown / whole | R1 `92d36c86`, step on: shown / whole | R1, step off: whole |
+|---|---|---|---|
+| 640 idle | 48 / 60 ms; 139 ms / 1.01 s | 45 / 64 ms; 93 / 344 ms | 126 / 303 ms |
+| 640 busy | 101 / 228 ms; 350 / 602 ms | 131 / 376 ms; 308 / 571 ms | 399 ms / 1.32 s |
+| 6400 idle | 420 / 608 ms; 1.16 / 1.53 s | 440 / 540 ms; 645 / 857 ms | 1.16 / 1.77 s |
+| 6400 busy | 735 ms / 1.36 s; 2.11 / 5.74 s | 670 ms / 1.40 s; **1.09 / 2.20 s** | 2.33 / 3.08 s |
+| chat projections per open | 2–3 | 1 every open | 2–3 |
+
+10x busy with the step on: whole open p50 1.09 s, and 1.24 s in a second
+15-open run (max 2.72 s, chat shown max 2.29 s): at the ≤1100 ms line, not
+reliably under it, and the max misses.
+
+R4, the sender and the Hub as separate processes of the real `agentnet` binary
+(only the opening device in the measured process), step on, 15 opens, p50 / max:
+
+| 6400 busy | chat shown | whole open | busy sends | projections per open |
+|---|---|---|---|---|
+| separate processes | 631 ms / 1.49 s | 1.08 / 2.54 s | 7.5/s | 1 (one open 2) |
+| in-process, same session | 680 ms / 1.49 s | 1.13 / 2.24 s | 14.6/s | 1 |
+
+The max misses either way. The tail is the open's first read projecting the
+whole chat after a write to it: here the measure's own `unread()` (three rows
+made unread again: an update, not a new row).
+
+Appending new rows to the kept projection (R5) is not built. TDLib adds one
+message to the loaded history (`add_message_to_dialog`,
+`MessagesManager.cpp:31284`; history pages by `on_get_history`, `:7404`; a
+changed message by `on_message_changed`, `:32015`). Doing that exactly here
+would need two subsystems the store does not have:
+- Which rows changed. `view_dirty` says that a chat moved, not which rows or
+  whether only inserts happened. Receipts, delivery states, read marks, copies
+  of an existing message and edits move the same mark. That needs a per-row
+  change log: a schema step and triggers on the message tables.
+- Incremental derivation. A new row changes others: an answer settles its
+  question's controls and execution state (`decorateConv`), a copy merges into
+  an existing message (`convMessages`), an excerpt replaces a row
+  (`showExcerpts`), continuity notices and the time order interleave, and topic
+  assignments and attention follow.
+
+Estimate: one schema step, about 600–1000 lines across `convstore`,
+`controls`, the excerpt and continuity code, plus a parity oracle per derived
+field. It would not shorten this measure's tail, which is an update. Left for
+the owner's decision. The tail is the first read after new messages: the whole chat is
+projected again (6400 rows) for the rows that changed. TDLib appends a new
+message to the kept chat instead. Appending new rows to the kept projection
+is the next step; S4 web paging would not shorten it (above). Without the
+step, the read mark and the daemon wake still re-project, so R1's gain lands
+with integration.
+
+A first page of 50 costs about the same as the whole kept chat (66–75 ms at
+640, 320–510 ms at 6400). The remaining host cost at 6400 is topic summaries
+(25% of `dmPage` CPU).
+
+**Where the 10x-busy seconds went (R2).** Per phase, with a goroutine dump of
+the first open past 1 s, CPU, block and mutex profiles and an execution trace:
+- The read mark: 640 autocommits (`store.markRead`, each compiling the
+  triggers) took 1.2 s even idle. One transaction now.
+- Projections: 2–3 per open. After the read mark, the list and the chat read
+  all 6400 messages again, because the read's write moved the chat's mark and
+  its daemon wake was counted foreign (an unscoped change: every kept chat
+  dropped). The mark is patched now and the wake is the daemon's own.
+- Derivation per read: topic assignments computed about 4 times per chat read
+  (now once per projection, kept with it), and the read's re-read projected
+  attention over every row (now only the rows sharing a marked logical id).
+- Left at 10x busy, from a trace of 5 opens (7.6 s): 0.77 s runnable but not
+  running, 0.41 s in sync waits, 0.12 s in syscalls, the rest on CPU. Blocked
+  time over 20 opens: about 0.54 s waiting for the writer, so not the tail. The
+  profile shows the waits, not who held the writer. One is the read mark's
+  `Begin`. The likely holder under this load is received messages' admission
+  writes (the send branch's lane: one transaction per received page). To
+  confirm, take a goroutine dump while the open waits in `Begin`. The other
+  is the list's `Reminders`: `reconcileReminders` takes the writer for a
+  transaction that usually writes nothing. An exact read-only precheck also has
+  to cover `projectReminders` (late originals, legacy aliases), so it is left
+  as a finding. Waiting for a reader connection was about 20 ms.
+- Refuted (R4): that the harness inflated busy timings, with the sender
+  (alice) and the Hub in the measured process. With both as processes of the
+  real binary (`AGENTNET_OPEN_SEPARATE=1`), the open measures the same at
+  half the message rate (table below). The busy cost is the opening device's
+  own receive work and the whole-chat projection.
+
+| Fix | Commit | Regression |
+|---|---|---|
+| Reads beside the writer | `ff1bbb5e` | `TestChatProjectionReadsBesideAHeldWrite` (fails at 10 s with reads on the writer), `TestReaderReadsBesideAHeldWriteAndRefusesWrites` |
+| One projection per change; one chat looked up; held copies indexed; sender words memoized; paging API | `abacd697` | every UI test compares each kept DM with a fresh read (`dmOracle`), `TestResettledSettlesKeptRowsAgain`, `TestDMPageBounds` |
+| List continuity in one pass (569 ms → 3 ms at 3000 chats; 7.6 ms at 300) | `4285fa07` | `TestContinuityViewsMatchEachFamily` (fails with the tie-break dropped) |
+| Scoped change events | `10f15fc9` | `TestViewCoverNamesEveryTable`, `TestScopeEventPrecedesItsChange`, `TestScopedChangeReadsOnlyTouchedViews` (fails with keys ignored), `workspaces_check.mjs`; the UI suite passes with `AGENTNET_TEST_VIEW_COVER=1` |
+| Render work per change; two missed ctx fields | `3f1bdb61`, `b9865ec9` | `TestCtxOverviewRendered` (a list reload naming another chat: timeline render time under a React Profiler about 10x below the raw overview; fails with `useCtxOverview` passing the overview through), `TestAnswerIndexMatchesTheScan` (the old whole-chat scan against the index over 3000 random chats; fails without the logical-id candidates); the field list type-checked by narrowing `Ctx.overview` to a `Pick` of it (found `agent_devices`, `group_invitations` missing) |
+| Skip rule proven | `860e67df` | `TestOtherChatWritesLeaveTheOpenChat`: with the step, messages and mutes in another chat leave the open chat as it was, 4–5 of 6 reads proven by `checkSkip` (fails with the `v` keys unread as their scope: 0 of 6); with `AGENTNET_TEST_VIEW_COVER=1` every UI test runs the same check (fails when a chat's own key is treated as skippable) |
+| Read actions not refused by the step's keys | `860e67df` | `TestViewCoverNamesEveryTable` (cover writes in the chat and in none leave attention's scope unmoved; a message edit moves it; fails with `v` keys counted) |
+| Read mark patched, not re-projected; read in one transaction; own daemon wake; assignments kept with the projection; reread only marked rows | `92d36c86` | `TestReadMarkKeepsTheOpenChat` (no re-read after the mark, a scoped change, oracle parity, a read stored elsewhere still reads again; fails with the old daemon wake: an unscoped change; 30 of 30), `TestReadMarkCopiesLeaveTheChatMark` (with a linked phone the copies leave the chat's mark and the read reaches the phone; 10 of 10) |
+| Measure per phase, stacks, longer tail | `32e9e77c` | opt-in `TestOpenChatMeasure` |
+
 ## Agent needs_human result is a chat message — unreleased, November 9, 2026
 
 Owner, 2026-11-09: "we need to remove these idiotic popup windows with 'asks' -

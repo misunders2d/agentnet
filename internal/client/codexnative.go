@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -75,7 +77,12 @@ func codexProcess(pid int) (parent int, ticks uint64, binary string, err error) 
 	binary, err = os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
 	return
 }
+
+// binaryReads counts executable digests: one per native hook event.
+var binaryReads atomic.Int64
+
 func codexBinaryDigest(binary string) (string, error) {
+	binaryReads.Add(1)
 	f, e := os.Open(binary)
 	if e != nil {
 		return "", e
@@ -95,6 +102,12 @@ func codexCommand(ctx context.Context, route codexNativeRoute, args ...string) (
 	return cmd.Output() // native stderr/output may contain context; never log it
 }
 func (r codexNativeRoute) verify(ctx context.Context, ancestry bool) error {
+	return r.verifyAs(ctx, ancestry, "")
+}
+
+// verifyAs is verify with the executable's digest already read in this
+// event (empty: read it now). The binary is large; one read per event.
+func (r codexNativeRoute) verifyAs(ctx context.Context, ancestry bool, digest string) error {
 	if runtime.GOOS != "linux" || r.PID < 1 || r.Home == "" || r.Binary == "" {
 		return errors.New("native Codex default-daemon route unavailable")
 	}
@@ -106,7 +119,9 @@ func (r codexNativeRoute) verify(ctx context.Context, ancestry bool) error {
 	if e != nil || ticks != r.Ticks || binary != r.Binary {
 		return errors.New("native Codex process changed; genuine registration required")
 	}
-	digest, e := codexBinaryDigest(binary)
+	if digest == "" {
+		digest, e = codexBinaryDigest(binary)
+	}
 	if e != nil || digest != r.SHA256 {
 		return errors.New("native Codex executable changed")
 	}
@@ -188,7 +203,7 @@ func captureCodexRoute(ctx context.Context) (codexNativeRoute, error) {
 		return r, e
 	}
 	r.Endpoint = codexEndpoint(r.Home)
-	return r, r.verify(ctx, true)
+	return r, r.verifyAs(ctx, true, r.SHA256)
 }
 
 // codexHomeDir is the caller's canonical Codex home: CODEX_HOME, or the
@@ -371,12 +386,18 @@ func (a *Agent) registerCodexReplySession(event, sid, file string, route codexNa
 			return "", e
 		}
 	}
-	tx, e := a.store.db.Begin()
-	if e != nil {
-		return "", e
+	// Every tool call runs this hook and, unchanged, only reads: no write
+	// transaction, so it never waits behind the daemon's writes.
+	var q dbq = a.store.db
+	var tx *sql.Tx
+	if event == "SessionStart" || event == "SessionEnd" {
+		if tx, e = a.store.db.Begin(); e != nil {
+			return "", e
+		}
+		defer tx.Rollback()
+		q = tx
 	}
-	defer tx.Rollback()
-	rows, e := tx.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='codex' AND json_extract(record,'$.session_id')=?`, sid)
+	rows, e := q.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='codex' AND json_extract(record,'$.session_id')=?`, sid)
 	if e != nil {
 		return "", e
 	}
@@ -405,7 +426,7 @@ func (a *Agent) registerCodexReplySession(event, sid, file string, route codexNa
 		return "", errors.New("ambiguous native Codex registration")
 	}
 	if count == 1 {
-		if e = a.checkReplySession(tx, r); e != nil {
+		if e = a.checkReplySession(q, r); e != nil {
 			return "", e
 		}
 		if r.File != file {

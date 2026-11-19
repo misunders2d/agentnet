@@ -6,6 +6,28 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Messages send faster when you send many at once. Queued messages of one
+  chat now go out in batches, with one round of checks and one save for many
+  messages, in the order you sent them. 1000 queued messages finish in about
+  9 s instead of 21 s, and in 20 s instead of 42 s on a busy computer. Writing
+  in another chat stays instant meanwhile.
+- Catching up on a two-person chat after being offline is about four times
+  faster. Missed messages are saved in pages of up to 100 instead of one by
+  one: 1000 missed messages arrive in about 3.5 s instead of 16 s. Each is
+  still checked on its own and stored once, in order. Group messages still
+  arrive one at a time.
+- Big, busy chats open in about a second. A chat with thousands of messages
+  that another person keeps writing into took close to a minute to show; it
+  now shows in about a second. Reading no longer waits behind the app's
+  writes.
+- The screen no longer redraws every message on each change, and changes in
+  other chats no longer make the open chat load again. Marking a chat read
+  updates it in place.
+- Claude and Codex hooks are lighter. A Claude tool call now reads the Claude
+  program once instead of three times, and events that change nothing no
+  longer wait for the app's database, so they no longer stall for seconds
+  while the app is busy.
+
 - Answers you had already seen no longer come back unread. v0.11.1 counted
   every past answer of your own agent on another of your devices that tagged
   you as a new arrival, so after the update old answers, some weeks old,

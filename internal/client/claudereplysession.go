@@ -1,6 +1,7 @@
 package client
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -22,17 +23,23 @@ func (a *Agent) ClaudeReplySessionHook(event, sid, file string) (string, error) 
 	if e != nil {
 		return "", e
 	}
-	return a.registerClaudeReplySession(event, sid, file, route)
+	return a.registerClaudeHook(event, sid, file, route, route.SHA256)
 }
 
 func (a *Agent) registerClaudeReplySession(event, sid, file string, route claudeNativeRoute) (string, error) {
+	return a.registerClaudeHook(event, sid, file, route, "")
+}
+
+// registerClaudeHook takes the executable digest the hook's own capture just
+// read (empty: read it again), so one event reads the binary once.
+func (a *Agent) registerClaudeHook(event, sid, file string, route claudeNativeRoute, digest string) (string, error) {
 	if sid == "" || len(sid) > 128 || strings.ContainsAny(sid, "/\\\x00") {
 		return "", errors.New("invalid native Claude session identity")
 	}
 	if event != "SessionStart" && event != "SessionEnd" && event != "UserPromptSubmit" && event != "PostToolUse" && event != "Stop" {
 		return "", errors.New("unsupported native Claude hook")
 	}
-	if e := route.verify(true); e != nil {
+	if e := route.verifyAs(true, digest); e != nil {
 		return "", e
 	}
 	file, e := canonicalNativeFile(file, true)
@@ -51,12 +58,18 @@ func (a *Agent) registerClaudeReplySession(event, sid, file string, route claude
 			return "", e
 		}
 	}
-	tx, e := a.store.db.Begin()
-	if e != nil {
-		return "", e
+	// Every tool call runs this hook and, unchanged, only reads: no write
+	// transaction, so it never waits behind the daemon's writes.
+	var q dbq = a.store.db
+	var tx *sql.Tx
+	if event == "SessionStart" || event == "SessionEnd" {
+		if tx, e = a.store.db.Begin(); e != nil {
+			return "", e
+		}
+		defer tx.Rollback()
+		q = tx
 	}
-	defer tx.Rollback()
-	rows, e := tx.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='claude' AND json_extract(record,'$.session_id')=?`, sid)
+	rows, e := q.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='claude' AND json_extract(record,'$.session_id')=?`, sid)
 	if e != nil {
 		return "", e
 	}
@@ -85,7 +98,7 @@ func (a *Agent) registerClaudeReplySession(event, sid, file string, route claude
 		return "", errors.New("ambiguous native Claude registration")
 	}
 	if count == 1 {
-		if e = a.checkReplySession(tx, r); e != nil {
+		if e = a.checkReplySession(q, r); e != nil {
 			return "", e
 		}
 		if r.File != file || r.Claude == nil {

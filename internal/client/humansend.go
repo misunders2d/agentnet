@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -85,6 +86,9 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	}
 	if out.ReplyTo != "" { // every copy names the parent's logical id
 		parent, known, err := humanReplyParent(a.store.db, root.ID(), out.ReplyTo)
+		if stagingBatch(ctx).names(out.ReplyTo) { // staged in this drain: its own logical id
+			parent, known, err = out.ReplyTo, true, nil
+		}
 		if err != nil {
 			return ConvSent{}, err
 		}
@@ -107,6 +111,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if err != nil {
 		return ConvSent{}, err
 	}
+	a.prefetchGroup(ctx, slices.Collect(maps.Keys(m.persons))) // every roster and key at once; the checks below read the answers
 	for id := range m.persons {
 		if _, err := a.refreshPerson(ctx, id, false); err != nil && !(root.Kind == protocol.ConvKindGroup && hubUnreachable(err)) {
 			return ConvSent{}, err
@@ -214,27 +219,11 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if len(devices) == 0 && !out.selfJob {
 		return ConvSent{}, errors.New("human: no recipient")
 	}
-	release, err := lockfile.Wait(a.spoolLockPath())
-	if err != nil {
-		return ConvSent{}, err
-	}
-	defer release()
-	stored := false
+	// Network checks first, with no lock held: a text turn never waits for
+	// another process's file work, and a file turn holds the spool lock only
+	// while it spools, seals and stores.
 	var copies []outCopy
-	var spooled []envelope.Blob
-	defer func() {
-		if !stored {
-			a.releaseSpool(envelope.Envelope{Blobs: spooled})
-			if binding != nil && binding.setup != nil {
-				a.releaseGroupCopies([]outCopy{*binding.setup})
-			}
-		}
-	}()
-	for _, file := range out.Files {
-		if err := a.keepSent(file.Path); err != nil {
-			return ConvSent{}, err
-		}
-	}
+	var seals []sealing
 	for _, device := range devices {
 		key, err := a.sendKey(ctx, device.Address)
 		if err != nil {
@@ -270,20 +259,35 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		if request && (device.Address == x.Host.Address && device.Fingerprint() == x.Host.Fingerprint || out.selfJob && len(copies) == 0) {
 			copyIn.ID = in.LID // the host's executable copy (asked on the host: the first copy, whose ID its job takes)
 		}
-		for _, file := range out.Files {
-			attachment, err := a.spoolNamed(file, recipient)
-			if err != nil {
-				return ConvSent{}, err
-			}
-			copyIn.Attachments = append(copyIn.Attachments, attachment)
-			spooled = append(spooled, attachment.Blob)
-		}
-		sealed, err := envelope.Seal(copyIn, a.id.Sign, recipient)
-		if err != nil {
-			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(copyIn.Attachments)})
+		copies = append(copies, outCopy{in: copyIn, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
+		seals = append(seals, sealing{recipient: recipient})
+	}
+	for _, file := range out.Files {
+		if err := a.keepSent(file.Path); err != nil {
 			return ConvSent{}, err
 		}
-		copies = append(copies, outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
+	}
+	release := func() {}
+	if len(out.Files) > 0 {
+		// Cleanup must not see spooled ciphertext before the outbox refers to it.
+		unlock, err := lockfile.Wait(a.spoolLockPath())
+		if err != nil {
+			return ConvSent{}, err
+		}
+		release = unlock // safe to call twice
+	}
+	defer func() { release() }()
+	stored := false
+	defer func() {
+		if !stored {
+			a.releaseGroupCopies(copies)
+			if binding != nil && binding.setup != nil {
+				a.releaseGroupCopies([]outCopy{*binding.setup})
+			}
+		}
+	}()
+	if err := a.spoolAndSeal(copies, seals, out.Files); err != nil {
+		return ConvSent{}, err
 	}
 	guard := func(tx *sql.Tx, replyID string) error {
 		if groupAdmission != "" {
@@ -318,13 +322,13 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if out.selfJob { // asked on the host itself: its job is recorded with it
 		jobKey, local.ID, local.To = a.Self().Fingerprint(), in.LID, a.Address
 	}
-	if err := a.store.addConvOutboxGuarded(copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, out.beforeStore, binding); err != nil {
+	if err := a.storeConvOutbox(ctx, copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
 	if queuedSend(ctx) {
-		return a.queuedConv(copies, local.ID, in.LID), nil
+		return a.queuedConv(ctx, copies, local.ID, in.LID), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {

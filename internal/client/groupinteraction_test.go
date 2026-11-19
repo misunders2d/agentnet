@@ -780,6 +780,95 @@ func TestGroupInteractionLinkedControlHistory(t *testing.T) {
 	})
 }
 
+// A deletion of an own group turn reaching a linked device as history,
+// where that device holds the turn, removes the turn's text in the commit
+// that stores the deletion.
+func TestGroupHistoryDeletionRemovesHeldText(t *testing.T) {
+	w, _, packet, stops := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	sent, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "bob's group turn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice holds bob's turn", func() bool { return len(groupTurns(t, w.alice, conv)) == 1 })
+	phone, await, _ := linkPhone(t, w.bob, "phone")
+	request := pendingLink(t, w.bob)
+	if err = w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-await; result.err != nil {
+		t.Fatal(result.err)
+	}
+	stopPhone := runAgent(t, phone)
+	publishGroupFixtureCaps(t, phone, true)
+	copies, err := w.alice.groupDeliveryCopies(tctx(t), packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.alice.store.addConvOutbox(copies, envelope.Inner{}, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.alice.kickNow()
+	eventually(t, "the phone holds bob's turn", func() bool {
+		m := groupTurns(t, phone, conv)
+		return len(m) == 1 && m[0].Body == "bob's group turn"
+	})
+	// Neither daemon runs on: the deletion reaches the phone only as the
+	// history page below, not as its live copy.
+	stopPhone()
+	stops[w.bob]()
+	ref, err := w.bob.RefOf(conv, sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.bob.Retract(tctx(t), ref, ""); err != nil {
+		t.Fatal(err)
+	}
+	var mark int64
+	if err = w.bob.store.db.QueryRow(`SELECT coalesce(max(rowid),0) FROM outbox`).Scan(&mark); err != nil {
+		t.Fatal(err)
+	}
+	zero, _ := json.Marshal(historyPos{})
+	if _, err = w.bob.store.db.Exec(`UPDATE history_jobs SET state='running',pos=? WHERE device=?`, string(zero), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.bob.historyPageFor(phone.Self(), historyPos{}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := w.bob.store.db.Query(`SELECT envelope FROM outbox WHERE rowid>? AND recipient=? AND sub=? ORDER BY rowid`, mark, phone.Address, envelope.SubHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envs []envelope.Envelope
+	for rows.Next() {
+		var raw []byte
+		var env envelope.Envelope
+		if err = rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if err = json.Unmarshal(raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		envs = append(envs, env)
+	}
+	rows.Close()
+	watched := watchDeletionCommits(t, phone)
+	for _, env := range envs {
+		groupGovernanceDeliver(t, w.bob, phone, env)
+	}
+	var stored int
+	if err = phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND sub='retraction' AND ref_id=?`, conv, sent.LID).Scan(&stored); err != nil || stored != 1 {
+		t.Fatalf("the deletion did not reach the phone as history (%d copies paged): %d %v", len(envs), stored, err)
+	}
+	if watched() == 0 {
+		t.Fatal("no commit was checked")
+	}
+	var body string
+	if err = phone.store.db.QueryRow(`SELECT body FROM inbox WHERE conv=? AND lid=? AND sub IS NULL`, conv, sent.LID).Scan(&body); err != nil || body != "" {
+		t.Fatalf("the phone keeps the deleted text: %q %v", body, err)
+	}
+}
+
 func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	stub := installAgentStub(t)
 	w, carol, packet, _ := groupTurnsFixture(t)

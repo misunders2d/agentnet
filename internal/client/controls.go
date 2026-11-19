@@ -508,7 +508,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			if extra != nil {
 				copies = append(copies, *extra)
 			}
-			queued := a.queuedConv(copies, env.ID, env.ID)
+			queued := a.queuedConv(ctx, copies, env.ID, env.ID)
 			return ControlSent{ID: queued.ID, State: queued.State, Detail: queued.Detail}, nil
 		}
 		if extra != nil {
@@ -829,7 +829,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	}
 	defer notifyDaemon(a.home)
 	if queuedSend(ctx) {
-		queued := a.queuedConv(copies, local.ID, lid)
+		queued := a.queuedConv(ctx, copies, local.ID, lid)
 		sent.ID, sent.State, sent.Detail = queued.ID, queued.State, queued.Detail
 		if deferredActivity {
 			return sent, errNativeActivityDeferred
@@ -899,6 +899,23 @@ func (s *store) addControlInbox(in envelope.Inner, verifiedBy string, fromQuaran
 	}
 	defer tx.Rollback()
 	if err := addControlInboxIn(tx, in, verifiedBy, fromQuarantine); err != nil {
+		return err
+	}
+	return s.done(tx.Commit())
+}
+
+// addRetractionInbox is addControlInbox for an authorized retraction of ref:
+// the text it deletes goes in the same transaction (redactRetractedText).
+func (s *store) addRetractionInbox(in envelope.Inner, verifiedBy string, fromQuarantine bool, ref ControlRef, self string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := addControlInboxIn(tx, in, verifiedBy, fromQuarantine); err != nil {
+		return err
+	}
+	if err := redactRetractedText(tx, ref, self); err != nil {
 		return err
 	}
 	return s.done(tx.Commit())
@@ -1019,14 +1036,15 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		if in.Sub != envelope.SubReaction && in.Ref.Fingerprint != sender.Fingerprint() {
 			return hold(reasonInvalid, "only the key that sent a message edits or deletes it")
 		}
-		if err := a.store.addControlInbox(in, sender.Fingerprint(), fromQuarantine); err != nil {
+		if in.Sub != envelope.SubRetraction {
+			return a.store.addControlInbox(in, sender.Fingerprint(), fromQuarantine)
+		}
+		ref := ControlRef{ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}
+		if err := a.store.addRetractionInbox(in, sender.Fingerprint(), fromQuarantine, ref, a.Self().Fingerprint()); err != nil {
 			return err
 		}
-		if in.Sub == envelope.SubRetraction {
-			ref := ControlRef{ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}
-			a.dropCache(ref)
-			a.redactRetracted(ref)
-		}
+		a.dropCache(ref)
+		a.redactRetracted(ref)
 		return nil
 	}
 	root, _, found, err := a.store.conversation(in.Conv)
@@ -1187,7 +1205,13 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 				}
 			}
 		}
-		return insertCopies(tx, forward)
+		if e := insertCopies(tx, forward); e != nil {
+			return e
+		}
+		if in.Sub == envelope.SubRetraction { // its text goes with it (applyRetraction does the rest)
+			return redactRetractedText(tx, ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}, a.Self().Fingerprint())
+		}
+		return nil
 	}
 	res, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, also)
 	if err != nil {
@@ -1261,7 +1285,10 @@ func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in en
 		if err = topicAudienceAuthorization(tx, in, members, a.Address); err != nil {
 			return err
 		}
-		return humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint())
+		if err = humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+		return redactRetractionIn(tx, in, a.Self().Fingerprint())
 	})
 	if err != nil {
 		return hold(reasonProof, err.Error())
@@ -1367,21 +1394,43 @@ func (a *Agent) dropKept(ref ControlRef) {
 // is delivered or run twice. Copies already delivered elsewhere, saved or
 // given to an agent are not reached: nothing here claims otherwise.
 func (a *Agent) redactRetracted(ref ControlRef) {
+	redactRetractedText(a.store.db, ref, a.Self().Fingerprint()) // the storing transaction did this already where it could
+	a.redactGroupHistoryCopies(ref)
+	a.redactReceiverDelegations(ref)
+	a.store.done(nil)
+}
+
+// execer writes the store, directly or within a transaction.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// redactRetractedText is redactRetracted's part in this device's own rows:
+// the target's body (received copies and this device's own sent copies,
+// self is its key) and the text of every edit of it. The transaction that
+// stores a received retraction runs it too, so no reader ever sees the
+// deletion stored beside the text it deletes (the read pool reads beside
+// the writer: a later statement was seen late).
+func redactRetractedText(q execer, ref ControlRef, self string) error {
 	inWhere, inArgs := inScope(ref)
-	outWhere, outArgs := outScope(ref, a.Self().Fingerprint())
-	a.store.db.Exec(`UPDATE inbox SET body = '' WHERE id IN (SELECT i.id FROM inbox i WHERE `+inWhere+`) AND kind = ?`, append(inArgs, envelope.KindMessage)...)
-	a.store.db.Exec(`UPDATE outbox SET body = '' WHERE id IN (SELECT o.id FROM outbox o WHERE `+outWhere+`) AND coalesce(kind, json_extract(envelope, '$.kind')) = ?`, append(outArgs, envelope.KindMessage)...)
+	outWhere, outArgs := outScope(ref, self)
+	if _, err := q.Exec(`UPDATE inbox SET body = '' WHERE id IN (SELECT i.id FROM inbox i WHERE `+inWhere+`) AND kind = ?`, append(inArgs, envelope.KindMessage)...); err != nil {
+		return err
+	}
+	if _, err := q.Exec(`UPDATE outbox SET body = '' WHERE id IN (SELECT o.id FROM outbox o WHERE `+outWhere+`) AND coalesce(kind, json_extract(envelope, '$.kind')) = ?`, append(outArgs, envelope.KindMessage)...); err != nil {
+		return err
+	}
 	// Edits of it, whatever kind it was: their text was never admitted for anything.
 	convWhere, convArg := `conv IS NULL`, []any{}
 	if ref.Conv != "" {
 		convWhere, convArg = `conv = ?`, []any{ref.Conv}
 	}
 	revArgs := append(append([]any{}, convArg...), ref.ID, ref.Fingerprint, envelope.SubRevision)
-	a.store.db.Exec(`UPDATE inbox SET body = '' WHERE `+convWhere+` AND ref_id = ? AND ref_fp = ? AND sub = ?`, revArgs...)
-	a.store.db.Exec(`UPDATE outbox SET body = '' WHERE `+convWhere+` AND ref_id = ? AND ref_fp = ? AND sub = ?`, revArgs...)
-	a.redactGroupHistoryCopies(ref)
-	a.redactReceiverDelegations(ref)
-	a.store.done(nil)
+	if _, err := q.Exec(`UPDATE inbox SET body = '' WHERE `+convWhere+` AND ref_id = ? AND ref_fp = ? AND sub = ?`, revArgs...); err != nil {
+		return err
+	}
+	_, err := q.Exec(`UPDATE outbox SET body = '' WHERE `+convWhere+` AND ref_id = ? AND ref_fp = ? AND sub = ?`, revArgs...)
+	return err
 }
 
 // retractedRef reports whether an authorized retraction of the exact
@@ -1730,6 +1779,16 @@ func controlAuthorized(q dbq, m dmMembers, in envelope.Inner, author string) (re
 // controlOtherPerson is why an edit or deletion of another person's message
 // is refused (held diagnostic control_target_person_mismatch).
 const controlOtherPerson = "only the person who sent a message edits or deletes it"
+
+// redactRetractionIn is applyRetraction's text part, run inside the
+// transaction that stores in: a stored deletion never sits beside its text.
+// The rest (requests, cached files, history copies) follows the commit.
+func redactRetractionIn(q execer, in envelope.Inner, self string) error {
+	if in.Sub != envelope.SubRetraction || in.Ref == nil {
+		return nil
+	}
+	return redactRetractedText(q, ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}, self)
+}
 
 // applyRetraction does what an authorized, stored retraction does here.
 func (a *Agent) applyRetraction(in envelope.Inner) {

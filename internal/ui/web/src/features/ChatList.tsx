@@ -44,13 +44,26 @@ export function ChatList() {
   const agentNames = useAgentNames();
   // A press, or a mouse resting on a row, loads that chat ahead, and its
   // newest pictures: it then opens at once, pictures and all.
-  const hover = useRef(0);
+  // A mouse sweeping the list loads one chat at a time: the one under it when
+  // the load before is done, not every row it crossed (MEL-748 S5).
+  const hover = useRef(0), hovering = useRef(false), wanted = useRef<Open>(null);
+  const load = (o: Open) => store.prefetch(o).then((v) => { if (v) warmPictures(store.api, v.messages); });
+  const loadHovered = (o: Open) => {
+    if (hovering.current) { wanted.current = o; return; }
+    hovering.current = true;
+    void load(o).finally(() => {
+      hovering.current = false;
+      const next = wanted.current;
+      wanted.current = null;
+      if (next) loadHovered(next);
+    });
+  };
   const ahead = (o: Open, e: ReactPointerEvent) => {
     clearTimeout(hover.current);
-    const load = () => void store.prefetch(o).then((v) => { if (v) warmPictures(store.api, v.messages); });
-    if (e.type === "pointerdown") load();
-    else if (e.pointerType === "mouse") hover.current = window.setTimeout(load, 120);
+    if (e.type === "pointerdown") void load(o);
+    else if (e.pointerType === "mouse") hover.current = window.setTimeout(() => loadHovered(o), 120);
   };
+  const leave = (o: Open) => { clearTimeout(hover.current); if (wanted.current?.id === o?.id) wanted.current = null; };
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [searching, setSearching] = useState(false);
@@ -163,7 +176,7 @@ export function ChatList() {
                 if (next < 0) search.current?.focus(); else rows[Math.min(next, rows.length - 1)]?.focus();
               }}>
               {shown.map((i) => (
-                <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => clearTimeout(hover.current)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
+                <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => leave(i.open)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
                   <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}
                     selected={!!lit && (lit.id === i.open.id || !!i.conversations?.some((c) => c.id === lit.id))}
                     onOpen={() => void store.openChat(i.open)} />

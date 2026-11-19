@@ -277,12 +277,15 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	if !checkShown(guest, sent.LID, "Revised member turn", false) {
 		t.Error("public member Revise did not reach captured group guest")
 	}
+	// Each receiver stores a captured-audience deletion with its text gone.
+	watched := watchDeletionCommits(t, guest)
 	if _, e = member.Retract(tctx(t), ref, ""); e != nil {
 		t.Fatal(e)
 	}
 	if !checkShown(guest, sent.LID, "", true) {
 		t.Error("public member Retract did not reach captured group guest")
 	}
+	watched()
 	own, e := guest.SendConv(tctx(t), conv, ConvOutgoing{PID: invite.PID, Body: "Guest owns this turn"})
 	if e != nil {
 		t.Fatal(e)
@@ -298,11 +301,13 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	} else if !checkShown(member, own.LID, "Guest revises its own turn", false) {
 		t.Error("guest revision did not render at current member")
 	}
+	watched = watchDeletionCommits(t, member)
 	if _, e = guest.Retract(tctx(t), ownRef, ""); e != nil {
 		t.Errorf("public guest Retract refused own captured turn: %v", e)
 	} else if !checkShown(member, own.LID, "", true) {
 		t.Error("guest retraction did not render at current member")
 	}
+	watched()
 	// Later guests never become readers of controls about the earlier turn.
 	anchored, e := member.SendConv(tctx(t), conv, ConvOutgoing{Body: "Earlier captured audience"})
 	if e != nil {

@@ -37,7 +37,11 @@ func (a *Agent) verifyReceiverOriginal(ctx context.Context, r envelope.ReceiverR
 	if r.Conv != "" {
 		ref = r.LID
 	}
-	if r.Kind == envelope.KindMessage && retractedRef(a.store.db, r.Conv, ref, r.FromKey) {
+	// A device-thread import records a deletion stored before it in its own
+	// transaction (canceled, redacted, no ready): the original may reach this
+	// device and its deletion pass the ordinary control check first. A
+	// conversation import still stops here, before it writes the root or proof.
+	if r.Conv != "" && r.Kind == envelope.KindMessage && retractedRef(a.store.db, r.Conv, ref, r.FromKey) {
 		return errors.New("original ordinary request was deleted before delegation acceptance")
 	}
 	if err := r.Validate(); err != nil {

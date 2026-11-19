@@ -3,7 +3,7 @@
 // while messages are being chosen to share, the selection bar. Everything
 // shown comes from the conversation's loaded view (store.views); actions
 // go through the store.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconChevronLeft, IconMessages, IconX, IconUserPlus } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
 import type { T } from "../api";
@@ -57,6 +57,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const view = useStore(store, (s) => s.views[open.id]);
   const groupPending = useStore(store, (s) => s.groupContextPending === open.id);
   const overview = useStore(store, (s) => s.overview);
+  const msgOverview = useCtxOverview(overview);
   const names = useAgentNames();
   const [selected, setSelected] = useState<string[] | null>(null);
   const [organize, setOrganize] = useState(false);
@@ -68,10 +69,13 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     ? groupPending ? {...view, frozen: "Updating verified group details. Sending is paused until verification finishes."} as T.DMThread : view as T.DMThread
     : null, [open.kind, open.id, view, groupPending]);
   const th = open.kind === "thread" && view ? view as T.Thread : null;
-  const ctx: Ctx = useMemo(() => ({
-    conv: t?.id ?? th?.id ?? open.id, dm: t, thread: th, overview, names, // the Composer's draft key
+  const ctxWith = (o: T.Overview | null): Ctx => ({
+    conv: t?.id ?? th?.id ?? open.id, dm: t, thread: th, overview: o, names, // the Composer's draft key
     canReply: t ? !t.frozen : th ? !th.key?.pending : false,
-  }), [open.id, t, th, overview, names]);
+  });
+  const ctx = useMemo(() => ctxWith(overview), [open.id, t, th, overview, names]);
+  // The timeline's messages see the overview only through the fields they read.
+  const msgCtx = useMemo(() => ctxWith(msgOverview), [open.id, t, th, msgOverview, names]);
   const hs = useMemo(() => helpers(ctx, (fn) => store.run(fn)), [ctx]);
   const canInvite = !!t && !t.frozen && (!t.role || t.role === "member");
   const topic = useStore(store, s => s.drafts[open.id]?.topic);
@@ -108,7 +112,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
       <TopicContinuation dm={t ?? undefined} thread={th ?? undefined} topic={topic || ""} fresh={!!newTopic} open={continueTopic} onClose={() => setContinueTopic(false)} />
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
-      <Timeline key={open.id + ":" + (newTopic ? "new" : topic || "main")} ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} unread={open.unread} readVisit={readVisit} selected={selected} onSelect={toggle} start={<TopicStart ctx={ctx} messages={messages} />} end={<TopicEnd ctx={ctx} />}
+      <Timeline key={open.id + ":" + (newTopic ? "new" : topic || "main")} ctx={msgCtx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} unread={open.unread} readVisit={readVisit} selected={selected} onSelect={toggle} start={<TopicStart ctx={ctx} messages={messages} />} end={<TopicEnd ctx={ctx} />}
         footer={left && (
           // The room panel's words; the timeline keeps its last lines clear of it.
           <div role="status" className="pop-in flex items-center gap-3 rounded-2xl stroke bg-ink py-2 pl-4 pr-2 text-canvas shadow-pop">
@@ -208,4 +212,19 @@ export function NothingOpen() {
       <p className="max-w-sm text-[15px] text-text-2">Your conversations with people and their agents open here.</p>
     </section>
   );
+}
+
+// The fields of the overview a timeline's messages read (with the helpers they
+// call). Every list reload made a new overview, a new ctx and so every memoized
+// message render again: per change, the whole chat. Now a reload that changes
+// none of these keeps the same object (MEL-748 S5). Header and topic bar keep
+// the live overview (they read the list, presence and invitations too).
+// Checked by narrowing Ctx.overview to a Pick of exactly these fields: every
+// message helper type-checks (agent_devices and group_invitations were missed).
+const ctxFields = (o: T.Overview) => [o.me, o.person, o.people, o.role, o.files, o.needs_you, o.notify, o.topic_list, o.remind, o.reminders, o.review, o.directory, o.agent_devices, o.group_invitations];
+export function useCtxOverview(o: T.Overview | null): T.Overview | null {
+  const kept = useRef<{ key: string; o: T.Overview | null } | null>(null);
+  const key = o ? JSON.stringify(ctxFields(o)) : "";
+  if (!kept.current || kept.current.key !== key || !o !== !kept.current.o) kept.current = { key, o };
+  return kept.current.o;
 }

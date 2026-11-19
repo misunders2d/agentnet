@@ -253,6 +253,40 @@ func (a *Agent) upload(ctx context.Context, conn *hubConn, prefix, to string, b 
 const maxStaleConflicts = 3
 
 // releaseSpool deletes spooled ciphertext once the Hub holds the message.
+// sealing says how one prepared copy is sealed once a send's network checks
+// are done.
+type sealing struct {
+	recipient *age.X25519Recipient
+	attention bool   // seal with the notification channel below
+	channel   string // protocol.NotifyChannel of the copy's device
+}
+
+// spoolAndSeal attaches files to each copy, encrypted to its own device, and
+// seals it as seals says. The caller holds the spool lock when there are
+// files, and releases the copies' spool on failure.
+func (a *Agent) spoolAndSeal(copies []outCopy, seals []sealing, files []OutgoingFile) error {
+	for i := range copies {
+		c := &copies[i]
+		for _, f := range files {
+			att, err := a.spoolNamed(f, seals[i].recipient)
+			if err != nil {
+				return err
+			}
+			c.in.Attachments = append(c.in.Attachments, att)
+		}
+		var err error
+		if seals[i].attention {
+			c.env, err = envelope.SealAttention(c.in, a.id.Sign, seals[i].recipient, seals[i].channel)
+		} else {
+			c.env, err = envelope.Seal(c.in, a.id.Sign, seals[i].recipient)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *Agent) releaseSpool(env envelope.Envelope) {
 	for _, b := range env.Blobs {
 		os.Remove(a.spoolPath(b.ID))

@@ -31,7 +31,11 @@ type claudeNativeRoute struct {
 	Source   string `json:"source"`
 }
 
-func (r claudeNativeRoute) verify(ancestry bool) error {
+func (r claudeNativeRoute) verify(ancestry bool) error { return r.verifyAs(ancestry, "") }
+
+// verifyAs is verify with the executable's digest already read in this
+// event (empty: read it now). The binary is large; one read per event.
+func (r claudeNativeRoute) verifyAs(ancestry bool, digest string) error {
 	if runtime.GOOS != "linux" || r.PID < 1 || r.Binary == "" || r.Source != claudeChannelSource {
 		return errors.New("qualified native Claude route unavailable")
 	}
@@ -43,7 +47,9 @@ func (r claudeNativeRoute) verify(ancestry bool) error {
 	if e != nil || ticks != r.Ticks || binary != r.Binary {
 		return errors.New("native Claude process identity changed")
 	}
-	digest, e := codexBinaryDigest(binary)
+	if digest == "" {
+		digest, e = codexBinaryDigest(binary)
+	}
 	if e != nil || digest != r.SHA256 {
 		return errors.New("native Claude executable changed")
 	}
@@ -121,7 +127,7 @@ func captureClaudeRoute(sid string) (claudeNativeRoute, error) {
 		return r, e
 	}
 	r.Source = claudeChannelSource
-	return r, r.verify(true)
+	return r, r.verifyAs(true, r.SHA256)
 }
 
 // claudeProjectsDir is the projects directory of the caller's canonical

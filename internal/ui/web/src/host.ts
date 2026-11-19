@@ -1,6 +1,8 @@
 // Host API v1, as loader.js builds it (docs/UI_SKINS.md "Host API v1"),
 // with its documented additive extensions. Comic uses only this.
-export type HostEvent = { type: "change"; seq: number; hint?: "typing" | "presence" } | { type: "restart" } | { type: "disconnect" };
+// keys (GET /events "scope"), when present, are the view_dirty keys the change
+// moved: a view whose scope names none of them, with only chats moved, stays.
+export type HostEvent = { type: "change"; seq: number; hint?: "typing" | "presence"; keys?: string[] } | { type: "restart" } | { type: "disconnect" };
 
 export interface Workspace {
   id: string;

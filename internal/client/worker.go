@@ -100,7 +100,11 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 		runs.Add(1)
 		go func() { defer runs.Done(); run() }()
 	}
+	var last time.Time
 	for {
+		if !pace(ctx, &last, a.workerUrgent) {
+			return
+		}
 		_, changed := a.Changed() // capture before claiming: no lost local wake
 		for a.runNextWith(ctx, wake, dispatch) {
 			a.reviewAttention(ctx)

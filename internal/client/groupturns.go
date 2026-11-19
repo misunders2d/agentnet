@@ -18,6 +18,10 @@ import (
 
 const groupTurnRecipientSchema = `ALTER TABLE outbox ADD COLUMN recipient_fp TEXT;`
 
+// errGroupRosterMoved: a member's roster changed between a group send's
+// checks and its store. Nothing was stored; sending reads again (conv.go).
+var errGroupRosterMoved = fmt.Errorf("%w: a member's roster changed during the send", ErrGroupContextPending)
+
 func groupTurnPacketIn(q dbq, conv string) (GroupContext, error) {
 	var packet GroupContext
 	var raw []byte
@@ -32,7 +36,7 @@ func groupTurnPacketIn(q dbq, conv string) (GroupContext, error) {
 	return packet, err
 }
 
-func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]ConversationInfo, error) {
+func (a *Agent) projectGroupConversations(rows []ConversationInfo, only ...string) ([]ConversationInfo, error) {
 	data, err := a.store.db.Query(`SELECT conv FROM group_context ORDER BY conv`)
 	if err != nil {
 		return nil, err
@@ -52,6 +56,9 @@ func (a *Agent) projectGroupConversations(rows []ConversationInfo) ([]Conversati
 		return nil, err
 	}
 	for _, conv := range ids {
+		if len(only) > 0 && !slices.Contains(only, conv) {
+			continue
+		}
 		packet, err := groupTurnPacketIn(a.store.db, conv)
 		if err != nil {
 			return nil, err
@@ -204,7 +211,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if len(m.Files) > envelope.MaxAttachments {
 		return ConvSent{}, errors.New("group: too many files")
 	}
-	if err := a.syncContinuityGroups(ctx); err != nil {
+	if err := a.syncContinuityGroups(ctx, conv); err != nil {
 		return ConvSent{}, err
 	}
 	packet, err := groupTurnPacketIn(a.store.db, conv)
@@ -241,7 +248,10 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if err != nil {
 		return ConvSent{}, err
 	}
-	reply, err := groupReplyLID(a.store.db, conv, m.ReplyTo)
+	reply := m.ReplyTo // a turn staged in this drain is its own logical id
+	if !stagingBatch(ctx).names(reply) {
+		reply, err = groupReplyLID(a.store.db, conv, m.ReplyTo)
+	}
 	if err != nil {
 		return ConvSent{}, err
 	}
@@ -255,12 +265,8 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	}
 	raw, _ := json.Marshal(packet.Root)
 	lid, _ := sendID(ctx)
-	release, err := lockfile.Wait(a.spoolLockPath())
-	if err != nil {
-		return ConvSent{}, err
-	}
-	defer release()
 	var copies []outCopy
+	var seals []sealing // one per copy, sealed once the checks are done
 	var notifyFeatures []string
 	if waiting == "" {
 		notifyFeatures, _ = a.relayFeatures(ctx)
@@ -335,23 +341,8 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			if waiting != "" {
 				copies[len(copies)-1].state, copies[len(copies)-1].why = stateConvWaiting, waiting
 			}
-			copy := &copies[len(copies)-1]
-			for _, file := range m.Files {
-				att, e := a.spoolNamed(file, recipient)
-				if e != nil {
-					return ConvSent{}, e
-				}
-				copy.in.Attachments = append(copy.in.Attachments, att)
-			}
 			_, _, notify := a.convSupport(ctx, device.Address, key, notifyFeatures)
-			if notify && !copy.in.Replica && asksAttention(copy.in) && copy.in.TopicEvent == nil {
-				copy.env, e = envelope.SealAttention(copy.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, device.Fingerprint()))
-			} else {
-				copy.env, e = envelope.Seal(copy.in, a.id.Sign, recipient)
-			}
-			if e != nil {
-				return ConvSent{}, e
-			}
+			seals = append(seals, sealing{recipient, notify && !in.Replica && asksAttention(in) && in.TopicEvent == nil, protocol.NotifyChannel(conv, device.Fingerprint())})
 		}
 	}
 	// Not sent at all only when no device of another member can get it
@@ -362,6 +353,18 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			why += "; " + s.To + ": " + s.Detail
 		}
 		return ConvSent{}, errors.New(why)
+	}
+	// The network checks are done: only a file turn takes the spool lock,
+	// so cleanup never sees its ciphertext before the outbox refers to it.
+	release := func() {}
+	if len(m.Files) > 0 {
+		if release, err = lockfile.Wait(a.spoolLockPath()); err != nil {
+			return ConvSent{}, err
+		}
+	}
+	defer func() { release() }()
+	if err = a.spoolAndSeal(copies, seals, m.Files); err != nil {
+		return ConvSent{}, err
 	}
 	if err = a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
@@ -384,7 +387,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 				return e
 			}
 			if !ok || p.roster.Hash() != hash {
-				return ErrGroupContextPending
+				return errGroupRosterMoved
 			}
 		}
 		for _, copy := range copies {
@@ -406,14 +409,14 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		}
 		return m.organizationBatch.stage(a, copies, envelope.Inner{}, claim)
 	}
-	err = a.store.addConvOutboxGuarded(copies, envelope.Inner{}, claim, "", m.beforeStore, binding)
+	err = a.storeConvOutbox(ctx, copies, envelope.Inner{}, claim, "", m.beforeStore, binding)
 	if err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
 	if queuedSend(ctx) {
-		sent := a.queuedConv(copies, copies[0].env.ID, lid)
+		sent := a.queuedConv(ctx, copies, copies[0].env.ID, lid)
 		sent.Copies = append(sent.Copies, skipped...)
 		sent.State, sent.Detail = notSentFirst(sent.State, sent.Detail, skipped)
 		return sent, nil

@@ -454,7 +454,7 @@ func LocalUpdateRequired(home string) (UpdateRequired, bool) {
 		return UpdateRequired{}, false
 	}
 	defer db.Close()
-	return (&store{db: db}).updateRequired()
+	return (&store{db: readsOn(db)}).updateRequired()
 }
 
 // updateRequiredNudge is the hook line while the Hub refuses this build.

@@ -118,7 +118,7 @@ func nativeProgressFaultStore(t *testing.T, a *Agent, after bool) *nativeProgres
 	// The schema/private file already came from openStore. Reuse its actual
 	// driver and exact connection settings; no mock store or migration changes.
 	dsn := "file:" + filepath.Join(a.home, "agent.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
-	a.store.db = sql.OpenDB(&nativeProgressFaultConnector{base: base, dsn: dsn, fault: f})
+	a.store.db = readsOn(sql.OpenDB(&nativeProgressFaultConnector{base: base, dsn: dsn, fault: f}))
 	a.store.db.SetMaxOpenConns(1)
 	var journal string
 	var busy, foreign int

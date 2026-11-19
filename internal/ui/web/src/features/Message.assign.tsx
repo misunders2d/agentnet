@@ -58,7 +58,7 @@ function AssignmentForm({ m, ctx, onDone, onSending, targetKey, setTargetKey, in
   const targetID = (t: AgentChatTarget) => t.host + "#" + (t.agentId || "");
   useEffect(() => {
     alive.current = true;
-    const overview = ctx.overview;
+    const overview = store.get().overview || ctx.overview; // the live list: the timeline's ctx keeps only what messages read
     if (overview) ownAgentChatTargets(store.api, overview, store.host.platform === "daemon").then(result => {
       if (alive.current) { setTargets(result.targets); setProblems(result.problems); }
     });

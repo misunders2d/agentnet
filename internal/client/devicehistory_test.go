@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -138,9 +139,29 @@ func deliverDeviceHistory(t *testing.T, a, b *Agent, sub string) int {
 	rows.Close()
 	for _, env := range envs {
 		groupGovernanceDeliver(t, a, b, env)
-		if s, e := b.store.disposition(env.ID); e != nil || s != protocol.StateDelivered {
-			t.Fatalf("%s %s: %s %s %v", sub, env.ID, s, heldReason(t, b, env.ID), e)
+	}
+	// A copy may come before the copy carrying the original it names (the
+	// sender writes its own background pages beside these). It is held for
+	// proof until that original is here; admitting the original asks b's
+	// daemon for a proof pass (admitDeviceHistory), which admits it.
+	// One deadline for the whole batch, as long as eventually waits.
+	deadline := time.Now().Add(15 * time.Second)
+	for _, env := range envs {
+		delivered := func() bool {
+			s, e := b.store.disposition(env.ID)
+			return e == nil && s == protocol.StateDelivered
 		}
+		if delivered() {
+			continue
+		}
+		for !delivered() {
+			if time.Now().After(deadline) {
+				s, e := b.store.disposition(env.ID)
+				t.Fatalf("%s %s: %s %s %v", sub, env.ID, s, heldReason(t, b, env.ID), e)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Logf("%s %s: held for proof, then admitted by the daemon's proof pass", sub, env.ID)
 	}
 	return len(envs)
 }

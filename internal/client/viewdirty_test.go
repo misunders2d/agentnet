@@ -96,6 +96,9 @@ func TestViewDirtyNamesTheScopeOfEveryWrite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The list reads these keys; "v" keys are ViewCoverSchema's, for chat
+		// views only (TestViewCoverNamesEveryTable).
+		keys = slices.DeleteFunc(keys, func(k string) bool { return strings.HasPrefix(k, "v") })
 		slices.Sort(keys)
 		if got := strings.Join(keys, " "); got != w.keys {
 			t.Errorf("%s marks %q, want %q", w.name, got, w.keys)

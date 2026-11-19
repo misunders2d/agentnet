@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -116,5 +117,24 @@ func TestBigReceivedFilesWaitForATap(t *testing.T) {
 	}
 	if _, _, err = w.bob.OpenAttachment(tctx(t), sent.ID, 1); !errors.Is(err, errFileGone) || retryable(err) {
 		t.Fatal("removed file opens as a transient failure", err)
+	}
+}
+
+// The relay's refusal of a file is stored where no chat's mark looks, so it
+// tells every view to look again: a background fetch has no one else to.
+func TestFileGoneTellsTheViews(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	a := &Agent{store: s, changes: newChangeFeed()}
+	before, _ := a.ViewChanges()
+	err = a.goneOnRelay(FileInfo{BlobID: "blob", ctSHA256: "digest"}, &HubError{Status: http.StatusNotFound})
+	if !errors.Is(err, errFileGone) {
+		t.Fatal(err)
+	}
+	if after, _ := a.ViewChanges(); after.Unscoped == before.Unscoped {
+		t.Fatal("a file the relay no longer has left every view as it was")
 	}
 }

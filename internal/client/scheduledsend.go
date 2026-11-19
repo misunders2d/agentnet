@@ -39,6 +39,9 @@ var (
 	ErrScheduledStale      = errors.New("the scheduled message changed; review it again")
 	ErrScheduledAudience   = errors.New("the scheduled audience changed; review it again")
 	errScheduledEarly      = errors.New("the scheduled message is not due")
+	// A recipient key changed (pending, trusted anew or revoked) after this
+	// message was sealed: nothing is stored, and it is prepared again.
+	errSendKeyMoved = errors.New("a recipient's key changed while the message was prepared")
 )
 
 // ScheduledAudience is the approved ceiling, not a pinned device list. Current
@@ -305,9 +308,11 @@ func (a *Agent) prepareScheduled(in ScheduledSendInput, keep []ScheduledFile) (S
 	if !protocol.ValidHash(in.Conv) {
 		return ScheduledSend{}, errors.New("invalid conversation")
 	}
-	if in.Topic == "new" {
+	if in.Topic == "new" && !in.immediate {
 		return ScheduledSend{}, errors.New("open the topic before scheduling a message")
 	}
+	// A message that opens a topic gets the topic's id when it is accepted
+	// (outgoingTopic), so a repeat of the same send reaches the same topic.
 	topic, err := a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo)
 	if err != nil {
 		return ScheduledSend{}, err
@@ -391,9 +396,11 @@ func (a *Agent) sameScheduledCreate(old ScheduledSend, in ScheduledSendInput) (b
 	if old.Immediate != in.immediate || old.Conv != in.Conv || old.Body != in.Body || !old.Immediate && (!old.Due.Equal(in.Due) || old.Timezone != timezone) || !sameScheduledAsk(old.Ask, in.ask) {
 		return false, nil
 	}
-	topic, err := a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo)
-	if err != nil {
-		return false, err
+	topic, err := old.Topic, error(nil) // a repeat of a send that opened a topic opens the same one
+	if in.Topic != "new" {
+		if topic, err = a.outgoingTopic(in.Conv, in.Topic, in.ReplyTo); err != nil {
+			return false, err
+		}
 	}
 	if old.Topic != topic {
 		return false, nil
@@ -632,6 +639,11 @@ func (a *Agent) scheduledCommit(s ScheduledSend) beforeConvStore {
 			if !valid(c.in) || c.env.To != c.in.To {
 				return ErrScheduledAudience
 			}
+			// The key it was sealed to is still the one pinned here, with
+			// no pending change or revocation recorded since it was checked.
+			if err := currentSendKey(tx, c.env.To, c.recipientFP); err != nil {
+				return errors.Join(errSendKeyMoved, err)
+			}
 			allowed := asked(c)
 			for _, person := range s.Audience.Persons {
 				if p, ok := m.persons[person]; ok && p.has(c.env.To, c.recipientFP) {
@@ -722,23 +734,7 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string, stored *
 		s.Rev++
 	}
 	fail := func(state, detail string, cause error) (ScheduledSend, error) {
-		diagnostic := ""
-		if s.Immediate {
-			detail, diagnostic = queuedSendWords(state, detail, cause)
-		}
-		result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state=?,detail=?,diagnostic=?,updated_at=? WHERE id=? AND rev=? AND state='dispatching'`, state, detail, diagnostic, time.Now().UnixNano(), id, s.Rev)
-		if e != nil {
-			return s, e
-		}
-		n, _ := result.RowsAffected()
-		if n == 1 && (state == ScheduledNeedsReview || detail != s.Detail) {
-			a.store.changed()
-		}
-		out, _, e := a.ScheduledSend(id)
-		if e != nil {
-			return out, e
-		}
-		return out, cause
+		return a.dispatchFail(s, state, detail, cause)
 	}
 	current, _, err := a.scheduledAudience(a.store.db, s.Conv, s.Topic)
 	if err != nil {
@@ -794,36 +790,69 @@ func (a *Agent) dispatchScheduledLocked(ctx context.Context, id string, stored *
 		dispatchCtx = WithHumanSendGroup(dispatchCtx, ask.SendGroup)
 	}
 	msg.beforeStore = a.scheduledCommit(s)
+	batch := stagingBatch(dispatchCtx)
+	staged := len(batch.staged())
 	sent, err := a.SendConv(dispatchCtx, s.Conv, msg)
-	if errors.Is(err, ErrSendAlreadyKept) {
-		// Another attempt stored this exact id: the same send, nothing to repeat.
-		if _, err = a.store.db.Exec(`UPDATE scheduled_sends SET state='sent',detail='',diagnostic='',updated_at=? WHERE id=? AND state IN ('pending','dispatching')`, time.Now().UnixNano(), id); err == nil {
-			a.store.changed()
-		}
-		s, _, _ = a.ScheduledSend(id)
-		return s, err
+	if err == nil && len(batch.staged()) > staged {
+		batch.stagedAs(s) // stored with its batch, settled after (queuedsend.go)
+		return s, nil
 	}
 	if err == nil && stored != nil {
 		*stored = sent
+	}
+	return a.settleDispatch(s, err)
+}
+
+// settleDispatch records how storing s went: sent, waiting or stopped.
+func (a *Agent) settleDispatch(s ScheduledSend, err error) (ScheduledSend, error) {
+	if errors.Is(err, ErrSendAlreadyKept) {
+		// Another attempt stored this exact id: the same send, nothing to repeat.
+		if _, err = a.store.db.Exec(`UPDATE scheduled_sends SET state='sent',detail='',diagnostic='',updated_at=? WHERE id=? AND state IN ('pending','dispatching')`, time.Now().UnixNano(), s.ID); err == nil {
+			a.store.changed()
+		}
+		s, _, _ = a.ScheduledSend(s.ID)
+		return s, err
 	}
 	if err != nil {
 		// An ordinary authority guard may reject a changed group before our
 		// neutral guard runs. Growth still requires explicit audience review.
 		latest, _, audienceErr := a.scheduledAudience(a.store.db, s.Conv, s.Topic)
 		if audienceErr == nil && !scheduledWithin(latest, s.Audience) {
-			return fail(ScheduledNeedsReview, "The chat audience changed. Review the schedule.", ErrScheduledAudience)
+			return a.dispatchFail(s, ScheduledNeedsReview, "The chat audience changed. Review the schedule.", ErrScheduledAudience)
 		}
 		if scheduledWait(err) {
-			return fail(ScheduledPending, "Waiting for current chat information or connectivity.", err)
+			return a.dispatchFail(s, ScheduledPending, "Waiting for current chat information or connectivity.", err)
 		}
-		return fail(ScheduledNeedsReview, "The message could not be queued safely. Review the schedule.", err)
+		return a.dispatchFail(s, ScheduledNeedsReview, "The message could not be queued safely. Review the schedule.", err)
 	}
-	out, _, err := a.ScheduledSend(id)
+	out, _, err := a.ScheduledSend(s.ID)
 	return out, err
 }
 
+// dispatchFail leaves s waiting or stopped with its words, unless another
+// change (a Discard, a Hold, a newer attempt) already moved it on.
+func (a *Agent) dispatchFail(s ScheduledSend, state, detail string, cause error) (ScheduledSend, error) {
+	diagnostic := ""
+	if s.Immediate {
+		detail, diagnostic = queuedSendWords(state, detail, cause)
+	}
+	result, e := a.store.db.Exec(`UPDATE scheduled_sends SET state=?,detail=?,diagnostic=?,updated_at=? WHERE id=? AND rev=? AND state='dispatching'`, state, detail, diagnostic, time.Now().UnixNano(), s.ID, s.Rev)
+	if e != nil {
+		return s, e
+	}
+	n, _ := result.RowsAffected()
+	if n == 1 && (state == ScheduledNeedsReview || detail != s.Detail) {
+		a.store.changed()
+	}
+	out, _, e := a.ScheduledSend(s.ID)
+	if e != nil {
+		return out, e
+	}
+	return out, cause
+}
+
 func scheduledWait(err error) bool {
-	return hubUnreachable(err) || transient(err) || errors.Is(err, ErrGroupContextPending) || errors.Is(err, errParticipationTopicPending) || errors.Is(err, ErrParticipationScopePending) || errors.Is(err, errScheduledEarly)
+	return hubUnreachable(err) || transient(err) || errors.Is(err, errSendKeyMoved) || errors.Is(err, ErrGroupContextPending) || errors.Is(err, errParticipationTopicPending) || errors.Is(err, ErrParticipationScopePending) || errors.Is(err, errScheduledEarly)
 }
 
 // scheduledDue is called by the existing reminder loop. Overdue schedules that

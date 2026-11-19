@@ -407,6 +407,17 @@ func (a *Agent) admitDeviceHistory(ctx context.Context, env envelope.Envelope, i
 	if err = eraseArrivalIn(tx, h.ID); err != nil {
 		return err
 	}
+	// A deletion of an original held here (deviceHistoryBinding checked it
+	// is by that original's key) takes the text with it, in this commit, as
+	// a received one does (admitControl); the rest (requests, files, history
+	// copies) follows the commit.
+	var retracted *ControlRef
+	if h.Sub == envelope.SubRetraction && h.Ref != nil {
+		retracted = &ControlRef{ID: h.Ref.ID, Fingerprint: h.Ref.Fingerprint} // device scope: no conversation
+		if err = redactRetractedText(tx, *retracted, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec(`INSERT OR IGNORE INTO history_receipts(id) VALUES(?)`, env.ID); err != nil {
 		return err
 	}
@@ -416,6 +427,9 @@ func (a *Agent) admitDeviceHistory(ctx context.Context, env envelope.Envelope, i
 		}
 	}
 	if err = a.store.done(tx.Commit()); err == nil {
+		if retracted != nil {
+			a.applyRetraction(envelope.Inner{Sub: h.Sub, Ref: h.Ref})
+		}
 		a.convWork.due(convHistory | convRetry)
 		a.kickNow()
 	}

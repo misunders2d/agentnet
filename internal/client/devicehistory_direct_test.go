@@ -135,3 +135,56 @@ func TestDeviceHistoryDeletionAfterDeliveredCopy(t *testing.T) {
 		t.Fatal("the deletion was not copied to the device holding the original")
 	}
 }
+
+// A deletion replayed to an own device that holds the original removes the
+// original's text and its edits' text in the commit that stores it: until
+// then the device showed the deletion beside the deleted text.
+func TestDeviceHistoryDeletionRemovesHeldText(t *testing.T) {
+	w, phone, _, _ := historyCatchupFixture(t, 0)
+	a := w.alice
+	sent, err := a.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, Body: "oops, wrong chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := func() {
+		t.Helper()
+		for range 4 {
+			a.convWork.mu.Lock()
+			a.convWork.historyDeferred = nil
+			a.convWork.mu.Unlock()
+			if _, err := a.deviceHistoryPage(phone.Self()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	body := func() (string, error) {
+		var b string
+		return b, phone.store.db.QueryRow(`SELECT body FROM inbox WHERE id=? AND conv IS NULL`, sent.ID).Scan(&b)
+	}
+	page()
+	deliverDeviceHistory(t, a, phone, envelope.SubDeviceHistory)
+	if b, err := body(); err != nil || b != "oops, wrong chat" {
+		t.Fatalf("the original did not reach the phone: %q %v", b, err)
+	}
+	ref, err := a.RefOf("", sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := a.Retract(tctx(t), ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := watchDeletionCommits(t, phone)
+	page()
+	deliverDeviceHistory(t, a, phone, envelope.SubDeviceHistory)
+	var stored int
+	if err = phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id=? AND sub='retraction'`, gone.ID).Scan(&stored); err != nil || stored != 1 {
+		t.Fatalf("the deletion did not reach the phone: %d %v", stored, err)
+	}
+	if stop() == 0 {
+		t.Fatal("no commit was checked")
+	}
+	if b, err := body(); err != nil || b != "" {
+		t.Fatalf("the phone keeps the deleted text: %q %v", b, err)
+	}
+}

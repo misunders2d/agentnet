@@ -322,12 +322,15 @@ func (a *Agent) mayDeliverReadSync(env envelope.Envelope) (bool, bool, error) {
 
 // markVisibleSentRead records an explicit read of locally signed device messages.
 // The same original may be incoming on another current own-human device.
-func (a *Agent) markVisibleSentRead(ids []string) error {
+func (a *Agent) markVisibleSentRead(ids []string, span *readSpans) error {
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err = span.begin(tx); err != nil {
+		return err
+	}
 	me, ok, err := scanPersonIn(tx, "state = ?", personSelf)
 	if err != nil {
 		return err
@@ -352,6 +355,9 @@ func (a *Agent) markVisibleSentRead(ids []string) error {
 		if _, err = tx.Exec(`INSERT OR IGNORE INTO read_marks(owner,conv,fingerprint,lid) VALUES(?,'',?,?)`, me.info.Person, fp, id); err != nil {
 			return err
 		}
+	}
+	if err = span.end(tx); err != nil {
+		return err
 	}
 	return a.store.done(tx.Commit())
 }
@@ -665,7 +671,7 @@ func attentionScopeMoved(q dbq, mark int64, scope map[string]protocol.ReadRef) (
 			return false, err
 		}
 		switch {
-		case key == "h":
+		case key == "h", strings.HasPrefix(key, "v"): // "v": ViewCoverSchema's, of tables no scope reads
 		case strings.HasPrefix(key, "c:"):
 			moved = moved || convs[key[2:]]
 		case strings.HasPrefix(key, "p:"):
@@ -742,6 +748,134 @@ func (a *Agent) MarkUnread(anchor string, ids []string) error {
 // MarkReadWithAttention keeps ordinary read behavior. Only a complete matching
 // observed generation can clear deliberate unread; omitted/stale tokens cannot.
 func (a *Agent) MarkReadWithAttention(ids []string, attention map[string]protocol.AttentionGeneration) error {
+	return a.markReadWithAttention(ids, attention, nil)
+}
+
+// ReadSpan is a chat's view mark (ChatViewMark) across this device's read
+// write: Before as its first write began, After as its last ended. OK says
+// nothing else moved it in between, so a view of the chat kept at Before is
+// the read state alone away from After (TDLib likewise changes only the
+// dialog's read fields for a read, never its history: read_history_inbox,
+// MessagesManager.cpp:9618 at 03220f6, sets last_read_inbox_message_id and
+// the unread counts in set_dialog_last_read_inbox_message_id, :9981).
+type ReadSpan struct {
+	Before, After int64
+	OK            bool
+}
+
+// MarkReadWatching is MarkReadWithAttention, also saying how conv's view
+// mark moved across the write.
+func (a *Agent) MarkReadWatching(ids []string, attention map[string]protocol.AttentionGeneration, conv string) (ReadSpan, error) {
+	keys, _, err := a.ChatViewMark(conv)
+	if err != nil {
+		return ReadSpan{}, err
+	}
+	span := &readSpans{keys: keys, ok: true}
+	if err = a.markReadWithAttention(ids, attention, span); err != nil {
+		return ReadSpan{}, err
+	}
+	return ReadSpan{span.before, span.after, span.ok && span.writes > 0}, nil
+}
+
+// readSpans records a chat's view mark at each read write's start and end,
+// inside its transaction; ok stays true while each write starts where the
+// one before it ended. A nil readSpans records nothing.
+type readSpans struct {
+	keys                  []string
+	before, after, opened int64
+	writes                int
+	ok                    bool
+}
+
+func (r *readSpans) begin(tx dbq) (err error) {
+	if r == nil {
+		return nil
+	}
+	r.opened, err = chatMarkIn(tx, r.keys)
+	if r.writes == 0 {
+		r.before = r.opened
+	} else if r.opened != r.after {
+		r.ok = false
+	}
+	return err
+}
+
+func (r *readSpans) end(tx dbq) (err error) {
+	if r == nil {
+		return nil
+	}
+	r.after, err = chatMarkIn(tx, r.keys)
+	r.writes++
+	return err
+}
+
+// RereadRead applies the read state now stored to the messages of msgs that a
+// read of ids could change, as MessagingConversationMessages projected them:
+// each received row's read_at, then the attention marks by the projection's
+// own overlay (projectConvAttention). A read writes the read_at of ids, read
+// marks every copy of their logical message takes (apply_read_mark, one
+// conv, key and lid) and their attention marks (markReadWithAttention), so
+// the messages sharing a marked message's lid are all it can change; the
+// rest of msgs is not read again. ids empty reads every message again.
+func (a *Agent) RereadRead(msgs []ConvMessage, ids []string) error {
+	marked := map[string]bool{}
+	for _, id := range ids {
+		marked[id] = true
+	}
+	lids := map[string]bool{}
+	for _, m := range msgs {
+		if marked[m.ID] {
+			lids[m.LID] = true
+		}
+	}
+	byConv := map[string][]int{}
+	for i, m := range msgs {
+		if m.conv != "" && (len(ids) == 0 || lids[m.LID] || marked[m.ID]) { // continuity notices carry no read state
+			byConv[m.conv] = append(byConv[m.conv], i)
+		}
+	}
+	for conv, at := range byConv {
+		unread := map[string]bool{}
+		want := make([]string, len(at))
+		for j, i := range at {
+			want[j] = msgs[i].ID
+		}
+		selected, err := json.Marshal(want)
+		if err != nil {
+			return err
+		}
+		rows, err := a.store.db.Query(`SELECT id FROM inbox WHERE conv=? AND read_at IS NULL AND id IN (SELECT value FROM json_each(?))`, conv, string(selected))
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			unread[id] = true
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		part := make([]ConvMessage, len(at))
+		for j, i := range at {
+			part[j] = msgs[i]
+			received := part[j].Dir == "in" || part[j].Via != "" // an inbox row (convMessages); a sent one is never unread
+			part[j].Unread = received && unread[part[j].ID]
+		}
+		if err := a.projectConvAttention(conv, part); err != nil {
+			return err
+		}
+		for j, i := range at {
+			msgs[i].Unread, msgs[i].Attention = part[j].Unread, part[j].Attention
+		}
+	}
+	return nil
+}
+
+func (a *Agent) markReadWithAttention(ids []string, attention map[string]protocol.AttentionGeneration, span *readSpans) error {
 	if len(attention) > 0 {
 		selected := map[string]bool{}
 		for _, id := range ids {
@@ -770,9 +904,12 @@ func (a *Agent) MarkReadWithAttention(ids []string, attention map[string]protoco
 			return resolved, nil
 		})
 		if err != nil {
-			return a.markReadAfterAttention(ids, err)
+			return a.markReadAfterAttention(ids, err, span)
 		}
 		defer tx.Rollback()
+		if err = span.begin(tx); err != nil {
+			return err
+		}
 		owner, err := attentionOwner(tx)
 		if err != nil {
 			return err
@@ -814,6 +951,9 @@ func (a *Agent) MarkReadWithAttention(ids []string, attention map[string]protoco
 				changed = changed || n > 0
 			}
 		}
+		if err = span.end(tx); err != nil {
+			return err
+		}
 		if err = tx.Commit(); err != nil {
 			return err
 		}
@@ -823,21 +963,25 @@ func (a *Agent) MarkReadWithAttention(ids []string, attention map[string]protoco
 		}
 
 	}
-	return a.markReadAfterAttention(ids, nil)
+	return a.markReadAfterAttention(ids, nil, span)
 }
 
 // Snapshot contention defers only the generation CAS. Legacy read state still
 // advances; every other attention failure keeps its old refusal.
-func (a *Agent) markReadAfterAttention(ids []string, attentionErr error) error {
+func (a *Agent) markReadAfterAttention(ids []string, attentionErr error, span *readSpans) error {
 	if attentionErr != nil && !errors.Is(attentionErr, errAttentionScopeChanged) {
 		return attentionErr
 	}
-	if err := a.store.markRead(ids); err != nil {
+	if err := a.store.markReadSpan(ids, span); err != nil {
 		return err
 	}
-	if err := a.markVisibleSentRead(ids); err != nil {
+	if err := a.markVisibleSentRead(ids, span); err != nil {
 		return err
 	}
-	notifyDaemon(a.home)
+	// The daemon copies the marks to this person's other devices (historyTurn
+	// syncReadMarks). Served in this process, its wake is its own: the store
+	// already told the page which chat moved, and a foreign wake would make
+	// that change unscoped and drop every kept chat (ui chatMessages).
+	a.notifyOwnWork()
 	return nil
 }

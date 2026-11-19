@@ -167,7 +167,7 @@ func (a *Agent) convSync(ctx context.Context) {
 				a.store.continuityDirty.Store(true)
 				a.convWork.due(convPersons)
 			}
-			if err := a.syncContinuityGroups(ctx); err != nil {
+			if err := a.syncContinuityGroups(ctx, ""); err != nil {
 				a.Logf("group continuity: %v", err)
 				a.store.continuityDirty.Store(true)
 				a.convWork.due(convPersons)
@@ -473,8 +473,11 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 }
 
 // Conversations lists the conversations this installation holds.
-func (a *Agent) Conversations() ([]ConversationInfo, error) {
-	rows, err := a.store.conversations()
+func (a *Agent) Conversations() ([]ConversationInfo, error) { return a.conversationsIn() }
+
+// conversationsIn is Conversations for every chat, or only the ones named.
+func (a *Agent) conversationsIn(only ...string) ([]ConversationInfo, error) {
+	rows, err := a.store.conversations(only...)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +511,7 @@ func (a *Agent) Conversations() ([]ConversationInfo, error) {
 			}
 		}
 	}
-	out, err := a.projectGroupConversations(rows)
+	out, err := a.projectGroupConversations(rows, only...)
 	if err != nil {
 		return nil, err
 	}
@@ -545,7 +548,7 @@ func (a *Agent) MessagingConversationMessages(conv string) ([]ConvMessage, error
 		for _, m := range msgs {
 			if !envelope.TopicMetadata(m.TopicEvent) && !seen[m.ID] {
 				seen[m.ID] = true
-				m.OtherDM = row.ID != target
+				m.OtherDM, m.conv = row.ID != target, row.ID
 				out = append(out, m)
 			}
 		}
@@ -746,7 +749,16 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	replyParent := func(conv, ref string) (string, bool, error) { return humanReplyParent(a.store.db, conv, ref) }
 	if continuity {
 		replyParent = a.continuityReplyParent
-
+	}
+	if batch, resolve := stagingBatch(ctx), replyParent; batch != nil {
+		replyParent = func(conv, ref string) (string, bool, error) {
+			if batch.names(ref) {
+				return ref, true, nil
+			}
+			return resolve(conv, ref)
+		}
+	}
+	if continuity {
 		next, e := a.currentDM(ctx, conv)
 		if e != nil {
 			return ConvSent{}, e
@@ -777,7 +789,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && !m.contribution && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
 		// Addressed questions/tasks continue the same causal topic chain as chat.
-		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
+		m.ReplyTo, err = a.sendTopicHead(ctx, conv, m.Topic)
 		if err != nil {
 			return ConvSent{}, err
 		}
@@ -882,7 +894,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 				}
 			}
 		}
-		return a.sendGroupTurn(ctx, conv, m, binding)
+		sent, err := a.sendGroupTurn(ctx, conv, m, binding)
+		// A person change landing mid-send: read again, at most twice. A
+		// queued batch's row goes back to its worker instead (queuedsend.go).
+		for i := 0; i < 2 && errors.Is(err, errGroupRosterMoved) && stagingBatch(ctx) == nil && len(m.Files) == 0 && binding == nil; i++ {
+			sent, err = a.sendGroupTurn(ctx, conv, m, binding)
+		}
+		return sent, err
 	}
 	if m.PID != "" {
 		info, err := a.participation(conv, m.PID)
@@ -1002,6 +1020,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	// Fresh evidence first: newer roster steps of both persons decide the
 	// devices, and each device's profile what it can read.
+	a.prefetchGroup(ctx, []string{peerID, me.info.Person}) // rosters, keys and profiles at once; the checks below read the answers
 	feats, ferr := a.relayFeatures(ctx)
 	if ferr == nil {
 		for _, id := range []string{peerID, me.info.Person} {
@@ -1043,31 +1062,12 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			return ConvSent{}, err
 		}
 	}
-	if len(m.Files) > 0 {
-		// Files go with a turn a person sends, encrypted to each device; the
-		// ciphertext waits in the private spool until the Hub holds the
-		// message (files.go). Cleanup must not see it before the outbox
-		// refers to it.
-		release, err := lockfile.Wait(a.spoolLockPath())
-		if err != nil {
-			return ConvSent{}, err
-		}
-		stored := false
-		defer func() {
-			if !stored {
-				for _, c := range copies {
-					a.releaseSpool(envelope.Envelope{ID: c.in.ID, Blobs: blobsOf(c.in.Attachments)})
-				}
-			}
-			release()
-		}()
-		m.stored = func() { stored = true; release() } // idempotent release, before delivery
-	}
 	// A turn is for the other member: it fails, as a device send does, when
 	// a key changed (until trusted) or none of their devices can get a copy.
 	// Records go to the devices that can take them.
 	turn := m.sub == "" && !m.selfJob
-	var peerErr error // why a device of the other member got no copy
+	var peerErr error   // why a device of the other member got no copy
+	var seals []sealing // one per copy, sealed once the checks are done
 	for _, dev := range devices {
 		key, err := a.sendKey(ctx, dev.Address)
 		var changed *KeyChangedError
@@ -1095,16 +1095,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
 		}
-		copies = append(copies, outCopy{in: in}) // listed before spooling, so a failure releases what it spooled
+		copies = append(copies, outCopy{in: in})
 		c := &copies[len(copies)-1]
 		c.recipientFP = key.Fingerprint()
-		for _, f := range m.Files {
-			att, err := a.spoolNamed(f, recipient)
-			if err != nil {
-				return ConvSent{}, err
-			}
-			c.in.Attachments = append(c.in.Attachments, att)
-		}
 		supported, why, notify := false, WaitServerUnavailable+"cannot reach the Hub", false
 		if ferr == nil {
 			supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
@@ -1117,14 +1110,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if c.in.SendGroup != "" && !a.sendGroupSupported(ctx, key) {
 			c.in.SendGroup = ""
 		}
-		if notify && !own[dev.Address] && asksAttention(c.in) {
-			c.env, err = envelope.SealAttention(c.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, dev.Fingerprint()))
-		} else {
-			c.env, err = envelope.Seal(c.in, a.id.Sign, recipient)
-		}
-		if err != nil {
-			return ConvSent{}, err
-		}
+		seals = append(seals, sealing{recipient, notify && !own[dev.Address] && asksAttention(c.in), protocol.NotifyChannel(conv, dev.Fingerprint())})
 		c.state, c.why = stateQueued, ""
 		if !supported {
 			c.state, c.why = stateConvWaiting, why
@@ -1143,6 +1129,31 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		return ConvSent{}, err
 	} else if now.info.State == personConflict { // a profile just showed a different record
 		return ConvSent{}, errPersonConflict
+	}
+	// The network checks are done: only now does a file turn take the spool
+	// lock, and a text turn never does.
+	if len(m.Files) > 0 {
+		// Files go with a turn a person sends, encrypted to each device; the
+		// ciphertext waits in the private spool until the Hub holds the
+		// message (files.go). Cleanup must not see it before the outbox
+		// refers to it.
+		release, err := lockfile.Wait(a.spoolLockPath())
+		if err != nil {
+			return ConvSent{}, err
+		}
+		stored := false
+		defer func() {
+			if !stored {
+				for _, c := range copies {
+					a.releaseSpool(envelope.Envelope{ID: c.in.ID, Blobs: blobsOf(c.in.Attachments)})
+				}
+			}
+			release()
+		}()
+		m.stored = func() { stored = true; release() } // idempotent release, before delivery
+	}
+	if err := a.spoolAndSeal(copies, seals, m.Files); err != nil {
+		return ConvSent{}, err
 	}
 	jobKey := ""
 	if m.selfJob {
@@ -1183,7 +1194,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		return m.organizationBatch.stage(a, copies, local, claim)
 	}
-	if err := a.store.addConvOutboxGuarded(copies, local, claim, jobKey, m.beforeStore, binding); err != nil {
+	if err := a.storeConvOutbox(ctx, copies, local, claim, jobKey, m.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}
 	receiverStored = true
@@ -1191,7 +1202,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		m.stored()
 	}
 	if queuedSend(ctx) {
-		return a.queuedConv(copies, local.ID, lid), nil
+		return a.queuedConv(ctx, copies, local.ID, lid), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
@@ -1660,6 +1671,8 @@ func frozenRecordWaits(reason, why string) (string, string) {
 
 const frozenMemberWhy = "group: a member's person record is frozen here"
 
+var errSenderRevoked = errors.New("sender permanently removed from this workspace")
+
 // admitConv admits a verified version 2 message, or holds it (quarantine)
 // with the reason it cannot be admitted yet. fromQuarantine: env is held
 // already, and is released when admitted.
@@ -1673,7 +1686,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return err
 	}
 	if !allowed {
-		return hold(reasonInvalid, "sender permanently removed from this workspace")
+		return hold(reasonInvalid, errSenderRevoked.Error())
 	}
 	personErr := func(err error) error { return holdForPerson(err, hold) }
 	if in.Sub == envelope.SubHistoryArchive {
@@ -1883,6 +1896,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	now, event := time.Now(), also
 	forward := a.forwardStale(me, in, sender.Fingerprint(), in.Root) // for this person's devices its sender did not know
 	also = func(tx *sql.Tx) error {                                  // with the message, or not at all
+		// A revocation recorded since the checks above (while a page was
+		// prepared) refuses it here, as at the start of admission.
+		if !relayIngress(ctx, env.ID) || !retainedRelayOrdinary(in) {
+			if revoked, e := revokedDeviceKnown(tx, sender.Address, sender.Fingerprint()); e != nil {
+				return e
+			} else if revoked {
+				return errSenderRevoked
+			}
+		}
 		if event != nil {
 			if err := event(tx); err != nil {
 				return err
@@ -1926,17 +1948,22 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			// A request to another device's agent: history here.
 		}
 	}
-	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
-	if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
-		return hold(reasonInvalid, err.Error())
-	}
-	if err != nil {
-		return err
-	}
-	if res == admitConflict {
-		return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
-	}
-	if res == admitted {
+	settle := func(res string, err error) error {
+		if errors.Is(err, ErrSharedTopicTitleConflict) || errors.Is(err, errTooManyEvents) {
+			return hold(reasonInvalid, err.Error())
+		}
+		if errors.Is(err, errSenderRevoked) {
+			return hold(reasonInvalid, errSenderRevoked.Error())
+		}
+		if err != nil {
+			return err
+		}
+		if res == admitConflict {
+			return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
+		}
+		if res != admitted {
+			return nil
+		}
 		a.convWork.due(convHistory)
 		a.retryHeldFor(in)
 		a.kickNow()
@@ -1945,7 +1972,11 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			a.kickNow()
 			a.consentAway(ctx, in.PID) // an invite of this person's own agent, hosted here
 		}
-		a.wakeWorker() // a request, or an event that may let one run or stop
+		if waitedOnKind(in.Kind) {
+			a.wakeWorkerNow() // a request, or the answer or result its follow-up runs on
+		} else {
+			a.wakeWorker() // an event or message that may let one run or stop
+		}
 		if statusDue(state, in.Kind) != 0 {
 			a.wakeStatus() // its requester hears it waits here (stored with it)
 		}
@@ -1957,8 +1988,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			a.convWork.due(convFetch) // keep its files here (historyfiles.go)
 			a.kickNow()
 		}
+		return nil
 	}
-	return nil
+	if p := receivingPage(ctx); p != nil { // stored with its page, settled after (receivepage.go)
+		p.stage(in, func(tx *sql.Tx, st txStmts) (string, bool, error) {
+			return addConvInboxTx(tx, st, in, sender.Fingerprint(), state, fromQuarantine, also)
+		}, settle)
+		return nil
+	}
+	return settle(a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also))
 }
 
 // retryHeldFor looks again at messages held for proof when request in has

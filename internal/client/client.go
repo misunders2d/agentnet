@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -64,6 +65,8 @@ type Agent struct {
 	receiptLock      chan struct{} // dispositions never wait for history upkeep
 	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
 	posting          backgroundPosts
+	receipting       backgroundPosts // acknowledgements, beside posting, never in front of it
+	groupsSynced     sync.Map        // group → continuity token/context hash its recovered devices were complete under
 	queued           queuedSends
 	topicCache       topicCache
 	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
@@ -90,6 +93,7 @@ type Agent struct {
 	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
 	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
 	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
+	statusAwaitsCaps atomic.Bool                // a status waits for its requester's capability record (tellStatus)
 	receiveFails     receiveFailures            // transient admission failures per pushed envelope (daemon.go)
 	prefetchFailed   map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
 	fetches          fileFetches                // received files a person chose to download (filewait.go)
@@ -98,6 +102,7 @@ type Agent struct {
 	appUpdateMu      sync.RWMutex               // holds job claim/run against whole-app replacement
 	workerWakeFeed   *changeFeed                // broadcast kicks/pings to every active run
 	workerWake       chan struct{}              // pending local job wake survives worker startup
+	workerUrgent     chan struct{}              // a wake someone waits on: the worker's pace ends at once (changes.go)
 	changes          *changeFeed                // local state changed (changes.go)
 	listed           listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
 	members          memberState                // the Hub's member list from the push stream (members.go)
@@ -181,7 +186,12 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 	if err != nil {
 		return nil, err
 	}
-	defer st.db.Close()
+	handedOver := false
+	defer func() {
+		if !handedOver {
+			st.db.Close()
+		}
+	}()
 	if enrolled, _ := st.config("enrolled"); enrolled == "1" {
 		return nil, fmt.Errorf("%s already holds an enrolled agent", home)
 	}
@@ -240,8 +250,8 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 	if err := st.deleteConfig("join_secret"); err != nil {
 		return nil, err
 	}
-	st.db.Close()
-	return Open(home)
+	handedOver = true
+	return openAgent(home, id, st)
 }
 
 // ErrAddressTaken means the Hub refused a join because the address is
@@ -262,6 +272,14 @@ func Open(home string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openAgent(home, id, st)
+}
+
+// openAgent is Open on a store already open: join hands over the one it
+// enrolled with rather than closing it and opening the file again (each
+// opening parses the whole schema on the writer and on the reader). st is
+// closed on any error.
+func openAgent(home string, id *identity.Identity, st *store) (*Agent, error) {
 	if enrolled, _ := st.config("enrolled"); enrolled != "1" {
 		st.db.Close()
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run `agentnet join` again with the same invitation "+
@@ -277,7 +295,7 @@ func Open(home string) (*Agent, error) {
 	}
 	wake := make(chan struct{}, 1)
 	wakeFeed := newChangeFeed()
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, workerWakeFeed: wakeFeed, wakeWorker: func() {
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, workerUrgent: make(chan struct{}, 1), workerWakeFeed: wakeFeed, wakeWorker: func() {
 		wakeFeed.bump()
 		select {
 		case wake <- struct{}{}:
@@ -285,9 +303,10 @@ func Open(home string) (*Agent, error) {
 		}
 	}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1), networkWake: make(chan struct{}, 1)}
-	st.onChange = a.changes.bump
-	st.onJobReady = func() { a.wakeWorker(); a.notifyOwnWork() }
+	st.onChange = a.changes.bumpStored
+	st.onJobReady = func() { a.wakeWorkerNow(); a.notifyOwnWork() }
 	var hubURL, cert string
+	var err error
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
 			cert, err = st.config("hub_cert")
@@ -403,6 +422,14 @@ func (a *Agent) sendKeyExpected(ctx context.Context, address, expected string) (
 	if err != nil {
 		return identity.Public{}, err
 	}
+	if found {
+		// What is known here holds whatever the directory answered, or a
+		// cached answer from earlier in this action: a pending key change and
+		// a recorded revocation refuse (currentSendKey).
+		if err := currentSendKey(a.store.db, address, pinned.Fingerprint()); err != nil {
+			return identity.Public{}, err
+		}
+	}
 	e, err := a.directory(ctx, address)
 	if err != nil {
 		if found && retryable(err) {
@@ -426,6 +453,36 @@ func (a *Agent) sendKeyExpected(ctx context.Context, address, expected string) (
 		return identity.Public{}, err
 	}
 	return identity.Public{}, &KeyChangedError{address, pinned.Fingerprint(), e.Public.Fingerprint()}
+}
+
+// currentSendKey: fp is still the exact key pinned here for address, with no
+// pending change and no recorded revocation of it. A local read, so a store
+// can repeat it inside its own transaction.
+func currentSendKey(q dbq, address, fp string) error {
+	pinned, found, err := pinnedKey(q, address)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("no trusted key for %s", address)
+	}
+	var pending sql.NullString
+	if err = q.QueryRow(`SELECT pending FROM peers WHERE address=?`, address).Scan(&pending); err != nil {
+		return err
+	}
+	if pending.Valid {
+		var offered identity.Public
+		if err = json.Unmarshal([]byte(pending.String), &offered); err != nil {
+			return err
+		}
+		if !sameKeys(offered, pinned) { // a record naming the pinned key itself is no change
+			return &KeyChangedError{address, pinned.Fingerprint(), offered.Fingerprint()}
+		}
+	}
+	if pinned.Fingerprint() != fp {
+		return &KeyChangedError{address, fp, pinned.Fingerprint()}
+	}
+	return currentDeliveryRecipient(q, address, fp)
 }
 
 // SendResult reports what is known about a message after Send.
@@ -1310,4 +1367,26 @@ func (a *Agent) RevokePerson(ctx context.Context, person string) ([]string, erro
 	var out protocol.RevokePersonResponse
 	err := a.hub.do(ctx, "POST", "/v1/admin/person/revoke", protocol.RevokePersonRequest{Person: person}, &out)
 	return out.Revoked, err
+}
+
+// wakeWorkerNow is wakeWorker for a wake a person or a job waits on: a job
+// stored or finished, a received request, answer or result
+// (waitedOnKind), a command from another process.
+// The worker's next pass then runs at once, not at the end of its pace
+// window (changes.go passEvery); other wakes still fold into that pass.
+func (a *Agent) wakeWorkerNow() {
+	a.wakeWorker()
+	if a.workerUrgent != nil {
+		select {
+		case a.workerUrgent <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// waitedOnKind reports whether a received message of kind is one a job
+// waits on: a question or task to run, an answer or result a follow-up runs
+// on. Plain messages, a burst's bulk, still fold into the paced pass.
+func waitedOnKind(kind string) bool {
+	return kind == envelope.KindQuestion || kind == envelope.KindTask || kind == envelope.KindAnswer || kind == envelope.KindResult
 }

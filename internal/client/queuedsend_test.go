@@ -238,6 +238,11 @@ func TestQueuedSendRestartAtEveryStage(t *testing.T) {
 	a := w.alice
 	a.queued.budget = 100 * time.Millisecond
 	free := stallPersonChains(t, w, a)
+	// Held until the restart: a send whose checks finish before its attempt
+	// ends is stored (drainQueued), so the stall alone may not keep it.
+	a.queued.Lock()
+	a.queued.closed = true
+	a.queued.Unlock()
 	accepted := protocol.NewID()
 	if _, err := a.QueueSend(ScheduledSendInput{ID: accepted, Conv: conv, Body: "restart while accepted"}, "", 0); err != nil {
 		t.Fatal(err)

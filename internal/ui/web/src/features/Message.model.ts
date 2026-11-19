@@ -171,14 +171,37 @@ export function terminalStopLabel(request?: T.StopAction, exec?: T.ExecView): st
   return Object.hasOwn(stopTerminalLabels,state) ? stopTerminalLabels[state] : "";
 }
 
+// One pass over a timeline's messages, kept per array: who replies to an id,
+// and the chat's messages per logical id. answerTo then reads its few
+// candidates, not the whole chat for every request shown (MEL-748 S5: it ran
+// once per message per render, a scan each, nested for logical ids).
+interface MsgIndex { pos: Map<AnyMsg, number>; replies: Map<string, AnyMsg[]>; lids: Map<string, AnyMsg[]> }
+const indexes = new WeakMap<AnyMsg[], MsgIndex>();
+function msgIndex(all: AnyMsg[]): MsgIndex {
+  let ix = indexes.get(all);
+  if (ix) return ix;
+  ix = { pos: new Map(), replies: new Map(), lids: new Map() };
+  const add = (m: Map<string, AnyMsg[]>, k: string, x: AnyMsg) => { const l = m.get(k); if (l) l.push(x); else m.set(k, [x]); };
+  all.forEach((x, i) => {
+    ix!.pos.set(x, i);
+    if ("reply_to" in x && x.reply_to) add(ix!.replies, x.reply_to, x);
+    if (!isThreadMsg(x) && x.lid) add(ix!.lids, x.lid, x);
+  });
+  indexes.set(all, ix);
+  return ix;
+}
+
 /** A stored reply from this request's exact executor. A quotation is inert. */
 export function answerTo(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
   if (!isRequest(m) || m._local || excerpt(m)) return undefined;
-  return all.find((x) => {
+  const ix = msgIndex(all);
+  const byID = ix.replies.get(m.id) || [], byLid = !isThreadMsg(m) && m.lid && m.lid !== m.id ? ix.replies.get(m.lid) || [] : [];
+  const candidates = byLid.length ? [...byID, ...byLid].sort((a, b) => ix.pos.get(a)! - ix.pos.get(b)!) : byID;
+  return candidates.find((x) => {
     if (!isReply(x) || x._local || excerpt(x) || !x.reply_to) return false;
     const logical = !isThreadMsg(m) && !!m.lid && x.reply_to === m.lid;
     if (x.reply_to !== m.id && !logical) return false;
-    if (logical && all.some(other => other !== m && !isThreadMsg(other) && other.lid === m.lid && other.id !== m.id)) return false;
+    if (logical && (ix.lids.get(m.lid!) || []).some(other => other !== m && other.id !== m.id)) return false;
     if (isThreadMsg(m)) {
       if (!isThreadMsg(x)) return false;
       const host = m.target?.address || m.to;
