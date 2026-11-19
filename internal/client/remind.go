@@ -257,7 +257,7 @@ func (a *Agent) remindLoop(ctx context.Context) {
 	defer timer.Stop()
 	var last time.Time
 	for {
-		if !pace(ctx, &last) {
+		if !pace(ctx, &last, nil) {
 			return
 		}
 		_, changed := a.Changed() // before looking, so no change is missed

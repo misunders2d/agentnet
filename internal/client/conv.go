@@ -1972,7 +1972,11 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			a.kickNow()
 			a.consentAway(ctx, in.PID) // an invite of this person's own agent, hosted here
 		}
-		a.wakeWorker() // a request, or an event that may let one run or stop
+		if waitedOnKind(in.Kind) {
+			a.wakeWorkerNow() // a request, or the answer or result its follow-up runs on
+		} else {
+			a.wakeWorker() // an event or message that may let one run or stop
+		}
 		if statusDue(state, in.Kind) != 0 {
 			a.wakeStatus() // its requester hears it waits here (stored with it)
 		}

@@ -101,6 +101,7 @@ type Agent struct {
 	appUpdateMu      sync.RWMutex               // holds job claim/run against whole-app replacement
 	workerWakeFeed   *changeFeed                // broadcast kicks/pings to every active run
 	workerWake       chan struct{}              // pending local job wake survives worker startup
+	workerUrgent     chan struct{}              // a wake someone waits on: the worker's pace ends at once (changes.go)
 	changes          *changeFeed                // local state changed (changes.go)
 	listed           listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
 	members          memberState                // the Hub's member list from the push stream (members.go)
@@ -280,7 +281,7 @@ func Open(home string) (*Agent, error) {
 	}
 	wake := make(chan struct{}, 1)
 	wakeFeed := newChangeFeed()
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, workerWakeFeed: wakeFeed, wakeWorker: func() {
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, workerUrgent: make(chan struct{}, 1), workerWakeFeed: wakeFeed, wakeWorker: func() {
 		wakeFeed.bump()
 		select {
 		case wake <- struct{}{}:
@@ -289,7 +290,7 @@ func Open(home string) (*Agent, error) {
 	}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1), networkWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bumpStored
-	st.onJobReady = func() { a.wakeWorker(); a.notifyOwnWork() }
+	st.onJobReady = func() { a.wakeWorkerNow(); a.notifyOwnWork() }
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {
@@ -1349,4 +1350,26 @@ func (a *Agent) RevokePerson(ctx context.Context, person string) ([]string, erro
 	var out protocol.RevokePersonResponse
 	err := a.hub.do(ctx, "POST", "/v1/admin/person/revoke", protocol.RevokePersonRequest{Person: person}, &out)
 	return out.Revoked, err
+}
+
+// wakeWorkerNow is wakeWorker for a wake a person or a job waits on: a job
+// stored or finished, a received request, answer or result
+// (waitedOnKind), a command from another process.
+// The worker's next pass then runs at once, not at the end of its pace
+// window (changes.go passEvery); other wakes still fold into that pass.
+func (a *Agent) wakeWorkerNow() {
+	a.wakeWorker()
+	if a.workerUrgent != nil {
+		select {
+		case a.workerUrgent <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// waitedOnKind reports whether a received message of kind is one a job
+// waits on: a question or task to run, an answer or result a follow-up runs
+// on. Plain messages, a burst's bulk, still fold into the paced pass.
+func waitedOnKind(kind string) bool {
+	return kind == envelope.KindQuestion || kind == envelope.KindTask || kind == envelope.KindAnswer || kind == envelope.KindResult
 }

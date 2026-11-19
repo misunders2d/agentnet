@@ -35,7 +35,11 @@ func TestHistoryArchivePendingJobsIndexedAfterCompletedHistory(t *testing.T) {
 				rows.Close()
 				t.Fatal(err)
 			}
-			if strings.Contains(detail, "SEARCH history_archive_jobs USING INDEX history_archive_jobs_pending") {
+			// An AFTER UPDATE trigger (view_cover_history_archive_jobs_set)
+			// makes the reset collect its rowids from the index first: the
+			// same bounded search, reported as a covering one.
+			if strings.Contains(detail, "SEARCH history_archive_jobs USING INDEX history_archive_jobs_pending") ||
+				strings.Contains(detail, "SEARCH history_archive_jobs USING COVERING INDEX history_archive_jobs_pending") {
 				indexed = true
 			}
 			if strings.Contains(detail, "SCAN history_archive_jobs") || strings.Contains(detail, "TEMP B-TREE") {
