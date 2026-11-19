@@ -1024,8 +1024,8 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		}
 		if in.Sub == envelope.SubRetraction {
 			ref := ControlRef{ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}
+			a.redactRetracted(ref) // the text goes before its files, so no file is gone while the text stays
 			a.dropCache(ref)
-			a.redactRetracted(ref)
 		}
 		return nil
 	}
@@ -1740,8 +1740,8 @@ func (a *Agent) applyRetraction(in envelope.Inner) {
 	if err := a.stopRetractedRequests(ref); err != nil {
 		a.Logf("cannot stop retracted local handover: %v", err)
 	}
+	a.redactRetracted(ref) // the text goes before its files, so no file is gone while the text stays
 	a.dropCache(ref)
-	a.redactRetracted(ref)
 }
 
 // personOfKeyIn is the member person a device key belongs to, current or
