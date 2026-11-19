@@ -310,5 +310,6 @@ func (a *Agent) goneOnRelay(f FileInfo, err error) error {
 	if e := a.store.setConfig(map[string]string{fileGoneKey(f.BlobID): f.ctSHA256}); e != nil {
 		return errors.Join(gone, e)
 	}
+	a.changes.bump() // no chat's mark names a config row: a background fetch tells no one else
 	return gone
 }

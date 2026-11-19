@@ -657,6 +657,28 @@ func (p Profile) Supports(address string, signKey ed25519.PublicKey, name string
 	return true
 }
 
+// Advertised reports whether p shows what the device with signKey at address
+// reads: there are sessions and each has a record that verifies and names
+// that device and session. Otherwise a missing capability may only be a
+// record still to come (the device has not connected since it started).
+func (p Profile) Advertised(address string, signKey ed25519.PublicKey) bool {
+	if len(p.Sessions) == 0 {
+		return false
+	}
+	has := map[string]bool{}
+	for _, raw := range p.Caps {
+		if c, err := ParseCapsRecord(raw); err == nil && c.Verify(signKey) == nil && c.Address == address {
+			has[c.Session] = true
+		}
+	}
+	for _, s := range p.Sessions {
+		if !has[s] {
+			return false
+		}
+	}
+	return true
+}
+
 // Relay features listed by GET /v1/version. An older relay lists none.
 const (
 	FeatureMembers = "members" // GET /v1/agents and the members push

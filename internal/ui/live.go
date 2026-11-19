@@ -44,9 +44,9 @@ type Live struct {
 	historyDirty   bool
 	historyWake    atomic.Bool
 	msgsMu         sync.Mutex
-	seen           map[string]seenView     // checkSkip's last view of each chat (dmOracle only)
 	msgs           map[string]keptMessages // each chat's projected messages at one content revision (livedm.go)
 	lastOpen       string                  // the chat DMPage read last: the one a read mark is for (markRead)
+	msgsUsed       uint64                  // the kept projections' read clock (keptChats)
 	unreadMu       sync.Mutex
 	unread         *unreadIndex // guarded separately: unread never waits for complete overview cards
 	count          unreadCount  // the app badge's running total (liveunreadcount.go)
@@ -156,7 +156,7 @@ var (
 	overviewOracle    func(string)
 	overviewChatBuilt func(string)
 	dmProjected       func(string)
-	dmOracle          func(string) // as overviewOracle, for a chat read from its kept messages
+	dmChecked         func(l *Live, id string, page DMPage, t DMThread, mark int64, rev client.ViewChange) // a DM read, for the tests' fresh comparison (dmoracle_test.go)
 )
 
 func (l *Live) compareFresh(listArchived bool, kept Overview, content uint64) {

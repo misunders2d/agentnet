@@ -141,6 +141,9 @@ func (a *Agent) onMembers(data []byte) {
 	a.members.view = MemberView{discovery: discovery, Listed: MembersListed, Members: m, At: time.Now(), Current: true}
 	a.members.mu.Unlock()
 	a.keepMemberFacts(m) // before the bump below, so a page reads them
+	if a.statusAwaitsCaps.Swap(false) {
+		a.wakeStatus() // a requester's capability record may be here now (tellStatus)
+	}
 	if a.reviewAgain.note() {
 		a.wakeWorker() // a device that could not read reports may now (reviewnotice.go)
 	}

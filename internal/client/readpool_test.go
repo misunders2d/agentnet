@@ -1,6 +1,7 @@
 package client
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -89,5 +90,23 @@ func TestChatProjectionReadsBesideAHeldWrite(t *testing.T) {
 	}
 	if n, ok := a.store.rowChanges(); !ok || n == 0 {
 		t.Fatalf("total_changes left the writer: %d %v", n, ok)
+	}
+}
+
+// The reader pool keeps one connection. Each new SQLite connection parses the
+// whole schema on its first statement (about 8 ms, 250 ms under -race); with
+// four, every loop a daemon starts opened its own at once and the start, and
+// with it the capability record peers wait for, came late (v0.11.6).
+func TestReaderPoolIsOneConnection(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	if n := s.db.reads.Stats().MaxOpenConnections; n != 1 {
+		t.Fatalf("reader pool allows %d connections", n)
+	}
+	if n := s.db.reads.Stats().OpenConnections; n != 1 {
+		t.Fatalf("reader opened %d connections at open, want 1 ready", n)
 	}
 }
