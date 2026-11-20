@@ -220,7 +220,8 @@ request, no polling). Answers arrive later in the same chat.
                   socket gave (version 2, "reply"). It works only on this
                   device, for its own person. Prints ID STATE.
   --client-id KEY with --reply-handle: one message per KEY on this device; a
-                  repeat sends nothing and prints the first message's ID STATE
+                  repeat sends nothing and prints the first message's ID STATE;
+                  a KEY used with another handle is refused
 
 Examples:
   agentnet send bob/desk "build is green"

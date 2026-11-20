@@ -354,7 +354,9 @@ equal field by field; anything that would change one is refused instead.
 - `chain` is `own` only when every request in the run's cause chain was
   signed by one of `person`'s own devices and written by them or their
   agents, and the chain ends at a request of theirs, from their own current
-  verified human device, that no agent wrote (version 1's `human` test).
+  verified human device, that no agent wrote (version 1's `human` test;
+  an ask from this daemon's own device is never that, since its key is
+  shared with its local agents).
   The chain is the one AgentNet already records and checks between devices:
   a run's ask in the person's "My agents" room replies to the room request
   it serves (`roomChain`). This daemon follows only requests it holds. A
@@ -379,7 +381,9 @@ equal field by field; anything that would change one is refused instead.
   copy). `--client-id` (1 to 128 printable bytes) is recorded in the same
   transaction as the message: a repeat sends nothing, prints the first
   message's `ID STATE` and exits 0, so a caller that cannot tell whether a
-  send happened may repeat it. Delivery is still at least once.
+  send happened may repeat it. The handle and person are checked first; a
+  key already used with another handle is refused. Delivery is still at
+  least once.
 - `agent` is the asking agent's plain name when `author` is `agent`: this
   device's own agent's label, else its harness's name (as its origin says,
   a claim, for display only). `device` is the request's device by name.

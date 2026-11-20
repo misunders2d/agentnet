@@ -141,8 +141,130 @@ func TestRunOriginV2ChainAndReplyHandle(t *testing.T) {
 		t.Fatalf("handle is not the phone request's: %s %s %s %v", conv, lid, topic, err)
 	}
 
-	// The reply goes into the phone request's topic, though that request is
-	// finished, once per client id.
+	// Mixed: the chain as this device holds it, the handle at its own request.
+	chainNow := func() runOriginChain {
+		c, err := hub.runOriginChainOf(hubJob, person, runOriginAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if c := chainNow(); c.chain != runOriginOwn || c.target.lid != typed.LID {
+		t.Fatalf("own chain: %+v", c)
+	}
+	var upID, upSender, upKey, upHuman, upReply string
+	if err := hub.store.db.QueryRow(`SELECT id,sender,verified_by,coalesce(human,''),coalesce(reply_to,'') FROM inbox WHERE conv=? AND lid=?`, opened.Conv, typed.LID).Scan(&upID, &upSender, &upKey, &upHuman, &upReply); err != nil {
+		t.Fatalf("the hub holds no copy of the phone's request: %v", err)
+	}
+	// Another own human request further up, so a tampered link passed as an
+	// agent's would end "own": only the guest and person checks say mixed.
+	earlier, err := phone.AskAgentInTopic(ctx, opened.To, envelope.KindTask, "and the weekly one", opened.Topic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the hub holds the earlier request", func() bool {
+		_, found, err := hub.causeLink(opened.Conv, earlier.LID)
+		return err == nil && found
+	})
+	via := `, reply_to=` + sqlQuote(earlier.LID)
+	guestPID := strings.Repeat("b", 32)
+	guest := humanJSON(&envelope.HumanTurn{AuthorPID: guestPID, Audience: []envelope.HumanScope{{PID: guestPID}}, Proof: []protocol.ParticipationEvent{{Type: protocol.EventScope, PID: guestPID, Role: protocol.RoleHuman}}})
+	for name, set := range map[string]string{
+		"a guest wrote the phone's request": `UPDATE inbox SET human=` + sqlQuote(guest) + via + ` WHERE id=` + sqlQuote(upID),
+		"another person sent it":            `UPDATE inbox SET sender=` + sqlQuote(w.bob.Address) + `, verified_by=` + sqlQuote(w.bob.Self().Fingerprint()) + via + ` WHERE id=` + sqlQuote(upID),
+		"its upstream is not held here":     `UPDATE inbox SET reply_to=NULL WHERE id=` + sqlQuote(hubID),
+	} {
+		if _, err := hub.store.db.Exec(set); err != nil {
+			t.Fatal(err)
+		}
+		if c := chainNow(); c.chain != runOriginMixed || c.target.conv != opened.Conv || c.target.lid != chained.LID {
+			t.Fatalf("%s: %+v", name, c)
+		}
+		// The vouched run said own: its chain changed, so version 2 refuses
+		// while version 1 still answers.
+		if a, raw := askRunOriginV2(t, hub, pid, start); a.Error == "" {
+			t.Fatalf("%s: changed chain vouched: %s", name, raw)
+		}
+		if a := askRunOriginPID(t, hub, pid, start); a.Error != "" || a.Author != runOriginAgent {
+			t.Fatalf("%s: v1 %+v", name, a)
+		}
+		if _, err := hub.store.db.Exec(`UPDATE inbox SET sender=?, verified_by=?, human=nullif(?,''), reply_to=nullif(?,'') WHERE id=?`, upSender, upKey, upHuman, upReply, upID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := hub.store.db.Exec(`UPDATE inbox SET reply_to=? WHERE id=?`, typed.LID, hubID); err != nil {
+			t.Fatal(err)
+		}
+		if a, _ := askRunOriginV2(t, hub, pid, start); a != ans {
+			t.Fatalf("%s: restored chain: %+v", name, a)
+		}
+	}
+
+	// A guest's turn that a member device carried counts "human" in
+	// version 1 (runOriginAgentWritten), but never as the person's own chain.
+	direct := ownPendingTask(t, hub, phone, "list my schedules")
+	if _, err := hub.store.db.Exec(`UPDATE inbox SET human=? WHERE id=?`, guest, direct); err != nil {
+		t.Fatal(err)
+	}
+	dj := storedJob(t, hub, direct)
+	if p, author, err := hub.runOriginIdentity(dj); err != nil || p != person || author != runOriginHuman {
+		t.Fatalf("premise: %q %q %v", p, author, err)
+	}
+	if c, err := hub.runOriginChainOf(dj, person, runOriginHuman); err != nil || c.chain != runOriginMixed {
+		t.Fatalf("guest-written request: %+v %v", c, err)
+	}
+
+	// Later: the hub's run has ended and the person has marked the topic
+	// done. The reply still goes into it, once per client id.
+	child.Process.Kill()
+	child.Wait()
+	if _, err := hub.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, hubID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := laptop.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, cause); err != nil {
+		t.Fatal(err) // the laptop's run has ended too, so its agent takes the next request
+	}
+	waitState(t, laptop, stored(laptop, opened.Conv, earlier.LID), stateAnswered)
+	topicDone := func(d *Agent) bool {
+		ts, err := d.ChatTopics(opened.Conv)
+		if err != nil {
+			return false
+		}
+		for _, x := range ts {
+			if x.ID == opened.Topic {
+				return x.State == TopicDone
+			}
+		}
+		return false
+	}
+	// As a person would: mark it done once the phone shows everything in it
+	// (a mark never covers a message the phone has not shown).
+	eventually(t, "the phone shows every answer in the topic", func() bool {
+		msgs, err := phone.ConversationMessages(opened.Conv)
+		if err != nil {
+			return false
+		}
+		answered := map[string]bool{}
+		for _, m := range msgs {
+			if m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult {
+				answered[m.ReplyTo] = true
+			}
+		}
+		return answered[typed.LID] && answered[earlier.LID] && answered[chained.LID]
+	})
+	var marked time.Time
+	eventually(t, "the topic done on the phone", func() bool {
+		if topicDone(phone) {
+			return true
+		}
+		if time.Since(marked) > 3*time.Second {
+			if _, err := phone.ChangeChatTopic(ctx, opened.Conv, opened.Topic, "done", "", 0); err != nil {
+				t.Fatal(err)
+			}
+			marked = time.Now()
+		}
+		return topicDone(phone)
+	})
+	eventually(t, "the topic done on the hub", func() bool { return topicDone(hub) })
 	sent, err := hub.SendReplyHandle(ctx, ans.Reply, desk.ID, "ISSUE-1/1/accepted", "Accepted: tracking the nightly fix", nil)
 	if err != nil || sent.Repeated || sent.ID == "" || sent.Conv != opened.Conv || sent.Topic != opened.Topic {
 		t.Fatalf("reply: %+v %v", sent, err)
@@ -180,69 +302,10 @@ func TestRunOriginV2ChainAndReplyHandle(t *testing.T) {
 	if _, err := hub.store.db.Exec(`INSERT INTO reply_handles(handle,request,person,conv,lid,topic,created_ms) VALUES(?,?,?,?,?,?,0)`, other, "bob-request", "bob-person", opened.Conv, typed.LID, opened.Topic); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hub.SendReplyHandle(ctx, other, desk.ID, "", "x", nil); !errors.Is(err, ErrReplyHandle) {
-		t.Fatalf("another person's handle: %v", err)
-	}
-
-	// Mixed: the chain as this device holds it, the handle at its own request.
-	chainNow := func() runOriginChain {
-		c, err := hub.runOriginChainOf(hubJob, person, runOriginAgent)
-		if err != nil {
-			t.Fatal(err)
+	for _, cid := range []string{"", "ISSUE-1/1/accepted"} { // a used client id finds nothing either
+		if _, err := hub.SendReplyHandle(ctx, other, desk.ID, cid, "x", nil); !errors.Is(err, ErrReplyHandle) {
+			t.Fatalf("another person's handle, client id %q: %v", cid, err)
 		}
-		return c
-	}
-	if c := chainNow(); c.chain != runOriginOwn || c.target.lid != typed.LID {
-		t.Fatalf("own chain: %+v", c)
-	}
-	var upID, upSender, upKey, upHuman string
-	if err := hub.store.db.QueryRow(`SELECT id,sender,verified_by,coalesce(human,'') FROM inbox WHERE conv=? AND lid=?`, opened.Conv, typed.LID).Scan(&upID, &upSender, &upKey, &upHuman); err != nil {
-		t.Fatalf("the hub holds no copy of the phone's request: %v", err)
-	}
-	guestPID := strings.Repeat("b", 32)
-	guest := humanJSON(&envelope.HumanTurn{AuthorPID: guestPID, Audience: []envelope.HumanScope{{PID: guestPID}}, Proof: []protocol.ParticipationEvent{{Type: protocol.EventScope, PID: guestPID, Role: protocol.RoleHuman}}})
-	for name, set := range map[string]string{
-		"a guest wrote the phone's request": `UPDATE inbox SET human=` + sqlQuote(guest) + ` WHERE id=` + sqlQuote(upID),
-		"another person sent it":            `UPDATE inbox SET sender=` + sqlQuote(w.bob.Address) + `, verified_by=` + sqlQuote(w.bob.Self().Fingerprint()) + ` WHERE id=` + sqlQuote(upID),
-		"its upstream is not held here":     `UPDATE inbox SET reply_to=NULL WHERE id=` + sqlQuote(hubID),
-	} {
-		if _, err := hub.store.db.Exec(set); err != nil {
-			t.Fatal(err)
-		}
-		if c := chainNow(); c.chain != runOriginMixed || c.target.conv != opened.Conv || c.target.lid != chained.LID {
-			t.Fatalf("%s: %+v", name, c)
-		}
-		// The vouched run said own: its chain changed, so version 2 refuses
-		// while version 1 still answers.
-		if a, raw := askRunOriginV2(t, hub, pid, start); a.Error == "" {
-			t.Fatalf("%s: changed chain vouched: %s", name, raw)
-		}
-		if a := askRunOriginPID(t, hub, pid, start); a.Error != "" || a.Author != runOriginAgent {
-			t.Fatalf("%s: v1 %+v", name, a)
-		}
-		if _, err := hub.store.db.Exec(`UPDATE inbox SET sender=?, verified_by=?, human=nullif(?,'') WHERE id=?`, upSender, upKey, upHuman, upID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := hub.store.db.Exec(`UPDATE inbox SET reply_to=? WHERE id=?`, typed.LID, hubID); err != nil {
-			t.Fatal(err)
-		}
-		if a, _ := askRunOriginV2(t, hub, pid, start); a != ans {
-			t.Fatalf("%s: restored chain: %+v", name, a)
-		}
-	}
-
-	// A guest's turn that a member device carried counts "human" in
-	// version 1 (runOriginAgentWritten), but never as the person's own chain.
-	direct := ownPendingTask(t, hub, phone, "list my schedules")
-	if _, err := hub.store.db.Exec(`UPDATE inbox SET human=? WHERE id=?`, guest, direct); err != nil {
-		t.Fatal(err)
-	}
-	dj := storedJob(t, hub, direct)
-	if p, author, err := hub.runOriginIdentity(dj); err != nil || p != person || author != runOriginHuman {
-		t.Fatalf("premise: %q %q %v", p, author, err)
-	}
-	if c, err := hub.runOriginChainOf(dj, person, runOriginHuman); err != nil || c.chain != runOriginMixed {
-		t.Fatalf("guest-written request: %+v %v", c, err)
 	}
 
 	// A mixed run's handle is its own request's: the reply goes to the
@@ -257,6 +320,10 @@ func TestRunOriginV2ChainAndReplyHandle(t *testing.T) {
 	}
 	if _, err := hub.replyHandleFor(mixedID, person, replyTarget{opened.Conv, typed.LID, opened.Topic}); err == nil {
 		t.Fatal("a handle moved to another reply")
+	}
+	// A client id belongs to the handle it was first sent with.
+	if _, err := hub.SendReplyHandle(ctx, mixed, desk.ID, "ISSUE-1/1/accepted", "x", nil); !errors.Is(err, ErrClientIDReused) {
+		t.Fatalf("client id under another handle: %v", err)
 	}
 }
 

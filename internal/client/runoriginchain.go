@@ -44,6 +44,7 @@ CREATE TABLE reply_handles(
   created_ms INTEGER NOT NULL);
 CREATE TABLE client_sends(
   client_id TEXT PRIMARY KEY,
+  handle TEXT NOT NULL,
   id TEXT NOT NULL,
   lid TEXT NOT NULL,
   created_ms INTEGER NOT NULL);
@@ -174,7 +175,9 @@ func (a *Agent) ownChainLink(link chainLink, person string) (mine, human bool, e
 			agent = true
 		}
 	}
-	if agent {
+	// This device's key is shared with its local agents, so an ask from
+	// here is never the person's own (as version 1's author).
+	if agent || link.from == a.Address {
 		return true, false, nil
 	}
 	own, err := a.ownHumanAuthor(a.store.db, link.from, link.key)
@@ -285,11 +288,6 @@ func (a *Agent) SendReplyHandle(ctx context.Context, handle, agentID, clientID, 
 	if agentID == "" {
 		return out, errors.New("name the agent to send as with --from-agent ID")
 	}
-	if clientID != "" {
-		if prior, ok, err := a.clientSent(clientID); err != nil || ok {
-			return prior, err
-		}
-	}
 	var person string
 	err := a.store.db.QueryRow(`SELECT person,conv,lid,topic FROM reply_handles WHERE handle=?`, handle).Scan(&person, &out.Conv, &out.LID, &out.Topic)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -308,6 +306,11 @@ func (a *Agent) SendReplyHandle(ctx context.Context, handle, agentID, clientID, 
 	if _, err := a.SessionAgent("", agentID); err != nil {
 		return out, err
 	}
+	if clientID != "" {
+		if prior, ok, err := a.clientSent(clientID, handle); err != nil || ok {
+			return prior, err
+		}
+	}
 	pid, err := a.replyParticipation(ctx, out.Conv, out.Topic, agentID)
 	if err != nil {
 		return out, err
@@ -319,7 +322,7 @@ func (a *Agent) SendReplyHandle(ctx context.Context, handle, agentID, clientID, 
 			if len(copies) > 0 {
 				id, lid = copies[0].env.ID, copies[0].in.LID
 			}
-			res, err := tx.Exec(`INSERT OR IGNORE INTO client_sends(client_id,id,lid,created_ms) VALUES(?,?,?,?)`, clientID, id, lid, time.Now().UnixMilli())
+			res, err := tx.Exec(`INSERT OR IGNORE INTO client_sends(client_id,handle,id,lid,created_ms) VALUES(?,?,?,?,?)`, clientID, handle, id, lid, time.Now().UnixMilli())
 			if err != nil {
 				return err
 			}
@@ -331,7 +334,7 @@ func (a *Agent) SendReplyHandle(ctx context.Context, handle, agentID, clientID, 
 	}
 	sent, err := a.sendAgentMessage(ctx, pid, out.Topic, body, before, files...)
 	if errors.Is(err, errClientIDTaken) {
-		prior, ok, e := a.clientSent(clientID)
+		prior, ok, e := a.clientSent(clientID, handle)
 		if e == nil && !ok {
 			e = err
 		}
@@ -344,16 +347,27 @@ func (a *Agent) SendReplyHandle(ctx context.Context, handle, agentID, clientID, 
 	return out, nil
 }
 
-// clientSent is the message an earlier send stored with clientID.
-func (a *Agent) clientSent(clientID string) (ReplyHandleSent, bool, error) {
+// ErrClientIDReused: the client id was used with another reply handle.
+var ErrClientIDReused = errors.New("this client id was already used with another reply handle")
+
+// clientSent is the message an earlier send through handle stored with
+// clientID. The id used with another handle is refused, never matched.
+func (a *Agent) clientSent(clientID, handle string) (ReplyHandleSent, bool, error) {
 	var out ReplyHandleSent
-	err := a.store.db.QueryRow(`SELECT c.id,c.lid,coalesce(o.state,''),coalesce(o.conv,''),coalesce(o.topic,'') FROM client_sends c LEFT JOIN outbox o ON o.id=c.id WHERE c.client_id=?`, clientID).
-		Scan(&out.ID, &out.LID, &out.State, &out.Conv, &out.Topic)
+	var was string
+	err := a.store.db.QueryRow(`SELECT c.handle,c.id,c.lid,coalesce(o.state,''),coalesce(o.conv,''),coalesce(o.topic,'') FROM client_sends c LEFT JOIN outbox o ON o.id=c.id WHERE c.client_id=?`, clientID).
+		Scan(&was, &out.ID, &out.LID, &out.State, &out.Conv, &out.Topic)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, false, nil
 	}
+	if err != nil {
+		return ReplyHandleSent{}, false, err
+	}
+	if was != handle {
+		return ReplyHandleSent{}, false, ErrClientIDReused
+	}
 	out.Repeated = true
-	return out, err == nil, err
+	return out, true, nil
 }
 
 // replyParticipation is agentID's active participation hosted here in conv
@@ -369,11 +383,11 @@ func (a *Agent) replyParticipation(ctx context.Context, conv, topic, agentID str
 			return p.PID, nil
 		}
 	}
-	room, err := a.MyAgentsRoom(ctx)
+	room, err := a.heldMyAgentsRoom()
 	if err != nil {
 		return "", err
 	}
-	if conv != room || topic == "" {
+	if room == "" || conv != room || topic == "" {
 		return "", errors.New("that agent is not active in the reply's chat here")
 	}
 	keys, err := a.ownHumanTaskKeys()
