@@ -146,7 +146,37 @@ async function checkEditBox(page, area, originalWidth, capture) {
    });observer.observe(document.body,{subtree:true,childList:true,characterData:true});},{capture:true,once:true});
   },{id,text});
   await page.goto('http://127.0.0.1:'+server.address().port+'/?count='+count);const row=page.locator('[data-mid="'+String(count).padStart(32,'0')+'"]');await row.waitFor();await row.scrollIntoViewIfNeeded();
-  const menu=async(name)=>{await page.getByRole('dialog').waitFor({state:'hidden'});await row.scrollIntoViewIfNeeded();if(width>600){await row.hover();await row.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name,exact:true}).click();}else{await row.locator('[data-message-bubble]').click({trial:true});const b=await row.locator('[data-message-bubble]').boundingBox(),cdp=await page.context().newCDPSession(page);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:b.x+Math.min(30,b.width/2),y:b.y+b.height/2}]});await page.getByRole('dialog').waitFor();await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.getByRole('dialog').getByRole('button',{name,exact:true}).click();await cdp.detach();}};
+  const menu = async name => {
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor({state:'hidden'});
+    await row.scrollIntoViewIfNeeded();
+    if (width > 600) {
+      await row.hover();
+      await row.getByRole('button',{name:'More actions',exact:true}).click();
+      await page.getByRole('menuitem',{name,exact:true}).click();
+      return;
+    }
+    const bubble = row.locator('[data-message-bubble]');
+    await bubble.click({trial:true});
+    const b = await bubble.boundingBox();
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:b.x+b.width/2,y:b.y+b.height/2}]});
+      try {
+        // Check the rendered sheet while the contact is held. On Windows the sheet
+        // appeared in the DOM while the role locator still waited for it.
+        await page.waitForFunction(() => {
+          const sheet = document.querySelector('#portals .an-sheet[data-open]');
+          return !!sheet?.checkVisibility({visibilityProperty:true,opacityProperty:true});
+        }, null, {polling:50});
+      } finally {
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      }
+    } finally {
+      await cdp.detach();
+    }
+    await dialog.getByRole('button',{name,exact:true}).click();
+  };
   const originalWidth = (await row.locator('[data-message-bubble]').boundingBox()).width;
   await menu('Edit');
   const area = page.getByRole('textbox',{name:'New text'});
