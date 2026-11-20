@@ -129,9 +129,9 @@ func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent,
 	})
 	// The carriers were sealed before any daemon ran, so they wait for the
 	// readers' group capabilities, are released by the capability change and
-	// sent again: a chain of Hub round trips per reader. Windows runners took
-	// 1-2 s per round trip (failed snapshots), past the 15 s default; the
-	// same chain at an injected 1 s per request arrived in 14-27 s. The bound
+	// sent again: a chain of Hub round trips per reader. Slow Windows runners
+	// took past the 15 s default (one finished 200 ms after it); the same
+	// chain at an injected 1 s per request arrived in 14-27 s. The bound
 	// stays below the Hub's 90 s ping, so a copy that waits for the next ping
 	// instead of its release wake still fails here. One bound covers both
 	// readers, so it never adds up past that ping.
