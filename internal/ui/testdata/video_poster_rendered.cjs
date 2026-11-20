@@ -21,6 +21,11 @@ async function check(kind, phone) {
       window.videoPlays = 0;
       const play = HTMLMediaElement.prototype.play;
       HTMLMediaElement.prototype.play = function () { if (this.tagName === 'VIDEO') window.videoPlays++; return play.call(this); };
+      // A heartbeat from page start: every gap over 100 ms between its
+      // ticks is a time the main thread could not have answered a key.
+      const gaps = window.mainThreadGaps = [];
+      let last = performance.now();
+      setInterval(() => { const now = performance.now(); if (now - last > 100) gaps.push({ end: now, gap: now - last }); last = now; }, 25);
     });
     const p = await ctx.newPage();
     p.setDefaultTimeout(10000);
@@ -39,16 +44,20 @@ async function check(kind, phone) {
     const frame = name => card(name).locator('[data-poster]');
     const playButton = name => card(name).getByRole('button', { name: 'Play video ' + name, exact: true });
     await frame('received.webm').scrollIntoViewIfNeeded();
-    await p.waitForFunction(el => el.dataset.poster === 'loading', await frame('received.webm').elementHandle());
+    const loadingAt = await (await p.waitForFunction(el => el.dataset.poster === 'loading' && performance.now(), await frame('received.webm').elementHandle())).jsonValue();
     assert.equal(await playButton('received.webm').count(), 1, 'Play is there while the poster is made');
     // The composer answers while the capture waits on its read, within the
     // owner's 1 s. Each check starts a fresh browser, and its first key
     // through the driver was the outlier (macOS CI WebKit, end to end: 694
     // and 1410 ms once each, 29-121 ms otherwise). A non-printing Shift goes
     // first, so the composer keeps its state; the timed key is then measured
-    // both ways: in the page, from the trusted keydown's own timestamp (a
-    // busy main thread counts) to the frame after the key is there, and end
-    // to end through the driver.
+    // in the page, from the trusted keydown's own timestamp to the frame
+    // after the key is there, and end to end through the driver. Neither
+    // sees a stall that ends before the driver dispatches (the driver waits
+    // on the page first; a 1.5 s busy loop before the warm-up measured
+    // keyToFrameMs 21-29 and passed), so the heartbeat bounds the main
+    // thread from the poster's loading through the timed key: the warm-up
+    // absorbs only driver time, never a page that cannot answer.
     const box = p.getByRole('textbox', { name: /Message Bob/ });
     await box.click();
     const warm = Date.now();
@@ -73,8 +82,10 @@ async function check(kind, phone) {
     await p.waitForFunction(() => Number.isFinite(window.keyTiming.feedbackAt), null, { timeout: 5000 });
     const key = await p.evaluate(() => window.keyTiming);
     const keyToFrameMs = Math.round(key.feedbackAt - key.at), handlerLagMs = Math.round(key.handled - key.at);
-    const typing = label + ' typing while a poster waits: ' + JSON.stringify({ keyToFrameMs, handlerLagMs, typingMs, warmupMs });
+    const stallMs = Math.round(await p.evaluate(t0 => Math.max(0, ...window.mainThreadGaps.filter(g => g.end > t0 - 100).map(g => g.gap)), loadingAt));
+    const typing = label + ' typing while a poster waits: ' + JSON.stringify({ keyToFrameMs, handlerLagMs, typingMs, warmupMs, stallMs });
     assert(key.trusted, typing);
+    assert(stallMs < 1000, typing);
     assert(keyToFrameMs < 1000, typing);
     assert(typingMs < 1000, typing);
     release();
@@ -119,7 +130,7 @@ async function check(kind, phone) {
     await video.waitFor({ state: 'detached' });
     assert.equal(await frame('received.webm').getAttribute('data-poster'), 'ready', 'Close returns to the same poster');
     assert.deepEqual(errors, [], label + ' page errors');
-    return { browser: label, posterMs, typingMs, keyToFrameMs, handlerLagMs, warmupMs, openMs, consoleErrors: consoleErrors.length };
+    return { browser: label, posterMs, typingMs, keyToFrameMs, handlerLagMs, warmupMs, stallMs, openMs, consoleErrors: consoleErrors.length };
   } finally {
     await browser.close();
   }
