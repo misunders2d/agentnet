@@ -255,6 +255,8 @@ jobs:
           AGENTNET_TEST_COUNT: ${{ inputs.test_count || '1' }}
           AGENTNET_NATIVE_PARTITION: ${{ matrix.partition }}
           AGENTNET_TEST_STALL_PROBE: '1'
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: bash scripts/native-client-shard.sh "$AGENTNET_NATIVE_PARTITION" 6
   # The race suite on Linux, split over parallel runners: internal/client's
   # tests in bounded client shards; every other package in others-0 (with the
