@@ -148,9 +148,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
+  const editWidth = !editing ? "" : wide ? " w-1/2 has-[[data-edit-expanded]]:w-full" : " w-full";
   const body = (
     <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
-      className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
+      className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + editWidth + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
       {wide && (hot || menuOpen) && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} menuOpen={menuOpen} onMenuOpen={setMenuOpen} />}
       {last && !who.mine && (
         <span className="absolute -left-10 bottom-0">
@@ -208,9 +209,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           <span className="absolute left-4 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-full bg-surface stroke" aria-hidden="true"
             style={{ opacity: Math.min(1, touch.dx / 64) }}><IconArrowBackUp size={18} /></span>
         )}
-        <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "items-start ") + (who.mine ? "max-w-[85%] lg:max-w-[70%]" : "ml-10 max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[70%]")}
+        <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "ml-10 items-start ") + (editing ? "w-full" : who.mine ? "max-w-[85%] lg:max-w-[70%]" : "max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[70%]")}
           style={{ ...(touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : {}),
-            ...(!wide && hoverPointer ? { maxWidth: "calc(100% - " + (who.mine ? "3rem" : "5.5rem") + ")" } : {}) }}>
+            ...(!editing && !wide && hoverPointer ? { maxWidth: "calc(100% - " + (who.mine ? "3rem" : "5.5rem") + ")" } : {}) }}>
           {first && !who.mine && <NameLine m={m} who={who} />}
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
           {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
