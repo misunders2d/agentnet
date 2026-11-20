@@ -211,7 +211,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         return style.position !== "absolute" && style.position !== "fixed" && Number(style.flexGrow) === 0 ? height + node.offsetHeight : height;
       }, 0);
       const remaining = container.clientHeight - fixed - (composer.offsetHeight - ta.offsetHeight);
-      const height = Math.max(44, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
+      // One line fills the composer row (46 px, 48 from lg) with the field's own
+      // border, which is 1.5 px on a phone: a fixed 44 px left it 1 px taller.
+      const edge = getComputedStyle(mirrored.parentElement ?? mirrored);
+      const floor = (matchMedia("(min-width: 1024px)").matches ? 48 : 46) - parseFloat(edge.borderTopWidth) - parseFloat(edge.borderBottomWidth);
+      const height = Math.max(floor, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
       const scroll = ta.scrollTop;
       if (ta.style.height !== height) ta.style.height = height;
       mirrored.scrollTop = scroll;

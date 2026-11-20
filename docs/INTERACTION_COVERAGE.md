@@ -3390,7 +3390,16 @@ keep-focus tap.
   "@"). Before: "+"/"@" 44 px against a 46/48 px field, "@" 2 px lower than
   "+" on desktop. At 360 px the field is 174 px wide with "@" present
   (about 110 px for text beside the smiley).
-- Long placeholders stay on one line (they wrapped and were cut on phones).
+- Long placeholders stay on one line and end in "…" (they wrapped and were
+  cut on phones). The mirror draws the hint: a textarea's own placeholder
+  ignores `text-overflow` and was cut mid-letter in Chromium and WebKitGTK.
+- One line fills the row exactly: the textarea's floor is the row height
+  minus the field's own border (1.5 px on phones). The old fixed 44 px left
+  the field 47 px beside 46 px buttons wherever the 1.5 px border is drawn:
+  WebKitGTK, and Chromium above 1x pixel density (Chromium at 1x snaps it to
+  1 px, which hid it). Measured equal tops/bottoms in Chromium at 360 px
+  (1x, 2.75x), 412 px (2.625x), 1280 px (1x, 2x) and WebKitGTK at 360 and
+  1280 px.
 - Emoji data preloads when the field takes focus or the pointer reaches the
   smiley (it used to preload when "+" opened).
 - Twemoji 15 ships as m/fonts/twemoji.woff2 (479 KB), after Onest/Rubik in
@@ -3407,11 +3416,17 @@ keep-focus tap.
 
 | Inventory | Intended local feedback | Completion/recovery | Executed evidence |
 |---|---|---|---|
-| composer smiley opens picker | picker visible on tap (`compose.emoji-open` 56 ms, Chromium normal pass); keyboard stays (mousedown kept); second tap closes | pick inserts at caret, focus back to field | `TestReactionPreferencesRendered` (composer pick), `TestConversationLinksRendered` (skin contract), `TestComicGroupGuestControlsRendered`, `TestSheetImmediateRendered`, latency compose suite; tests moved from the "+" menu path |
+| composer smiley opens picker | picker visible on tap (`compose.emoji-open` 56–60 ms, Chromium, normal and held-write passes); keyboard stays (mousedown kept); second tap closes | pick inserts at caret, focus back to field | `TestReactionPreferencesRendered` (composer pick), `TestConversationLinksRendered` (skin contract), `TestComicGroupGuestControlsRendered`, `TestSheetImmediateRendered`, latency compose suite; tests moved from the "+" menu path |
+
+Overlay skins (agentnet-skins, same change): Office's 44 px Send now 46/48
+px, Office and Pulp load the shared Twemoji face, Pulp's field border 1 px
+plus a 1 px inset outline (it was 2 px, field 50 px) and its tilted Send
+stamp 48 px from `lg`. Measured "+", "@", field top/bottom equal and Send
+centred for both at 1280 and 360 px in Chromium; Office also in WebKitGTK.
 
 Not run: Android WebView and WebView2 devices, the installed Linux app's
-own window, the full latency suite (held-write pass skipped), the skins gate
-(agentnet-skins). Four rendered tests (`TestComicReviewHistoryRendered`,
+own window. Rendered tests failing on this machine identically on unchanged
+main, not diagnosed here: `TestComicReviewHistoryRendered`,
 `TestComicPanelLayoutRendered`, `TestComicDraftDestinationsRendered`,
-`TestComicOutboxRendered`) fail on this machine identically on unchanged
-main; not diagnosed here.
+`TestComicOutboxRendered`, `TestAndroidComicRendered` (waits for "Message
+saved on this phone…").

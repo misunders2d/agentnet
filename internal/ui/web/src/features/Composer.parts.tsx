@@ -98,7 +98,7 @@ export { SendButton } from "../skin/SendButton";
  *  pull them apart. */
 export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & {
   text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>; trailing?: ReactNode;
-}>(function Field({ text, spans, wide, mirror, trailing, className = "", ...rest }, ref) {
+}>(function Field({ text, spans, wide, mirror, trailing, placeholder, className = "", ...rest }, ref) {
   const metrics: CSSProperties = { fontFamily: "var(--font-sans)", fontSize: wide ? 15 : 16, lineHeight: "22px", fontWeight: 400, letterSpacing: "normal" };
   const box = "py-[10.5px] pl-4 whitespace-pre-wrap break-words lg:py-3 " + (trailing ? "pr-12" : "pr-4");
   const parts: ReactNode[] = [];
@@ -116,9 +116,12 @@ export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTML
     <div data-part="composer-field" className={"relative min-w-0 flex-1 overflow-hidden rounded-[23px] bg-canvas stroke transition-shadow duration-200 focus-within:[box-shadow:0_0_0_3px_color-mix(in_srgb,var(--an-agent-ink)_30%,transparent)] lg:rounded-2xl " + className}>
       <div ref={mirror} aria-hidden="true" className={"pointer-events-none absolute inset-0 overflow-hidden text-ink " + box} style={metrics}>
         <div data-composer-measure>{parts}</div>
+        {/* The mirror draws the hint too: a textarea's own placeholder wraps or
+            clips mid-letter on a narrow field, never ending in an ellipsis. */}
+        {!text && placeholder && <div className="-mt-[22px] truncate text-muted">{placeholder}</div>}
       </div>
-      <textarea ref={ref} rows={1} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
-        className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:truncate placeholder:text-muted selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />
+      <textarea ref={ref} rows={1} placeholder={placeholder} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
+        className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:text-transparent selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />
       {trailing}
     </div>
   );
