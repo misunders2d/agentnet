@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Run origins (opt-in, `agentnet daemon --run-origin`, Linux only): a local
@@ -102,8 +105,9 @@ func (a *Agent) vouchRun(j job, pid int) func() {
 // runOriginIdentity is who made request j, from AgentNet's own checks: the
 // verified roster person ID of the exact key that signed it, and "human"
 // only for that person's own request from their own current verified human
-// device. A local ask (this device's key is shared with its local agents), a
-// continuation and a reply are "agent".
+// device that an agent did not write (runOriginAgentWritten). A local ask
+// (this device's key is shared with its local agents), a continuation and a
+// reply are "agent". The vouch and every re-check use this one function.
 func (a *Agent) runOriginIdentity(j job) (person, author string, err error) {
 	person, err = permissionPersonIn(a.store.db, j.From, j.Key)
 	if err != nil {
@@ -128,10 +132,51 @@ func (a *Agent) runOriginIdentity(j job) (person, author string, err error) {
 			return "", "", e
 		}
 		if human {
-			author = runOriginHuman
+			agent, e := runOriginAgentWritten(a.store.db, j.ID)
+			if e != nil {
+				return "", "", e
+			}
+			if !agent {
+				author = runOriginHuman
+			}
 		}
 	}
 	return person, author, nil
+}
+
+// runOriginAgentWritten reports whether stored request id says an agent
+// wrote it, whatever key signed it: a human device's key also signs the
+// asks of the agents it hosts (agentnet room ask, MEL-713). An agent wrote
+// it when its origin is "agent:<harness>" (envelope.AgentOrigin), or when its
+// captured audience names an author participation (AuthorPID) and no proof
+// scope of that participation has the human role: an agent room
+// participant, or one this device cannot show to be a human guest. A
+// member's own turn (no AuthorPID) with a "ui" or no origin is a person's.
+// A missing row or an unreadable audience is an error, never "human".
+func runOriginAgentWritten(q dbq, id string) (bool, error) {
+	var origin, raw string
+	if err := q.QueryRow(`SELECT coalesce(origin,''), coalesce(human,'') FROM inbox WHERE id=?`, id).Scan(&origin, &raw); err != nil {
+		return false, err
+	}
+	if envelope.AgentOrigin(origin) {
+		return true, nil
+	}
+	if raw == "" {
+		return false, nil
+	}
+	var h envelope.HumanTurn
+	if err := json.Unmarshal([]byte(raw), &h); err != nil {
+		return false, err
+	}
+	if h.AuthorPID == "" {
+		return false, nil
+	}
+	for _, e := range h.Proof {
+		if e.Type == protocol.EventScope && e.PID == h.AuthorPID && e.Role == protocol.RoleHuman {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // answerRunOrigin vouches for req only when it names a process this daemon
@@ -161,7 +206,7 @@ func (a *Agent) answerRunOrigin(o *runOrigins, req runOriginRequest, live func(i
 		return runOriginRefusal("the requester no longer verifies as the same person")
 	}
 	if e.author == runOriginHuman && author != runOriginHuman {
-		return runOriginRefusal("the requester's device no longer verifies as their own human device")
+		return runOriginRefusal("the request no longer verifies as its person's own, from their own human device")
 	}
 	ans := runOriginAnswer{V: 1, Run: e.run, Person: e.person, Author: e.author}
 	for _, s := range []string{ans.Run, ans.Person, ans.Author} {
