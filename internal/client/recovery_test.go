@@ -98,6 +98,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	interval := 20 * time.Millisecond
 	for !cond() {
 		if time.Now().After(deadline) {
+			logGoroutineGroups(t)
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		// Predicates often read and verify a whole conversation. Back off
