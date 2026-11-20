@@ -41,14 +41,42 @@ async function check(kind, phone) {
     await frame('received.webm').scrollIntoViewIfNeeded();
     await p.waitForFunction(el => el.dataset.poster === 'loading', await frame('received.webm').elementHandle());
     assert.equal(await playButton('received.webm').count(), 1, 'Play is there while the poster is made');
-    // The composer answers while the capture waits on its read.
+    // The composer answers while the capture waits on its read, within the
+    // owner's 1 s. Each check starts a fresh browser, and its first key
+    // through the driver was the outlier (macOS CI WebKit, end to end: 694
+    // and 1410 ms once each, 29-121 ms otherwise). A non-printing Shift goes
+    // first, so the composer keeps its state; the timed key is then measured
+    // both ways: in the page, from the trusted keydown's own timestamp (a
+    // busy main thread counts) to the frame after the key is there, and end
+    // to end through the driver.
     const box = p.getByRole('textbox', { name: /Message Bob/ });
     await box.click();
+    const warm = Date.now();
+    await box.press('Shift');
+    await p.waitForFunction(() => true);
+    const warmupMs = Date.now() - warm;
+    await box.evaluate(el => {
+      const t = window.keyTiming = {};
+      el.addEventListener('keydown', e => {
+        Object.assign(t, { at: e.timeStamp, handled: performance.now(), trusted: e.isTrusted });
+        const frame = () => {
+          if ((el.value ?? el.textContent).includes('x')) requestAnimationFrame(() => { t.feedbackAt = performance.now(); });
+          else if (performance.now() - t.at < 5000) requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      }, { capture: true, once: true });
+    });
     const typed = Date.now();
     await box.press('x');
     await p.waitForFunction(el => (el.value ?? el.textContent).includes('x'), await box.elementHandle());
     const typingMs = Date.now() - typed;
-    assert(typingMs < 1100, label + ' typing while a poster waits: ' + typingMs + ' ms');
+    await p.waitForFunction(() => Number.isFinite(window.keyTiming.feedbackAt), null, { timeout: 5000 });
+    const key = await p.evaluate(() => window.keyTiming);
+    const keyToFrameMs = Math.round(key.feedbackAt - key.at), handlerLagMs = Math.round(key.handled - key.at);
+    const typing = label + ' typing while a poster waits: ' + JSON.stringify({ keyToFrameMs, handlerLagMs, typingMs, warmupMs });
+    assert(key.trusted, typing);
+    assert(keyToFrameMs < 1000, typing);
+    assert(typingMs < 1000, typing);
     release();
     const asked = Date.now();
     await p.waitForFunction(el => el.dataset.poster !== 'loading', await frame('received.webm').elementHandle(), { timeout: 8000 });
@@ -91,7 +119,7 @@ async function check(kind, phone) {
     await video.waitFor({ state: 'detached' });
     assert.equal(await frame('received.webm').getAttribute('data-poster'), 'ready', 'Close returns to the same poster');
     assert.deepEqual(errors, [], label + ' page errors');
-    return { browser: label, posterMs, typingMs, openMs, consoleErrors: consoleErrors.length };
+    return { browser: label, posterMs, typingMs, keyToFrameMs, handlerLagMs, warmupMs, openMs, consoleErrors: consoleErrors.length };
   } finally {
     await browser.close();
   }
