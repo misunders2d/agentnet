@@ -148,9 +148,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
+  const editWidth = !editing ? "" : wide ? " w-1/2 has-[[data-edit-expanded]]:w-full" : " w-full";
   const body = (
     <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
-      className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (editing ? " w-full" : "") + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
+      className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + editWidth + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
       {wide && (hot || menuOpen) && (live || attention) && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} menuOpen={menuOpen} onMenuOpen={setMenuOpen} />}
       {last && !who.mine && (
         <span className="absolute -left-10 bottom-0">

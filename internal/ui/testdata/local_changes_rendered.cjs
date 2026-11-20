@@ -65,6 +65,10 @@ const css=fs.readFileSync(path.join(work,'style.css'));
 const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixture');if(u.pathname==='/entry.mjs'){res.setHeader('Content-Type','text/javascript');return res.end(js)}if(u.pathname==='/style.css'){res.setHeader('Content-Type','text/css');return res.end(css)}res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local changes fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><style>body{margin:0}#root,#app{height:100vh}nav,form{padding:12px}button{min-height:44px}form textarea{border:1px solid;width:95%}</style><div id="root" class="an-root"><div id="app" class="an-app"></div><div id="portals"></div></div><script type="module" src="/entry.mjs"></script>')});
 
 async function checkEditBox(page, area, originalWidth, capture) {
+  const viewportWidth = page.viewportSize().width;
+  const bubble = area.locator('xpath=ancestor::*[@data-message-bubble]');
+  const bubbleWidth = () => bubble.evaluate(el => el.getBoundingClientRect().width);
+  const scrollPixels = () => area.evaluate(el => el.scrollHeight - el.clientHeight);
   const initial = await area.evaluate(el => {
     const bubble = el.closest('[data-message-bubble]');
     const column = bubble.parentElement.parentElement;
@@ -78,12 +82,25 @@ async function checkEditBox(page, area, originalWidth, capture) {
     };
   });
   assert(initial.bubbleWidth > originalWidth, 'editing expands the original bubble');
-  assert(Math.abs(initial.bubbleWidth - initial.columnWidth) <= 1, 'editor uses the full message column');
+  const shortWidth = initial.columnWidth * (viewportWidth >= 1024 ? 0.5 : 1);
+  assert(Math.abs(initial.bubbleWidth - shortWidth) <= 1, 'short edits use half the desktop column or the full narrow column');
   assert(initial.lines >= 4.5 && initial.lines <= 5.5, 'short edits start with five visible lines');
-  if (capture) await area.locator('xpath=ancestor::*[@data-message-bubble]').screenshot({path:path.join(evidence,'edit-box-'+page.viewportSize().width+'.png')});
+  await area.fill('2. Редактирование уже отправленного сообщения.');
+  assert.equal(await bubbleWidth(), initial.bubbleWidth, 'reported short edit keeps the starting width');
+  assert.equal(await scrollPixels(), 0, 'short edit fits without scrolling');
+  if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-short-'+viewportWidth+'.png')});
+  await area.fill('First line\nSecond line\nThird line');
+  assert.equal(await bubbleWidth(), initial.bubbleWidth, 'three lines keep the starting width');
+  assert.equal(await scrollPixels(), 0, 'three lines fit without scrolling');
+  await area.fill('This edit starts as a single line in the source. The editor measures where the words wrap at half the column width and expands to make the long text easier to read.');
+  const expandedWidth = await bubbleWidth();
+  assert(Math.abs(expandedWidth - initial.columnWidth) <= 1, 'text that wraps past three lines at half width expands to the full column');
+  assert.equal(await scrollPixels(), 0, 'wrapped edit fits without scrolling');
+  if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-expanded-'+viewportWidth+'.png')});
   await area.fill('More room to edit\n'.repeat(8).trimEnd());
   const grown = await area.evaluate(el => el.offsetHeight);
   assert(grown > initial.height, 'editor grows as lines are added');
+  assert.equal(await scrollPixels(), 0, 'ordinary multiline edit fits without scrolling');
   await area.fill('A long edit scrolls inside the field\n'.repeat(100).trimEnd());
   const capped = await area.evaluate(el => {
     el.scrollTop = el.scrollHeight;
@@ -91,8 +108,8 @@ async function checkEditBox(page, area, originalWidth, capture) {
   });
   assert(capped.height > grown && Math.abs(capped.height - capped.limit) <= 1, 'editor caps growth at 45% of viewport height');
   assert(capped.overflow === 'auto' && capped.scroll > 0, 'long edit text scrolls inside the field');
-  if (capture) await area.locator('xpath=ancestor::*[@data-message-bubble]').screenshot({path:path.join(evidence,'edit-box-capped-'+page.viewportSize().width+'.png')});
-  return {originalWidth, width: initial.bubbleWidth, columnWidth: initial.columnWidth, initialHeight: initial.height, grownHeight: grown, cappedHeight: capped.height, scrollable: true};
+  if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-capped-'+viewportWidth+'.png')});
+  return {originalWidth, shortWidth: initial.bubbleWidth, expandedWidth, columnWidth: initial.columnWidth, initialHeight: initial.height, grownHeight: grown, cappedHeight: capped.height, scrollable: true};
 }
 
 (async()=>{let browser,lastPage;try{
@@ -136,6 +153,7 @@ async function checkEditBox(page, area, originalWidth, capture) {
   const editBox = await checkEditBox(page, area, originalWidth, evidence && count === 100);
   await area.fill('Visible before backend');
   assert.equal(await area.evaluate(el => el.offsetHeight), editBox.initialHeight, 'shortening text restores the starting height');
+  assert.equal((await row.locator('[data-message-bubble]').boundingBox()).width, editBox.shortWidth, 'shortening text restores the starting width');
   await measure('edit','Saving edit…');await page.getByRole('button',{name:'Save',exact:true}).click();
   await row.getByText('Visible before backend',{exact:false}).waitFor();assert.equal(await page.evaluate(()=>fixture.writes.length),1);assert.equal(await page.evaluate(()=>fixture.writes[0].b.text),'Visible before backend');await row.getByText('Saving edit…',{exact:true}).waitFor();
   await page.getByRole('textbox',{name:'Unrelated draft'}).fill('Keep typing during write');await page.getByRole('button',{name:'Toggle settings'}).click();assert.equal(await page.locator('[data-current-tab]').innerText(),'settings');

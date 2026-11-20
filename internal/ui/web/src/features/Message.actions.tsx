@@ -303,17 +303,25 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
   useLayoutEffect(() => {
     const el = area.current;
     if (!el) return;
+    let width: number;
     const fit = () => {
+      // Measure at the starting width, before the minimum rows or scrollbar affect the result.
+      el.removeAttribute("data-edit-expanded");
+      el.style.overflowY = "hidden";
+      el.style.height = "0px";
+      const style = getComputedStyle(el);
+      const threeLines = 3 * parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      el.toggleAttribute("data-edit-expanded", el.scrollHeight > Math.ceil(threeLines));
+
       el.style.height = "";
       const borders = el.offsetHeight - el.clientHeight;
       el.style.height = el.scrollHeight + borders + "px";
+      el.style.overflowY = "";
+      width = el.offsetWidth;
     };
     fit();
-    let width = el.offsetWidth;
     const observer = new ResizeObserver(() => {
-      if (width === el.offsetWidth) return;
-      width = el.offsetWidth;
-      fit();
+      if (width !== el.offsetWidth) fit();
     });
     observer.observe(el);
     return () => observer.disconnect();
