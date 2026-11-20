@@ -130,8 +130,32 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	if _, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "direct question"}); err != nil {
 		t.Fatal(err)
 	}
+	label, device, _ := protocol.SplitAddress(phone.Address)
+	profileNow := func() (protocol.Profile, bool) {
+		var profile protocol.Profile
+		return profile, phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile) == nil
+	}
+	// The session that waited for the link stays listed in its grace period
+	// and already advertises what it reads, so the phone's published
+	// capability alone does not show the daemon's own session: wait for
+	// that one before signing every listed session as an older program.
+	linked, ok := profileNow()
+	if !ok {
+		t.Fatal("phone profile before its daemon runs")
+	}
 	stopPhone := runAgent(t, phone)
-	waitNamedAgentCaps(t, phone)
+	eventually(t, "the phone daemon's own session advertises its capabilities", func() bool {
+		profile, ok := profileNow()
+		if !ok || !profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapAgentIdentity) {
+			return false
+		}
+		for _, session := range profile.Sessions {
+			if !slices.Contains(linked.Sessions, session) {
+				return true
+			}
+		}
+		return false
+	})
 	signCapsAfter(t, phone, without(ownCaps, protocol.CapOwnSyncV3)) // an older program
 	stopPhone()
 	produced := func() (copies, jobs int) {
@@ -151,7 +175,6 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	if copies, jobs := produced(); copies != 0 || jobs != 0 {
 		t.Fatalf("sealed for a device that cannot read it: %d copies, %d jobs", copies, jobs)
 	}
-	label, device, _ := protocol.SplitAddress(phone.Address)
 	var oldProfile protocol.Profile
 	if err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &oldProfile); err != nil {
 		t.Fatal(err)
