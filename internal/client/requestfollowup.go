@@ -161,6 +161,10 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 	if x.Conv != "" {
 		replyTo = r.h.LID
 	}
+	// Steering targets the run of the request the person selected; a reply
+	// that continues finished work runs as its own job. The host binds the
+	// correction to the chain's original at that job's attempt.
+	selected := r.h
 	for n := 0; r.h.Followup != nil; n++ {
 		if n >= 16 {
 			return "", errors.New("follow-up chain is too deep; select the original request")
@@ -230,7 +234,7 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 		return "", err
 	}
 	if x.Attempt > 0 {
-		view, e := a.followupExecution(r.h, x.Conv)
+		view, e := a.followupExecution(selected, x.Conv)
 		if e != nil || view == nil || view.State != stateRunning || view.Attempt != x.Attempt || view.Stale {
 			return "", errors.New("the exact running attempt is no longer current; steering was not sent")
 		}

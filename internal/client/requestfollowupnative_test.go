@@ -900,3 +900,52 @@ func TestDirectNativeFollowupOrderFilesAndRetry(t *testing.T) {
 		t.Fatal("duplicate correction replayed", found, err)
 	}
 }
+
+// Steering a running reply that continues earlier, finished work (a follow-up
+// whose own job is now the current run) reaches that run. The sender checked
+// the finished original instead and refused: "the exact running attempt is no
+// longer current" while the follow-up was visibly working (2026-11-20).
+func TestSteerRunningFollowupOfFinishedRequest(t *testing.T) {
+	a, root, ref := nativeFollowupFixture(t)
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=1 WHERE id=?`, stateAnswered, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	reply := protocol.NewID()
+	if _, err := a.QueueRequestFollowup(tctx(t), RequestFollowup{Conv: root.Conv, Ref: ref, ID: reply, Body: "Add it to Linear as a bug"}); err != nil {
+		t.Fatal(err)
+	}
+	var running string
+	if err := a.store.db.QueryRow(`SELECT id FROM inbox WHERE (id=? OR lid=?) AND replica=0`, reply, reply).Scan(&running); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=1 WHERE id=?`, stateRunning, running); err != nil {
+		t.Fatal(err)
+	}
+	steer := RequestFollowup{Conv: root.Conv, Ref: envelope.Ref{ID: reply, Fingerprint: ref.Fingerprint}, ID: protocol.NewID(), Attempt: 1, Body: "Also fix the edit box"}
+	note, err := a.QueueRequestFollowup(tctx(t), steer)
+	if err != nil {
+		t.Fatalf("steering the running follow-up was refused: %v", err)
+	}
+	if !strings.Contains(note, "Steering sent") {
+		t.Fatalf("unexpected note %q", note)
+	}
+	// The host binds corrections to the chain's original, at the running job's attempt.
+	if marker, err := storedRequestFollowup(a.store.db, "in", steer.ID); err != nil || marker == nil || marker.Ref != ref || marker.Attempt != 1 {
+		t.Fatalf("steer lost its binding: %+v %v", marker, err)
+	}
+	// The running follow-up's own native run claims it.
+	current := root
+	current.ID, current.Body, current.nativeAttempt = running, "Add it to Linear as a bug", 1
+	if claim, found, err := a.claimNativeFollowup(current); err != nil || !found || claim.ID != steer.ID {
+		t.Fatalf("running follow-up did not take the steer: %+v %v %v", claim.job.ID, found, err)
+	}
+	// A finished run is still refused: nothing is steered into ended work.
+	if _, err := a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, running); err != nil {
+		t.Fatal(err)
+	}
+	late := steer
+	late.ID, late.Body = protocol.NewID(), "Too late"
+	if _, err := a.QueueRequestFollowup(tctx(t), late); err == nil || !strings.Contains(err.Error(), "no longer current") {
+		t.Fatalf("steer into finished follow-up: %v", err)
+	}
+}
