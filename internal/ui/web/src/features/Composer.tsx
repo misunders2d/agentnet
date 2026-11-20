@@ -12,7 +12,7 @@ import { pastePictures, pasteTable } from "../pictures.mjs";
 // through askAgent, and an owner's OK is never given from text.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
+import { IconAlertCircle, IconAt, IconCloudOff, IconLock, IconMoodSmile } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
 import { agentHistoryThread, agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentHost, threadAgentKey, threadAgentID, threadAuthor, whoName } from "../model";
@@ -21,7 +21,7 @@ import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, droppedDrafts, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
 import type { DroppedFile } from "../host";
 import { agentTargets, spanAgentTargets, withoutAgents, candidates, decode, encode, guestAuthor, matches, shift, trigger, type Candidate, type Span } from "./Composer.mentions";
-import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
+import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, sideButton, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
 import { useTeams } from "./Teams";
 import { collectiveOptions, collectiveHref } from "../collective-mentions.mjs";
@@ -75,7 +75,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const visible = useRef(conv);
   visible.current = conv;
   const caretNext = useRef<number | null>(null);
-  const emojiAfterMenu = useRef(false);
+  const emojiButton = useRef<HTMLButtonElement>(null);
+  const [emojiHandle] = useState(() => Popover.createHandle()); // the smiley sits in the field, outside Popover.Root
   const androidPreparing = useRef(new Set<string>());
   const answering = useRef(new Set<string>());                        // requests this person chose to answer by hand
   const mediaJobs = useRef(new Map<string, { controller: AbortController; cancel: () => void }>());
@@ -90,13 +91,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const [mentionRange, setMentionRange] = useState<{from: number; to: number} | null>(null);
   useEffect(() => setMentionRange(null), [conv]);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [emojiWarm, setEmojiWarm] = useState(false); // load emoji data before the first open
   const [schedulePane, setSchedulePane] = useState<SchedulePane>(null);
   const [audienceOpen, setAudienceOpen] = useState(false);
   useEffect(() => setSchedulePane(null), [conv]);
   useEffect(() => setAudienceOpen(false), [conv]);
   const [zone, setZone] = useState<HTMLElement | null>(null);
-  useEmojiPreload(menuOpen);
+  useEmojiPreload(emojiWarm);
 
   const { text, spans } = useMemo(() => decode(draft.text), [draft.text]);
   const write = (d: Draft, at?: number) => { if (at != null) caretNext.current = at; store.setDraft(conv, d); };
@@ -210,7 +211,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         return style.position !== "absolute" && style.position !== "fixed" && Number(style.flexGrow) === 0 ? height + node.offsetHeight : height;
       }, 0);
       const remaining = container.clientHeight - fixed - (composer.offsetHeight - ta.offsetHeight);
-      const height = Math.max(44, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
+      // One line fills the composer row (46 px, 48 from lg) with the field's own
+      // border, which is 1.5 px on a phone: a fixed 44 px left it 1 px taller.
+      const edge = getComputedStyle(mirrored.parentElement ?? mirrored);
+      const floor = (matchMedia("(min-width: 1024px)").matches ? 48 : 46) - parseFloat(edge.borderTopWidth) - parseFloat(edge.borderBottomWidth);
+      const height = Math.max(floor, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
       const scroll = ta.scrollTop;
       if (ta.style.height !== height) ta.style.height = height;
       mirrored.scrollTop = scroll;
@@ -797,7 +802,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
     { label: "Schedule…", sub:scheduleWhy || undefined, disabled:!!scheduleWhy, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>showSchedule(text.trim() || files.length ? "create" : "list") },
-    { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
   // A changed identity: checked and trusted from here (on a computer).
@@ -809,7 +813,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         <p className="font-semibold">{closed.title}</p>
         {closed.detail && <p className="text-[13px] text-text-2">{closed.detail}</p>}
       </div>
-      {!dm?.frozen && !savedReadOnly() && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} onOpenChange={setMenuOpen} finalFocus={()=>!schedulePane} />}
+      {!dm?.frozen && !savedReadOnly() && <PlusMenu actions={actions.filter(a=>a.label === "Schedule…")} finalFocus={()=>!schedulePane} />}
     </div>{!dm?.frozen && !savedReadOnly() && scheduleDialogs}</>
   );
 
@@ -858,13 +862,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       {notice?.conv===conv&&notice.refresh&&<Button size="sm" variant="outline" onClick={()=>void store.refreshOpen().then(ok=>{if(ok)setNotice(null);},e=>setNotice({conv,text:errorText(e),refresh:true}))}>Refresh work status</Button>}
 
       <div ref={row} className="flex items-end gap-2">
-        <PlusMenu actions={actions} disabled={sending} onOpenChange={setMenuOpen}
-          finalFocus={() => !emojiAfterMenu.current && !schedulePane} onClosed={() => { emojiAfterMenu.current = false; }} />
+        <PlusMenu actions={actions} disabled={sending} finalFocus={() => !schedulePane} />
         {dm && <button type="button" aria-label="Mention someone" title={"Mention someone (" + (mac ? "⌘2" : "Ctrl+2") + ")"} aria-keyshortcuts={mac ? "Meta+2" : "Control+2"} aria-haspopup="listbox"
           aria-expanded={open} aria-controls={open && offered.length ? listId : undefined} disabled={sending}
-          onMouseDown={(e) => e.preventDefault()} onClick={openMentions}
-          className="grid size-11 shrink-0 place-items-center rounded-full border-[1.5px] border-outline bg-surface text-text hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-agent-ink disabled:opacity-40">
-          <IconAt size={22} aria-hidden="true" />
+          onMouseDown={(e) => e.preventDefault()} onClick={openMentions} className={sideButton}>
+          <IconAt size={22} stroke={2.2} aria-hidden="true" className="text-ink" />
         </button>}
         <Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} value={text} placeholder={placeholder} aria-label={placeholder}
           enterKeyHint={wide ? "send" : "enter"} autoComplete="off" spellCheck
@@ -874,16 +876,21 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           onSelect={(e) => setCaret(e.currentTarget.selectionStart === e.currentTarget.selectionEnd ? e.currentTarget.selectionStart : null)}
           onBlur={() => { setCaret(null); setMentionRange(null); typing.stop(); }}
           onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
-          onKeyDown={keys} onPaste={paste} />
+          onKeyDown={keys} onPaste={paste} onFocus={() => setEmojiWarm(true)}
+          trailing={<Popover.Trigger handle={emojiHandle} ref={emojiButton} aria-label="Emoji" title="Emoji" disabled={sending}
+            onMouseDown={(e) => e.preventDefault()} onPointerEnter={() => setEmojiWarm(true)} onClick={() => setEmojiWarm(true)}
+            className="absolute right-[3px] bottom-[1.5px] grid size-10 place-items-center rounded-full hover:bg-sunken focus-visible:outline-2 focus-visible:outline-agent-ink disabled:opacity-40 data-[popup-open]:bg-sunken lg:bottom-[3px]">
+            <IconMoodSmile size={22} stroke={2} aria-hidden="true" className="text-text-2" />
+          </Popover.Trigger>} />
         <SendButton ready={ready} busy={sending} label={sendLabel} />
       </div>
 
       <input ref={picker} type="file" multiple hidden tabIndex={-1} onChange={(e) => { addFiles([...(e.target.files || [])]); e.target.value = ""; }} />
       {dragRect && <DropTarget rect={dragRect} lim={lim} />}
 
-      <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen}>
+      <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen} handle={emojiHandle}>
         <Popover.Portal container={portal}>
-          <Popover.Positioner anchor={row} side="top" align="start" sideOffset={8} collisionPadding={12} className="z-40">
+          <Popover.Positioner anchor={emojiButton} side="top" align="end" sideOffset={12} collisionPadding={12} className="z-40">
             <Popover.Popup finalFocus={field} aria-label="Emoji"
               className="origin-[var(--transform-origin)] outline-none transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               <EmojiPicker onPick={(e) => { insert(e); setEmojiOpen(false); }} onClose={() => setEmojiOpen(false)} />

@@ -963,7 +963,7 @@ try {
    await chat();await fill('compose.draft-text',text(),'Fixture draft');
    await tap('compose.mention-open',control('Mention someone'),()=>!!active('[role="listbox"]'),'mention choices visible');
    const option=active('[role="option"]');if(option)await tap('compose.mention-pick',option,()=>text().value.includes('@'),'selected mention inserted in draft');
-   await plus('compose.plus-open');await tap('compose.emoji-open',control(/^Emoji/),()=>!!control('Skin tone'),'emoji picker visible');await retire();
+   await retire();await tap('compose.emoji-open',control('Emoji'),()=>!!control('Skin tone'),'emoji picker visible');await retire();
    await tap('compose.emoji-tone-open',control('Skin tone'),()=>!!active('[role="radiogroup"][aria-label="Skin tone"]'),'emoji tone choices visible');
    await tap('compose.emoji-tone',control('medium'),()=>!active('[role="radiogroup"][aria-label="Skin tone"]'),'tone chosen and tone selector closed');
    await until(()=>active('[role="gridcell"]'),'actual emoji grid loaded after tone selection');const emoji=active('[role="gridcell"]'),beforeEmoji=text().value;await tap('compose.emoji-pick',emoji,()=>!control('Skin tone')&&text().value!==beforeEmoji,'picked emoji visible in draft');await retire();

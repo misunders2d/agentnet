@@ -4,7 +4,7 @@
 // the page's base sheet resets a button's font and color.
 import { forwardRef, type CSSProperties, type ReactNode, type Ref, type MouseEvent as ReactMouseEvent, type TextareaHTMLAttributes } from "react";
 import { Menu } from "@base-ui/react/menu";
-import { IconClock, IconCornerUpLeft, IconMoodSmile, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
+import { IconClock, IconCornerUpLeft, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
 import { AgentAvatar } from "../ui/Avatar";
 import type { Span } from "./Composer.mentions";
 import { usePortal } from "../owned";
@@ -19,7 +19,6 @@ export const menuIcons = {
   clock: <IconClock size={20} stroke={2} />,
   invite: <IconUserPlus size={20} stroke={2} />,
   file: <IconPaperclip size={20} stroke={2} />,
-  emoji: <IconMoodSmile size={20} stroke={2} />,
 };
 
 /** Opening visibility follows menu state, without waiting for animation frames.
@@ -30,7 +29,7 @@ export function PlusMenu({ actions, disabled, onOpenChange, onClosed, finalFocus
   return (
     <Menu.Root modal={false} onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
       <Menu.Trigger disabled={disabled} aria-label="Add to message" title="Add to message"
-        className="group grid size-11 shrink-0 place-items-center self-end rounded-full bg-surface stroke press hover:bg-sunken disabled:opacity-40 data-[popup-open]:bg-ink lg:mb-0.5">
+        className={"group data-[popup-open]:bg-ink " + sideButton}>
         <IconPlus size={22} stroke={2.4} className="text-ink transition-transform duration-200 ease-out-soft group-data-[popup-open]:rotate-45 group-data-[popup-open]:text-canvas motion-reduce:transition-none" />
       </Menu.Trigger>
       <Menu.Portal container={portal}>
@@ -52,6 +51,11 @@ export function PlusMenu({ actions, disabled, onOpenChange, onClosed, finalFocus
     </Menu.Root>
   );
 }
+
+/** sideButton: the round buttons beside the field ("+", "@"). Same size and
+ *  border as the field and the send button at every width, so their edges
+ *  and centres line up. */
+export const sideButton = "grid size-[46px] shrink-0 place-items-center self-end rounded-full bg-surface stroke press hover:bg-sunken disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-agent-ink lg:size-12";
 
 /** ReplyChip: what this message replies to; or, for a request answered by
  *  hand, what is answered and what that changes (`note`). */
@@ -93,10 +97,10 @@ export { SendButton } from "../skin/SendButton";
  *  Both take their type metrics from one inline style, so no sheet can
  *  pull them apart. */
 export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & {
-  text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>;
-}>(function Field({ text, spans, wide, mirror, className = "", ...rest }, ref) {
+  text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>; trailing?: ReactNode;
+}>(function Field({ text, spans, wide, mirror, trailing, placeholder, className = "", ...rest }, ref) {
   const metrics: CSSProperties = { fontFamily: "var(--font-sans)", fontSize: wide ? 15 : 16, lineHeight: "22px", fontWeight: 400, letterSpacing: "normal" };
-  const box = "px-4 py-[10.5px] whitespace-pre-wrap break-words lg:py-3";
+  const box = "py-[10.5px] pl-4 whitespace-pre-wrap break-words lg:py-3 " + (trailing ? "pr-12" : "pr-4");
   const parts: ReactNode[] = [];
   let last = 0;
   for (const s of [...spans].sort((a, b) => a.start - b.start)) {
@@ -112,9 +116,13 @@ export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTML
     <div data-part="composer-field" className={"relative min-w-0 flex-1 overflow-hidden rounded-[23px] bg-canvas stroke transition-shadow duration-200 focus-within:[box-shadow:0_0_0_3px_color-mix(in_srgb,var(--an-agent-ink)_30%,transparent)] lg:rounded-2xl " + className}>
       <div ref={mirror} aria-hidden="true" className={"pointer-events-none absolute inset-0 overflow-hidden text-ink " + box} style={metrics}>
         <div data-composer-measure>{parts}</div>
+        {/* The mirror draws the hint too: a textarea's own placeholder wraps or
+            clips mid-letter on a narrow field, never ending in an ellipsis. */}
+        {!text && placeholder && <div className="-mt-[22px] truncate text-muted">{placeholder}</div>}
       </div>
-      <textarea ref={ref} rows={1} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
-        className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:text-muted selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />
+      <textarea ref={ref} rows={1} placeholder={placeholder} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
+        className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:text-transparent selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />
+      {trailing}
     </div>
   );
 });
