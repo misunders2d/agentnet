@@ -16,7 +16,12 @@ func TestHistoryCatchupDuplicateForeignDismissal(t *testing.T) {
 	w, a, _, packet := groupHistoryLinkedFixture(t)
 	stop := runAgent(t, a)
 	part := p6Member(t, w.bob, w.bob, packet.State.Conv)
-	eventually(t, "source sees accepted participation", func() bool { return stateAt(t, a, part.PID).Claimable() })
+	// The invite's signed public scope is a separate send; a direct ask
+	// refuses until it is held here (ErrParticipationScopePending).
+	eventually(t, "source sees accepted participation and its scope", func() bool {
+		p := stateAt(t, a, part.PID)
+		return p.Claimable() && p.Scope != ""
+	})
 	ask, err := a.AskAgent(tctx(t), part.PID, envelope.KindQuestion, "synthetic retained request")
 	if err != nil {
 		t.Fatal(err)
