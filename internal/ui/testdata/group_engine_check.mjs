@@ -152,7 +152,9 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
     check(unavailable.pending.includes('unavailable')&&JSON.parse(unavailable.context).proof.length===1,'terminal original ciphertext excluding publisher stays truthful pending without invented past plaintext');
    }finally{await w.close();}
   }
-  {
+  // Both orders of the remote proof and context carriers. A carrier kicks
+  // recoverGroupIntents in the background, so each order is pinned here.
+  for(const early of [true,false]){
    const w=await world();try{
     const requests=[],call=w.e.call.bind(w.e);w.e.groupSupport=async()=>{};w.e.post=async()=>{};
     const capture=async(method,path,body,options)=>{if(method==='POST'&&path.startsWith('/v1/groups/')){requests.push(body.commit);return {seq:body.commit.seq,hash:body.commit.hash};}return call(method,path,body,options);};w.e.call=capture;
@@ -175,8 +177,16 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
     const committed=wire.parseGroupCommit(saved.record),removed=wire.parseGroupContext(saved.context),remoteState=await wire.signGroupState(ownPhoneKeys,{...removed.state,seq:3,prev:await wire.groupStateHash(removed.state),title:'Remote newer verified state',actor:roster.person,actor_roster:await wire.rosterHash(ownNext),by:ownPhoneFP});
     const remoteFile=await wire.encryptFile(new TextEncoder().encode(wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]})),'remote-current.json',pub),remoteCommit=await wire.signGroupCommit(ownPhoneKeys,{...committed,seq:3,prev:remoteState.prev,hash:await wire.groupStateHash(remoteState),admins:wire.groupAdmins(remoteState),writer:ownPhone.address,actor:roster.person,actor_roster:await wire.rosterHash(ownNext),ciphertext:remoteFile.ct});
     const receiveRemote=async(sub,value)=>{const file=await wire.encryptFile(new TextEncoder().encode(value),sub+'.json',pub);w.blobs.set(file.attachment.blob.id,file.ct);const inner={v:2,id:wire.newID(),lid:wire.newID(),from:ownPhone.address,to:address,ts:1700000002,kind:'message',conv:created,root:wire.rootJSON(initial.root),sub,body:wire.groupCarrierJSON({v:1,seq:3,hash:remoteCommit.hash,to_key:w.e.fp}),attachments:[file.attachment]};await w.receive({envelope:await wire.seal(inner,ownPhoneKeys,pub)});};
-    await receiveRemote(wire.SubGroupProof,wire.groupJournalJSON({records:[committed,remoteCommit],more:false}));await receiveRemote(wire.SubGroupContext,wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]}));
-    check((await w.e.groupCurrent(created)).state.seq===3,'actual remote newer current context arrives after committed terminal interruption');
+    const recover=w.e.recoverGroupIntents,kicked=[];w.e.recoverGroupIntents=(...args)=>{if(early){const work=recover(...args);kicked.push(work);return work;}kicked.push(null);return Promise.resolve();};
+    await receiveRemote(wire.SubGroupProof,wire.groupJournalJSON({records:[committed,remoteCommit],more:false}));
+    if(early){
+     // The proof's own recovery kick runs before the newer context: seq 3 is
+     // known only as a record, so the fanout holds (client groupDeliveryHead).
+     check(kicked.length>0,'remote proof carrier kicks group intent recovery');await Promise.allSettled(kicked);w.e.recoverGroupIntents=recover;await w.e.recoverGroupIntents();
+     check(!(await w.st.get('kv',pendingKey)).published&&wire.parseGroupContext((await w.st.get('kv','group/'+created)).context).state.seq===1&&!(await w.st.all('outbox')).some(r=>r.group_terminal),'remote newer proof record alone holds the older terminal fanout before its context');
+    }
+    await receiveRemote(wire.SubGroupContext,wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]}));w.e.recoverGroupIntents=recover;
+    check(kicked.length>0&&(await w.e.groupCurrent(created)).state.seq===3,'actual remote newer current context arrives after committed terminal interruption');
     await w.e.recoverGroupIntents();check(!(await w.st.get('kv',pendingKey)).published&&!(await w.st.all('outbox')).some(r=>r.group_terminal),'remote newer context cannot complete the older remaining-member fanout');
     await w.e.manageGroup({conv:created,action:'rename',title:'Own newer atomically published context'});await w.e.recoverGroupIntents();
     const copies=(await w.st.all('outbox')).filter(r=>r.group_terminal),exact=JSON.stringify(copies);check(copies.length===2&&(await w.st.get('kv',pendingKey)).published,'terminal publication recovery atomically stores separate original proof/context copies');
