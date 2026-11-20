@@ -418,6 +418,9 @@ func TestAgentDismissal(t *testing.T) {
 	}
 	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ? AND state = ?`, queued.ID, stateAgentWaiting) == 1 })
 	stopBob()
+	// Join the independent sender before swapping its transport: a pass
+	// still running from the steps above reads it (race detector).
+	w.bob.stopBackgroundPosts()
 	// Keep all POSTs offline until the queued-output boundary is observed;
 	// an earlier status copy must not consume a one-shot failure.
 	transport := w.bob.hub.http.Transport
