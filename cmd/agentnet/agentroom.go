@@ -219,3 +219,23 @@ func awaitHelper(ctx context.Context, a *client.Agent, cause, id string, wait ti
 	fmt.Fprintf(out, "No answer yet to %s. Go on with other work, or end your turn with a short status for your requester: AgentNet runs this request again with the answer once it comes and your other asks still out have finished. Do not wait for it yourself.\n", id)
 	return nil
 }
+
+// sendReplyHandle is `agentnet send --reply-handle`: TEXT as agent fromAgent
+// into the chat and topic of the request handle names (run origin version
+// 2). It prints ID STATE of the message; a repeated client id prints the
+// first message's and sends nothing.
+func sendReplyHandle(ctx context.Context, a *client.Agent, handle, fromAgent, clientID, body string, files []string, out, errw io.Writer) error {
+	var named []client.OutgoingFile
+	for _, p := range files {
+		named = append(named, client.OutgoingFile{Path: p})
+	}
+	sent, err := a.SendReplyHandle(ctx, handle, fromAgent, clientID, body, named)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s %s\n", sent.ID, sent.State)
+	if sent.Repeated {
+		fmt.Fprintln(errw, "already sent with this client id; nothing new was sent")
+	}
+	return nil
+}

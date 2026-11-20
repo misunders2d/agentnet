@@ -186,6 +186,7 @@ stops further asks and waits.
 Wait reads local stored replies only. Custody/delivery is never completion.`,
 
 	"send": `Usage: agentnet send [--file PATH]... [--wait 5s] [--reply-to ID] [--progress] [--from-agent ID] ADDRESS TEXT
+       agentnet send --reply-handle H --from-agent ID [--client-id KEY] [--file PATH]... TEXT
 
 Send an end-to-end encrypted message. Where it goes depends on who sends:
   a person at a plain shell: in your DM with the person at ADDRESS (both
@@ -213,6 +214,13 @@ request, no polling). Answers arrive later in the same chat.
                   finish, accept, cancel or take over anything; the result
                   still arrives separately.
   --from-agent ID speak as this agent hosted here
+  --reply-handle H
+                  send TEXT as the --from-agent agent into the chat and topic
+                  of the request H names: a handle this device's run origin
+                  socket gave (version 2, "reply"). It works only on this
+                  device, for its own person. Prints ID STATE.
+  --client-id KEY with --reply-handle: one message per KEY on this device; a
+                  repeat sends nothing and prints the first message's ID STATE
 
 Examples:
   agentnet send bob/desk "build is green"
@@ -1426,6 +1434,7 @@ var valueFlags = map[string]bool{
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "update-grace": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
 	"follow-up": true, "offset": true, "limit": true, "reply-to": true, "answer-wait": true, "from-agent": true,
+	"reply-handle": true, "client-id": true,
 }
 
 // guides are help topics that are not commands; running one prints it.

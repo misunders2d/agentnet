@@ -110,14 +110,23 @@ func TestRunOriginVouchesOnlyLiveRuns(t *testing.T) {
 	if want := `{"v":1,"run":"` + humanID + `/1","person":"` + person + `","author":"human"}` + "\n"; raw != want {
 		t.Fatalf("own human run:\n got %q\nwant %q", raw, want)
 	}
+	// Version 2 adds the request's kind, its chain (one own request) and
+	// the device's name; a device-thread request has no reply handle.
+	raw = askRunOrigin(t, w.alice, `{"v":2,"pid":`+strconv.Itoa(pid)+`,"start":`+strconv.FormatUint(start, 10)+`}`)
+	if want := `{"v":2,"run":"` + humanID + `/1","person":"` + person + `","author":"human","kind":"task","chain":"own","device":"` + DeviceWords(phone.Address) + `"}` + "\n"; raw != want {
+		t.Fatalf("own human run, v2:\n got %q\nwant %q", raw, want)
+	}
 	if a := askRunOriginPID(t, w.alice, pid, start+1); a.Error == "" {
 		t.Fatalf("start mismatch vouched: %+v", a)
+	}
+	if a, raw := askRunOriginV2(t, w.alice, pid, start+1); a.Error == "" {
+		t.Fatalf("start mismatch vouched in v2: %s", raw)
 	}
 	if a := askRunOriginPID(t, w.alice, os.Getpid(), liveStart(t, os.Getpid())); a.Error == "" {
 		t.Fatalf("unregistered process vouched: %+v", a)
 	}
 	for _, line := range []string{`{"v":1,"pid":` + strconv.Itoa(pid) + `,"start":` + strconv.FormatUint(start, 10) + `,"person":"x"}`,
-		`{"v":2,"pid":` + strconv.Itoa(pid) + `,"start":` + strconv.FormatUint(start, 10) + `}`, `not json`} {
+		`{"v":3,"pid":` + strconv.Itoa(pid) + `,"start":` + strconv.FormatUint(start, 10) + `}`, `not json`} {
 		if raw := askRunOrigin(t, w.alice, line); raw != `{"v":1,"error":"invalid request"}`+"\n" {
 			t.Fatalf("%s -> %q", line, raw)
 		}
@@ -134,6 +143,10 @@ func TestRunOriginVouchesOnlyLiveRuns(t *testing.T) {
 	defer w.alice.vouchRun(job{ID: task.ID, From: host.Address, Key: host.Self().Fingerprint(), Kind: envelope.KindTask, nativeAttempt: 1}, agentChild.Process.Pid)()
 	if a := askRunOriginPID(t, w.alice, agentChild.Process.Pid, liveStart(t, agentChild.Process.Pid)); a.Author != runOriginAgent || a.Person != person || a.Run != task.ID+"/1" {
 		t.Fatalf("agent-host request: %+v", a)
+	}
+	// Not a human device's, and nothing upstream: mixed, with no handle.
+	if a, raw := askRunOriginV2(t, w.alice, agentChild.Process.Pid, liveStart(t, agentChild.Process.Pid)); a.Author != runOriginAgent || a.Chain != runOriginMixed || a.Kind != envelope.KindTask || a.Reply != "" {
+		t.Fatalf("agent-host request, v2: %s", raw)
 	}
 	// A local ask, a continuation and a reply are never the person's own.
 	phoneJob := job{ID: humanID, From: phone.Address, Key: phone.Self().Fingerprint(), Kind: envelope.KindTask}

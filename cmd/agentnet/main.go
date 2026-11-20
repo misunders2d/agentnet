@@ -402,15 +402,26 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	fallback := fs.Bool("fallback", false, "if ADDRESS#SESSION has ended, deliver to the agent's inbox instead")
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
-	var replyTo, fromAgent *string
+	var replyTo, fromAgent, replyHandle, clientID *string
 	var progress *bool
 	if !reply {
 		replyTo = fs.String("reply-to", "", "continue the conversation containing this message ID")
 		progress = fs.Bool("progress", false, "mark this correlated message as a nonterminal responder update")
 		fromAgent = fs.String("from-agent", "", "send as this agent hosted here, in your My agents room (default: this terminal's harness agent)")
+		replyHandle = fs.String("reply-handle", "", "send into the chat of the request this device's run origin reply handle names")
+		clientID = fs.String("client-id", "", "with --reply-handle: send at most one message for this key")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if !reply && *replyHandle != "" {
+		if fs.NArg() != 1 || *replyTo != "" || *progress || *fallback {
+			return errors.New("usage: send --reply-handle H --from-agent ID [--client-id KEY] [--file PATH]... TEXT")
+		}
+		return sendReplyHandle(ctx, a, *replyHandle, *fromAgent, *clientID, fs.Arg(0), files, os.Stdout, os.Stderr)
+	}
+	if !reply && *clientID != "" {
+		return errors.New("--client-id requires --reply-handle")
 	}
 	if fs.NArg() != 2 {
 		extra := ""

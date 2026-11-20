@@ -6,6 +6,13 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- The run origin socket answers version 2 when asked (`"v":2`): the
+  request's kind, whether its whole cause chain is its person's own
+  (`own`) or not (`mixed`), a reply handle, and the asking agent's and
+  device's names. `agentnet send --reply-handle H --from-agent ID
+  [--client-id KEY] TEXT` replies through that handle, on that device and
+  for its own person only, once per client id. Version 1 answers are
+  unchanged (docs/revival/INSTALL.md, "Run origin socket").
 - The run origin socket (`agentnet daemon --run-origin`) no longer calls an
   agent's room ask `human`. Such an ask is signed by the device that hosts
   the agent, which can be its person's own human device, so its run was
