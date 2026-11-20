@@ -62,7 +62,39 @@ fs.symlinkSync(path.join(web,'node_modules'),path.join(work,'node_modules'),'dir
 const js=require(path.join(web,'node_modules/esbuild')).buildSync({stdin:{contents:entry,resolveDir:work,loader:'tsx'},bundle:true,format:'esm',target:'es2022',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},write:false}).outputFiles[0].text;
 execFileSync(process.execPath,[path.join(web,'node_modules/@tailwindcss/cli/dist/index.mjs'),'-i',path.join(work,'src/styles.css'),'-o',path.join(work,'style.css'),'--minify'],{cwd:work,stdio:'pipe'});
 const css=fs.readFileSync(path.join(work,'style.css'));
-const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixture');if(u.pathname==='/entry.mjs'){res.setHeader('Content-Type','text/javascript');return res.end(js)}if(u.pathname==='/style.css'){res.setHeader('Content-Type','text/css');return res.end(css)}res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local changes fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><style>body{margin:0}#root,#app{height:100vh}nav,form{padding:12px}button{min-height:44px}textarea{border:1px solid;width:95%}</style><div id="root" class="an-root"><div id="app" class="an-app"></div><div id="portals"></div></div><script type="module" src="/entry.mjs"></script>')});
+const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixture');if(u.pathname==='/entry.mjs'){res.setHeader('Content-Type','text/javascript');return res.end(js)}if(u.pathname==='/style.css'){res.setHeader('Content-Type','text/css');return res.end(css)}res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local changes fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><style>body{margin:0}#root,#app{height:100vh}nav,form{padding:12px}button{min-height:44px}form textarea{border:1px solid;width:95%}</style><div id="root" class="an-root"><div id="app" class="an-app"></div><div id="portals"></div></div><script type="module" src="/entry.mjs"></script>')});
+
+async function checkEditBox(page, area, originalWidth, capture) {
+  const initial = await area.evaluate(el => {
+    const bubble = el.closest('[data-message-bubble]');
+    const column = bubble.parentElement.parentElement;
+    const box = getComputedStyle(el);
+    const row = getComputedStyle(column);
+    return {
+      bubbleWidth: bubble.getBoundingClientRect().width,
+      columnWidth: column.clientWidth - parseFloat(row.paddingLeft) - parseFloat(row.paddingRight),
+      height: el.offsetHeight,
+      lines: (el.clientHeight - parseFloat(box.paddingTop) - parseFloat(box.paddingBottom)) / parseFloat(box.lineHeight),
+    };
+  });
+  assert(initial.bubbleWidth > originalWidth, 'editing expands the original bubble');
+  assert(Math.abs(initial.bubbleWidth - initial.columnWidth) <= 1, 'editor uses the full message column');
+  assert(initial.lines >= 4.5 && initial.lines <= 5.5, 'short edits start with five visible lines');
+  if (capture) await area.locator('xpath=ancestor::*[@data-message-bubble]').screenshot({path:path.join(evidence,'edit-box-'+page.viewportSize().width+'.png')});
+  await area.fill('More room to edit\n'.repeat(8).trimEnd());
+  const grown = await area.evaluate(el => el.offsetHeight);
+  assert(grown > initial.height, 'editor grows as lines are added');
+  await area.fill('A long edit scrolls inside the field\n'.repeat(100).trimEnd());
+  const capped = await area.evaluate(el => {
+    el.scrollTop = el.scrollHeight;
+    return {height: el.offsetHeight, limit: innerHeight * 0.45, scroll: el.scrollTop, overflow: getComputedStyle(el).overflowY};
+  });
+  assert(capped.height > grown && Math.abs(capped.height - capped.limit) <= 1, 'editor caps growth at 45% of viewport height');
+  assert(capped.overflow === 'auto' && capped.scroll > 0, 'long edit text scrolls inside the field');
+  if (capture) await area.locator('xpath=ancestor::*[@data-message-bubble]').screenshot({path:path.join(evidence,'edit-box-capped-'+page.viewportSize().width+'.png')});
+  return {originalWidth, width: initial.bubbleWidth, columnWidth: initial.columnWidth, initialHeight: initial.height, grownHeight: grown, cappedHeight: capped.height, scrollable: true};
+}
+
 (async()=>{let browser,lastPage;try{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM});if(evidence)fs.mkdirSync(evidence,{recursive:true});
  if(trustOnly){
@@ -98,7 +130,13 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixtu
   },{id,text});
   await page.goto('http://127.0.0.1:'+server.address().port+'/?count='+count);const row=page.locator('[data-mid="'+String(count).padStart(32,'0')+'"]');await row.waitFor();await row.scrollIntoViewIfNeeded();
   const menu=async(name)=>{await page.getByRole('dialog').waitFor({state:'hidden'});await row.scrollIntoViewIfNeeded();if(width>600){await row.hover();await row.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name,exact:true}).click();}else{await row.locator('[data-message-bubble]').click({trial:true});const b=await row.locator('[data-message-bubble]').boundingBox(),cdp=await page.context().newCDPSession(page);await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:b.x+Math.min(30,b.width/2),y:b.y+b.height/2}]});await page.getByRole('dialog').waitFor();await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.getByRole('dialog').getByRole('button',{name,exact:true}).click();await cdp.detach();}};
-  await menu('Edit');await page.getByRole('textbox',{name:'New text'}).fill('Visible before backend');await measure('edit','Saving edit…');await page.getByRole('button',{name:'Save',exact:true}).click();
+  const originalWidth = (await row.locator('[data-message-bubble]').boundingBox()).width;
+  await menu('Edit');
+  const area = page.getByRole('textbox',{name:'New text'});
+  const editBox = await checkEditBox(page, area, originalWidth, evidence && count === 100);
+  await area.fill('Visible before backend');
+  assert.equal(await area.evaluate(el => el.offsetHeight), editBox.initialHeight, 'shortening text restores the starting height');
+  await measure('edit','Saving edit…');await page.getByRole('button',{name:'Save',exact:true}).click();
   await row.getByText('Visible before backend',{exact:false}).waitFor();assert.equal(await page.evaluate(()=>fixture.writes.length),1);assert.equal(await page.evaluate(()=>fixture.writes[0].b.text),'Visible before backend');await row.getByText('Saving edit…',{exact:true}).waitFor();
   await page.getByRole('textbox',{name:'Unrelated draft'}).fill('Keep typing during write');await page.getByRole('button',{name:'Toggle settings'}).click();assert.equal(await page.locator('[data-current-tab]').innerText(),'settings');
   if(evidence)await page.screenshot({path:path.join(evidence,'edit-pending-'+width+'-'+count+'.png')});
@@ -121,6 +159,6 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixtu
   await topicMenu('Mark done');await page.waitForFunction(()=>fixture.writes.length===8);await page.evaluate(()=>fixture.finish(7));await page.waitForFunction(()=>Object.keys(fixture.store.get().topicBusy).length===0);
   await page.getByRole('region',{name:'Topic state'}).getByRole('button',{name:'Reopen',exact:true}).click();await page.getByText('Saving change…',{exact:true}).waitFor();assert.equal(await page.getByRole('region',{name:'Topic state'}).count(),0);await page.evaluate(()=>fixture.finish(8));await page.waitForFunction(()=>Object.keys(fixture.store.get().topicBusy).length===0);
   if(evidence)await page.screenshot({path:path.join(evidence,'recovery-'+width+'-'+count+'.png')});
-  console.log(JSON.stringify({width,count,editImmediate:true,deleteImmediate:true,topicImmediate:true,failedDraftsRetained:true,newerSyncPreserved:true,unrelatedInput:true,timings:await page.evaluate(()=>fixture.timings),errors}));await page.close();
+  console.log(JSON.stringify({width,count,editBox,editImmediate:true,deleteImmediate:true,topicImmediate:true,failedDraftsRetained:true,newerSyncPreserved:true,unrelatedInput:true,timings:await page.evaluate(()=>fixture.timings),errors}));await page.close();
  }
 }catch(error){if(lastPage&&!lastPage.isClosed()){console.error(await lastPage.evaluate(()=>({text:document.body.innerText.slice(-2500),message:window.fixture?.store.get().dm?.messages.at(-1),writes:window.fixture?.writes.map(w=>({p:w.p,b:w.b}))})));if(evidence)await lastPage.screenshot({path:path.join(evidence,'failure.png')});}throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}})().catch(e=>{console.error(e.stack);process.exitCode=1});
