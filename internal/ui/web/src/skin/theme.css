@@ -56,8 +56,8 @@
 }
 
 @theme inline {
-  --font-sans: "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: "Rubik", "Onest", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Onest", "Twemoji", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Rubik", "Onest", "Twemoji", ui-sans-serif, system-ui, sans-serif;
   --color-canvas: var(--an-canvas);
   --color-surface: var(--an-surface);
   --color-sunken: var(--an-sunken);

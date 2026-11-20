@@ -282,10 +282,9 @@ const journeys = {
     page.off('request', watch);
     assert.deepEqual(posts, [], 'a read-only device conversation sends nothing');
     assert.equal(await form.getByRole('textbox').inputValue(), text, 'the draft is kept');
-    const plus = page.getByRole('button', { name: 'Add to message' });
-    await plus.waitFor();
-    await plus.click();
-    await page.getByRole('menuitem', { name: /Emoji/ }).click();
+    const emoji = page.getByRole('button', { name: 'Emoji', exact: true });
+    await emoji.waitFor();
+    await emoji.click();
     await page.getByLabel('Search emoji').waitFor();
     await page.waitForTimeout(400);
     await page.keyboard.press('Escape');

@@ -3366,3 +3366,52 @@ Read reporting is unchanged: rows are still marked read only within a visit.
 Not run: the Linux desktop app's own WebKitGTK build, Android WebView, and
 image attachments with real file loads (the image-resize anchor path is the
 existing `TestReadScrollRendered` check).
+
+## Composer emoji button and Twemoji (November 20, 2026)
+
+Owner requests: a separate emoji button (owner chose Telegram's placement:
+a smiley inside the right end of the text field, out of the "+" menu),
+aligned composer buttons, and the same emoji look on every device (owner
+chose Twemoji; Slack's own set is Apple's and can't be shipped).
+
+Counterpart: Telegram's composer keeps the emoji toggle inside the field's
+right edge and opens the panel above it (Telegram Desktop `HistoryWidget`
+`_tabbedSelectorToggle`; layout observed, source not re-inspected for this
+change). Reused here: the existing frimousse picker and its popover, now
+anchored to the smiley (`align="end"`) through a detached Base UI
+`Popover.Trigger` handle, so a second tap closes it; the "@" button's
+keep-focus tap.
+
+- "+", "@", the field and Send now share one size and border (46 px phone,
+  48 px from `lg`). Measured "+", "@", field and Send top/bottom equal, the
+  smiley centred in the field, at 1280 and 360 px in Chromium (group fixture
+  of `group_guest_controls_rendered.cjs`, with "@"), and "+"/field/Send in
+  WebKitGTK 2.54.1 (offscreen WebView on the demo daemon; that chat has no
+  "@"). Before: "+"/"@" 44 px against a 46/48 px field, "@" 2 px lower than
+  "+" on desktop. At 360 px the field is 174 px wide with "@" present
+  (about 110 px for text beside the smiley).
+- Long placeholders stay on one line (they wrapped and were cut on phones).
+- Emoji data preloads when the field takes focus or the pointer reaches the
+  smiley (it used to preload when "+" opened).
+- Twemoji 15 ships as m/fonts/twemoji.woff2 (479 KB), after Onest/Rubik in
+  the font stacks with an emoji-only `unicode-range`; the picker offers
+  Emoji ≤ 15 (what the font draws). Chromium drops U+FE0F before shaping,
+  so Twemoji's FE0F-keyed sequences (🏳️‍🌈, ❤️‍🔥, 😶‍🌫️) split in two;
+  web/fonts/twemoji-patch.py adds the same 852 ligatures without FE0F.
+  Rendered correctly afterwards in Chromium 155 and WebKitGTK 2.54.1
+  (offscreen WebView, static page); emoji newer than 15 fall back to the
+  device font, and so do ✔ ✖ ➕ ➖ ➗ ➰ ➿ (Twemoji draws them black, unreadable
+  on dark). The Emoji ≤ 15 limit and font apply only when the Twemoji face is
+  registered, so an overlay skin with its own document/theme sheets keeps the
+  device's emoji. Picker flags still follow frimousse's own device check.
+
+| Inventory | Intended local feedback | Completion/recovery | Executed evidence |
+|---|---|---|---|
+| composer smiley opens picker | picker visible on tap (`compose.emoji-open` 56 ms, Chromium normal pass); keyboard stays (mousedown kept); second tap closes | pick inserts at caret, focus back to field | `TestReactionPreferencesRendered` (composer pick), `TestConversationLinksRendered` (skin contract), `TestComicGroupGuestControlsRendered`, `TestSheetImmediateRendered`, latency compose suite; tests moved from the "+" menu path |
+
+Not run: Android WebView and WebView2 devices, the installed Linux app's
+own window, the full latency suite (held-write pass skipped), the skins gate
+(agentnet-skins). Four rendered tests (`TestComicReviewHistoryRendered`,
+`TestComicPanelLayoutRendered`, `TestComicDraftDestinationsRendered`,
+`TestComicOutboxRendered`) fail on this machine identically on unchanged
+main; not diagnosed here.

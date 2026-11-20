@@ -7,7 +7,7 @@
 #   style.css     Tailwind, compiled to one static file (in the skin's shadow tree)
 #   document.css  the rules that only work at document level: the fonts'
 #                 @font-face and Tailwind's @property registrations
-#   m/            fonts (OFL), emoji data and lazy media modules
+#   m/            fonts (OFL; Twemoji art CC-BY-4.0), emoji data and lazy media modules
 # from src/ and the exact package graph in package-lock.json. Also writes
 # LICENSES.txt (every bundled package's license) and SHA256SUMS (exactly the
 # package's files, checked by the Go tests).
@@ -88,6 +88,9 @@ else
 		done
 	done
 fi
+# Twemoji (COLR colour font, patched for Chromium; fonts/twemoji-patch.py):
+# emoji look the same on every device.
+cp "$here/fonts/twemoji.woff2" "$out/m/fonts/"
 cp node_modules/emojibase-data/en/data.json node_modules/emojibase-data/en/messages.json "$out/m/emoji/en/"
 # style.css, document.css and skin.json (package.mjs).
 node package.mjs "$work/tailwind.css" src/skin/document.css "$out" "$manifest"
@@ -103,8 +106,9 @@ for (const [dir, p] of Object.entries(lock.packages)) {
   text += "\n==== " + name + " " + p.version + " (" + p.license + ")\n\n" + (lic ? fs.readFileSync(path.join(dir, lic), "utf8").trim() : "(no license file shipped; see the package metadata)") + "\n";
   if (name === "mediabunny") text += "\nUnmodified Mediabunny source, including src/ and its MPL-2.0 license: " + p.resolved + "\n";
 }
+text += "\n==== AgentNet Twemoji 15.0.3, m/fonts/twemoji.woff2 (OFL-1.1 font; CC-BY-4.0 Twemoji art), from twemoji-colr-font 15.0.3, see fonts/twemoji-patch.py\n\n" + fs.readFileSync(process.argv[2], "utf8").trim() + "\n";
 fs.writeFileSync(process.argv[1], text);
-'  "$licenses"
+'  "$licenses" "$here/fonts/TWEMOJI-LICENSE.txt"
 cd "$out" && node -e '
 const fs = require("node:fs"), {execFileSync} = require("node:child_process");
 const files = fs.readdirSync(".", {recursive:true}).filter(file => fs.statSync(file).isFile()).sort();

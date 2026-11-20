@@ -1031,7 +1031,7 @@ if(process.env.AGENTNET_REACTION_REGRESSION==='1'){
    await full();assert.equal(await recent.getByRole('button',{name:'Choose 👩🏽‍💻',exact:true}).count(),1,'Exact toned/joined choice remains on reopen');await picker.getByRole('button',{name:'Close emoji',exact:true}).click();
    // The same component also inserts into the composer without sending.
    await priorPicker.waitFor({state:'detached'});
-   await page.getByRole('button',{name:'Add to message',exact:true}).click();await page.getByRole('menuitem',{name:'Emoji',exact:true}).click();
+   await page.getByRole('button',{name:'Emoji',exact:true}).click();
    const composerPicker=page.getByRole('dialog',{name:'Emoji',exact:true}).locator('[frimousse-root]');await composerPicker.waitFor({state:'visible'});
    await composerPicker.getByRole('group',{name:'Frequently used emoji',exact:true}).getByRole('button',{name:'Choose 👩🏽‍💻',exact:true}).click();assert.equal(await page.getByRole('form',{name:'Write a message',exact:true}).getByRole('textbox').inputValue(),'👩🏽‍💻');
    assert(!await page.evaluate(()=>fixture.requests.some(r=>r.path==='/api/dm/send')),'Choosing a recent emoji inserts without sending');

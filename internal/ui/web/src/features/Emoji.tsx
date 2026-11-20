@@ -1,7 +1,7 @@
 // Emoji: the full picker (search, categories, grid, skin tone) built on
 // frimousse with emoji data served from our own origin (offline is normal),
 // and the quick reactions row used on messages.
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Menu } from "@base-ui/react/menu";
 import { EmojiPicker as Picker, defaultEmojiDataResolver, useSkinTone, type EmojiData, type EmojiDataResolver, type SkinTone } from "frimousse";
 import { IconChevronDown, IconDots, IconMoodPlus, IconSearch, IconX } from "@tabler/icons-react";
@@ -12,6 +12,12 @@ import { skin as brand } from "../skin/brand";
 const toneKey = brand.storage + ".skin-tone";
 // The emoji data ships in the package (m/emoji/en/), next to this module.
 const emojiBase = new URL("m/emoji", import.meta.url).href;
+// Comic's Twemoji font (skin/document.css) draws emoji up to Emoji 15, so
+// with it the picker offers exactly those, whatever this device's own font
+// has. An overlay skin without that face keeps the device's emoji.
+const twemoji = () => { try { return [...document.fonts].some((f) => f.family.replace(/["']/g, "") === "Twemoji"); } catch { return false; } };
+const emojiVersion = () => (twemoji() ? 15 : undefined);
+const emojiFont = '"Twemoji", ' + "'Apple Color Emoji', 'Noto Color Emoji', 'Segoe UI Emoji', sans-serif";
 const tones: SkinTone[] = ["none", "light", "medium-light", "medium", "medium-dark", "dark"];
 
 function savedTone(): SkinTone {
@@ -59,6 +65,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   const columns = useMemo(() => (innerWidth < 440 ? 7 : 8), []);
   const parts = useMemo(() => (data ? sections(data, columns) : []), [data, columns]);
   const [frequent] = useState(() => reactionChoices([], columns * 2));
+  const [version] = useState(emojiVersion);
 
   // The default resolver fetches, caches and drops emoji this device cannot
   // draw; we keep a copy to place the category tabs. A failed load shows an
@@ -118,7 +125,8 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   };
 
   return (
-    <Picker.Root locale="en" emojibaseUrl={emojiBase} resolveEmojiData={resolve} columns={columns} skinTone={tone}
+    <Picker.Root locale="en" emojibaseUrl={emojiBase} emojiVersion={version} resolveEmojiData={resolve} columns={columns} skinTone={tone}
+      style={version ? { "--frimousse-emoji-font": emojiFont } as CSSProperties : undefined}
       onEmojiSelect={(e) => onPick(e.emoji)} onKeyDown={keys} aria-label="Emoji"
       className="flex h-[min(430px,70dvh,calc(var(--an-viewport-h,100dvh)_-_24px))] max-h-[var(--available-height,100dvh)] w-[min(408px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl bg-surface text-ink stroke shadow-pop">
       <div className="flex items-center gap-1.5 p-2 pb-1">
@@ -302,7 +310,7 @@ export function useEmojiPreload(when: boolean) {
   useEffect(() => {
     if (!when) return;
     const c = new AbortController();
-    Promise.resolve(defaultEmojiDataResolver("en", { emojibaseUrl: emojiBase, signal: c.signal })).catch(() => {});
+    Promise.resolve(defaultEmojiDataResolver("en", { emojibaseUrl: emojiBase, emojiVersion: emojiVersion(), signal: c.signal })).catch(() => {});
     return () => c.abort();
   }, [when]);
 }
