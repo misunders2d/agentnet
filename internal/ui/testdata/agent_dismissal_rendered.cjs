@@ -34,6 +34,7 @@ const js=require(path.join(web,'node_modules/esbuild')).buildSync({stdin:{conten
 execFileSync(process.execPath,[path.join(web,'node_modules/@tailwindcss/cli/dist/index.mjs'),'-i',path.join(work,'src/styles.css'),'-o',path.join(work,'style.css'),'--minify'],{cwd:work,stdio:'pipe'});
 const css=fs.readFileSync(path.join(work,'style.css'));
 const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHeader('Content-Type','text/javascript');return res.end(js)}if(req.url==='/style.css'){res.setHeader('Content-Type','text/css');return res.end(css)}res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent dismissal fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><div id="root" class="an-root"><div id="app" class="an-app"></div><div id="portals"></div></div><script type="module" src="/entry.mjs"></script>')});
+const seen=[]; // in-page click-to-frame times, printed when a check fails
 (async()=>{let browser;const reports=[];try{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true});
  for(const width of [1440,390]){
@@ -42,11 +43,20 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   const dismiss=()=>page.getByRole('button',{name:'Dismiss',exact:true}),waiting=()=>page.getByRole('button',{name:'Dismissing…',exact:true});
   const writes=()=>page.evaluate(()=>fixture.writes.map(w=>w.b.pid));
   await dismiss().first().waitFor();assert.equal(await dismiss().count(),3);
+  // The driver's first trusted click on a page is the slow one: on macOS CI 511-614 ms end to end, later clicks 35-176 ms, while
+  // locally the same click reached its Dismissing… frame in the page within about 100 ms either way. A real click on the room's
+  // heading and one page wait take that first, then each Dismiss is timed in the page as well, from the trusted click's own
+  // timestamp to the frame after its card shows Dismissing…, which is what the owner's 1 s bounds.
+  const warm=Date.now();await page.getByRole('heading',{name:'In this chat',exact:true}).click();await page.waitForFunction(()=>true);const warmupMs=Date.now()-warm;assert.deepEqual(await writes(),[],'the warm-up dismisses nothing');
+  page.on('console',m=>{if(m.text().startsWith('dismiss-timing '))seen.push(width+':'+m.text().slice(15))});
+  await page.evaluate(()=>{const t=window.dismissTiming=[];document.addEventListener('click',e=>{if(e.target.closest?.('button')?.textContent!=='Dismiss')return;const n=t.length+1,m={at:e.timeStamp,trusted:e.isTrusted};t.push(m);const frame=()=>{if([...document.querySelectorAll('button')].filter(b=>b.textContent==='Dismissing…').length>=n)requestAnimationFrame(()=>{m.feedbackAt=performance.now();console.debug('dismiss-timing '+(m.trusted?Math.round(m.feedbackAt-m.at):'untrusted'))});else if(performance.now()-m.at<5000)requestAnimationFrame(frame)};requestAnimationFrame(frame)},true)});
   // Three clicks in a row, each answered on screen at once, none waiting for the previous request.
   const timings=[];
-  for(let i=0;i<3;i++){await dismiss().first().click({trial:true});const start=Date.now();await dismiss().first().click();await page.waitForFunction(n=>document.querySelectorAll('button').length&&[...document.querySelectorAll('button')].filter(b=>b.textContent==='Dismissing…').length===n,i+1,{timeout:500});timings.push(Date.now()-start);}
-  assert(timings.every(ms=>ms<500),'each dismissal shows at once: '+timings);assert.deepEqual(await writes(),['agent-one','agent-two','agent-three'],'every dismissal is sent without waiting for the one before');
+  for(let i=0;i<3;i++){await dismiss().first().click({trial:true});const start=Date.now();await dismiss().first().click();await page.waitForFunction(n=>document.querySelectorAll('button').length&&[...document.querySelectorAll('button')].filter(b=>b.textContent==='Dismissing…').length===n,i+1,{timeout:1000});timings.push(Date.now()-start);}
+  assert(timings.every(ms=>ms<1000),'each dismissal shows at once: '+timings);assert.deepEqual(await writes(),['agent-one','agent-two','agent-three'],'every dismissal is sent without waiting for the one before');
   assert.equal(await dismiss().count(),0);assert(await waiting().first().isDisabled(),'a dismissal in flight cannot be clicked again');
+  await page.waitForFunction(()=>window.dismissTiming.length===3&&window.dismissTiming.every(m=>Number.isFinite(m.feedbackAt)),null,{timeout:5000});const clickToFrameMs=await page.evaluate(()=>window.dismissTiming.map(m=>m.trusted?Math.round(m.feedbackAt-m.at):NaN));
+  assert(clickToFrameMs.every(ms=>ms<1000),'each dismissal is on screen within 1 s of its trusted click: '+JSON.stringify({clickToFrameMs,feedbackMs:timings,warmupMs}));
   assert.equal(await page.evaluate(()=>{const a=fixture.store.api.dismissAgent('agent-one'),b=fixture.store.api.dismissAgent('agent-one');a.catch(()=>{});b.catch(()=>{});return a===b}),true);assert.equal((await writes()).length,3,'duplicate input sends one dismissal');
   assert.equal(await page.evaluate(()=>fixture.store.get().dm.agents.filter(a=>a.state==='active').length),3,'pending dismissal never changes the reported participation');assert.equal(await page.evaluate(()=>fixture.unsent()),true);
   assert.equal(await page.getByRole('status').filter({hasText:'left · dismissed by you'}).count(),0,'no dismissal is claimed before it is confirmed');
@@ -62,9 +72,9 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   assert.equal(await page.evaluate(()=>fixture.unsent()),false,'nothing waits once every dismissal answered');
   if(process.env.AGENTNET_AGENT_DISMISSAL_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_AGENT_DISMISSAL_EVIDENCE+'-settled-'+width+'.png',fullPage:true});
   if(draft)assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Retain while dismissals run');assert.deepEqual(errors,[]);
-  reports.push({width,feedbackMs:timings,writes:(await writes()).length});
+  reports.push({width,feedbackMs:timings,clickToFrameMs,warmupMs,writes:(await writes()).length});
   await page.close();
  }
  console.log(JSON.stringify({ok:true,reports,scope:'actual room cards and Store, trusted input with held synthetic dismissals; no participation changed'}));
  }finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}
-})().catch(e=>{console.error(e.stack);process.exitCode=1});
+})().catch(e=>{console.error(e.stack);if(seen.length)console.error('in-page click-to-frame ms: '+seen.join(' '));process.exitCode=1});
