@@ -47,6 +47,19 @@ func scheduleOf(t *testing.T, a *Agent, id string) ScheduledSend {
 	return s
 }
 
+func TestScheduledSendAcceptsEuropeKiev(t *testing.T) {
+	w, conv := scheduledWorld(t)
+	in := futureSchedule(conv)
+	in.Timezone = "Europe/Kiev"
+	s, err := w.alice.ScheduleSend(in)
+	if err != nil {
+		t.Fatalf("save schedule with timezone %q: %v", in.Timezone, err)
+	}
+	if saved := scheduleOf(t, w.alice, s.ID); saved.Timezone != in.Timezone {
+		t.Fatalf("saved timezone = %q, want %q", saved.Timezone, in.Timezone)
+	}
+}
+
 func TestScheduledSendReservesQueuedID(t *testing.T) {
 	w, conv := scheduledWorld(t)
 	a := w.alice
