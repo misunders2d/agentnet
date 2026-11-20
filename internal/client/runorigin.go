@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Run origins (opt-in, `agentnet daemon --run-origin`, Linux only): a local
@@ -37,6 +40,8 @@ type runOrigin struct {
 	job                 job    // only the request's identity fields
 	attempt             int64
 	run, person, author string
+	chain               runOriginChain // version 2's fields (runoriginchain.go)
+	chainErr            error          // why version 2 cannot describe this run
 }
 
 // runOrigins holds the runs of this daemon process only, in memory: a run an
@@ -52,15 +57,26 @@ type runOriginRequest struct {
 	Start uint64 `json:"start"`
 }
 
+// runOriginAnswer is version 1's answer; version 2 (asked with "v":2)
+// adds kind, chain and reply, and agent and device when they have a plain
+// name. Every field is a string, so two answers compare with ==.
 type runOriginAnswer struct {
 	V      int    `json:"v"`
 	Run    string `json:"run,omitempty"`
 	Person string `json:"person,omitempty"`
 	Author string `json:"author,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	Chain  string `json:"chain,omitempty"`
+	Reply  string `json:"reply,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+	Device string `json:"device,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
 func runOriginRefusal(why string) runOriginAnswer { return runOriginAnswer{V: 1, Error: why} }
+
+// runOriginRefusalV refuses a request that was read, in its own version.
+func runOriginRefusalV(v int, why string) runOriginAnswer { return runOriginAnswer{V: v, Error: why} }
 
 // runOriginPeerAllowed: only root and this daemon's own user may ask.
 func runOriginPeerAllowed(uid, self uint32) bool { return uid == 0 || uid == self }
@@ -87,6 +103,9 @@ func (a *Agent) vouchRun(j job, pid int) func() {
 		return func() {}
 	}
 	e := runOrigin{start: start, job: who, attempt: j.nativeAttempt, run: j.ID + "/" + strconv.FormatInt(j.nativeAttempt, 10), person: person, author: author}
+	if e.chain, e.chainErr = a.runOriginChainOf(who, person, author); e.chainErr != nil {
+		a.Logf("%s %s: run origin version 2 not available: %v", j.Kind, j.ID, e.chainErr)
+	}
 	o.mu.Lock()
 	o.byPID[pid] = e
 	o.mu.Unlock()
@@ -102,24 +121,12 @@ func (a *Agent) vouchRun(j job, pid int) func() {
 // runOriginIdentity is who made request j, from AgentNet's own checks: the
 // verified roster person ID of the exact key that signed it, and "human"
 // only for that person's own request from their own current verified human
-// device. A local ask (this device's key is shared with its local agents), a
-// continuation and a reply are "agent".
+// device that an agent did not write (runOriginAgentWritten). A local ask
+// (this device's key is shared with its local agents), a continuation and a
+// reply are "agent". The vouch and every re-check use this one function.
 func (a *Agent) runOriginIdentity(j job) (person, author string, err error) {
-	person, err = permissionPersonIn(a.store.db, j.From, j.Key)
-	if err != nil {
+	if person, err = a.runOriginPerson(j.From, j.Key); err != nil || person == "" {
 		return "", "", err
-	}
-	if person == "" && j.From == a.Address && j.Key != "" && j.Key == a.Self().Fingerprint() {
-		p, found, e := personBySelfIn(a.store.db, a.Address)
-		if e != nil {
-			return "", "", e
-		}
-		if found && p.info.State == personSelf && p.has(j.From, j.Key) {
-			person = p.info.Person
-		}
-	}
-	if person == "" {
-		return "", "", nil
 	}
 	author = runOriginAgent
 	if j.Receiver == nil && !j.Local && !j.followUp() {
@@ -128,10 +135,51 @@ func (a *Agent) runOriginIdentity(j job) (person, author string, err error) {
 			return "", "", e
 		}
 		if human {
-			author = runOriginHuman
+			agent, e := runOriginAgentWritten(a.store.db, j.ID)
+			if e != nil {
+				return "", "", e
+			}
+			if !agent {
+				author = runOriginHuman
+			}
 		}
 	}
 	return person, author, nil
+}
+
+// runOriginAgentWritten reports whether stored request id says an agent
+// wrote it, whatever key signed it: a human device's key also signs the
+// asks of the agents it hosts (agentnet room ask, MEL-713). An agent wrote
+// it when its origin is "agent:<harness>" (envelope.AgentOrigin), or when its
+// captured audience names an author participation (AuthorPID) and no proof
+// scope of that participation has the human role: an agent room
+// participant, or one this device cannot show to be a human guest. A
+// member's own turn (no AuthorPID) with a "ui" or no origin is a person's.
+// A missing row or an unreadable audience is an error, never "human".
+func runOriginAgentWritten(q dbq, id string) (bool, error) {
+	var origin, raw string
+	if err := q.QueryRow(`SELECT coalesce(origin,''), coalesce(human,'') FROM inbox WHERE id=?`, id).Scan(&origin, &raw); err != nil {
+		return false, err
+	}
+	if envelope.AgentOrigin(origin) {
+		return true, nil
+	}
+	if raw == "" {
+		return false, nil
+	}
+	var h envelope.HumanTurn
+	if err := json.Unmarshal([]byte(raw), &h); err != nil {
+		return false, err
+	}
+	if h.AuthorPID == "" {
+		return false, nil
+	}
+	for _, e := range h.Proof {
+		if e.Type == protocol.EventScope && e.PID == h.AuthorPID && e.Role == protocol.RoleHuman {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // answerRunOrigin vouches for req only when it names a process this daemon
@@ -139,34 +187,54 @@ func (a *Agent) runOriginIdentity(j job) (person, author string, err error) {
 // request still running, whose requester still verifies as recorded.
 // live reports a process's parent and start time, and whether it runs.
 func (a *Agent) answerRunOrigin(o *runOrigins, req runOriginRequest, live func(int) (int, uint64, bool)) runOriginAnswer {
+	refuse := func(why string) runOriginAnswer { return runOriginRefusalV(req.V, why) }
 	o.mu.Lock()
 	e, ok := o.byPID[req.PID]
 	o.mu.Unlock()
 	if !ok {
-		return runOriginRefusal("this daemon did not start that process as a run")
+		return refuse("this daemon did not start that process as a run")
 	}
 	if e.start != req.Start {
-		return runOriginRefusal("the process start time does not match that run")
+		return refuse("the process start time does not match that run")
 	}
 	if ppid, start, alive := live(req.PID); !alive || ppid != os.Getpid() || start != e.start {
-		return runOriginRefusal("that run is no longer running under this daemon")
+		return refuse("that run is no longer running under this daemon")
 	}
 	var state string
 	var attempt int64
 	if err := a.store.db.QueryRow(`SELECT state,attempts FROM inbox WHERE id=?`, e.job.ID).Scan(&state, &attempt); err != nil || state != stateRunning || attempt != e.attempt {
-		return runOriginRefusal("that request is no longer running")
+		return refuse("that request is no longer running")
 	}
 	person, author, err := a.runOriginIdentity(e.job)
 	if err != nil || person != e.person {
-		return runOriginRefusal("the requester no longer verifies as the same person")
+		return refuse("the requester no longer verifies as the same person")
 	}
 	if e.author == runOriginHuman && author != runOriginHuman {
-		return runOriginRefusal("the requester's device no longer verifies as their own human device")
+		return refuse("the request no longer verifies as its person's own, from their own human device")
 	}
 	ans := runOriginAnswer{V: 1, Run: e.run, Person: e.person, Author: e.author}
+	if req.V == 2 {
+		if e.chainErr != nil {
+			return refuse("that run's request chain cannot be described")
+		}
+		now, err := a.runOriginChainOf(e.job, e.person, e.author)
+		if err != nil || now != e.chain {
+			return refuse("that run's request chain changed")
+		}
+		reply, err := a.replyHandleFor(e.job.ID, e.person, e.chain.target)
+		if err != nil {
+			return refuse("that run's reply handle cannot be recorded")
+		}
+		ans.V, ans.Kind, ans.Chain, ans.Reply, ans.Agent, ans.Device = 2, e.chain.kind, e.chain.chain, reply, e.chain.agent, e.chain.device
+		for _, s := range []string{ans.Kind, ans.Chain} {
+			if !runOriginText(s) {
+				return refuse("that run cannot be described")
+			}
+		}
+	}
 	for _, s := range []string{ans.Run, ans.Person, ans.Author} {
 		if !runOriginText(s) {
-			return runOriginRefusal("that run cannot be described")
+			return refuse("that run cannot be described")
 		}
 	}
 	return ans
@@ -203,7 +271,7 @@ func readRunOriginRequest(r io.Reader) (runOriginRequest, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return runOriginRequest{}, errors.New("trailing data")
 	}
-	if req.V != 1 || req.PID <= 0 || req.Start == 0 {
+	if req.V != 1 && req.V != 2 || req.PID <= 0 || req.Start == 0 {
 		return runOriginRequest{}, errors.New("invalid request")
 	}
 	return req, nil

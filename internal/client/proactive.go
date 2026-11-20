@@ -12,6 +12,12 @@ import (
 // SendAgentMessage sends an ordinary turn as one exact locally hosted agent.
 // Its current invitation is authority; no incoming request or reply is invented.
 func (a *Agent) SendAgentMessage(ctx context.Context, pid, topic, body string, files ...OutgoingFile) (ConvSent, error) {
+	return a.sendAgentMessage(ctx, pid, topic, body, nil, files...)
+}
+
+// sendAgentMessage is SendAgentMessage with before run in the store's
+// transaction, after the ordinary authority checks (SendReplyHandle).
+func (a *Agent) sendAgentMessage(ctx context.Context, pid, topic, body string, before beforeConvStore, files ...OutgoingFile) (ConvSent, error) {
 	p, err := a.Participation(pid)
 	if err != nil {
 		return ConvSent{}, err
@@ -44,7 +50,7 @@ func (a *Agent) SendAgentMessage(ctx context.Context, pid, topic, body string, f
 	if err != nil {
 		return ConvSent{}, err
 	}
-	out := ConvOutgoing{Kind: envelope.KindMessage, Body: body, Topic: topic, Files: files, PID: p.PID, AgentID: p.AgentID, Origin: envelope.OriginAgentPrefix + "proactive", Emotion: "neutral", human: audience}
+	out := ConvOutgoing{Kind: envelope.KindMessage, Body: body, Topic: topic, Files: files, PID: p.PID, AgentID: p.AgentID, Origin: envelope.OriginAgentPrefix + "proactive", Emotion: "neutral", human: audience, beforeStore: before}
 	out.claim = func(tx *sql.Tx, _ string) error {
 		return a.proactiveAuthority(tx, envelope.Inner{Conv: p.Conv, PID: p.PID, AgentID: p.AgentID, Topic: topic})
 	}

@@ -6,6 +6,19 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- The run origin socket answers version 2 when asked (`"v":2`): the
+  request's kind, whether its whole cause chain is its person's own
+  (`own`) or not (`mixed`), a reply handle, and the asking agent's and
+  device's names. `agentnet send --reply-handle H --from-agent ID
+  [--client-id KEY] TEXT` replies through that handle, on that device and
+  for its own person only, once per client id. Version 1 answers are
+  unchanged (docs/revival/INSTALL.md, "Run origin socket").
+- The run origin socket (`agentnet daemon --run-origin`) no longer calls an
+  agent's room ask `human`. Such an ask is signed by the device that hosts
+  the agent, which can be its person's own human device, so its run was
+  vouched as the person's own. A request stored with an agent origin, or
+  with an author participation that is not a human guest, now answers
+  `agent`, when the run starts and at every later check.
 - Messages send faster when you send many at once. Queued messages of one
   chat now go out in batches, with one round of checks and one save for many
   messages, in the order you sent them. 1000 queued messages finish in about
