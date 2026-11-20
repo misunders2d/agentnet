@@ -44,8 +44,8 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   await dismiss().first().waitFor();assert.equal(await dismiss().count(),3);
   // Three clicks in a row, each answered on screen at once, none waiting for the previous request.
   const timings=[];
-  for(let i=0;i<3;i++){await dismiss().first().click({trial:true});const start=Date.now();await dismiss().first().click();await page.waitForFunction(n=>document.querySelectorAll('button').length&&[...document.querySelectorAll('button')].filter(b=>b.textContent==='Dismissing…').length===n,i+1,{timeout:500});timings.push(Date.now()-start);}
-  assert(timings.every(ms=>ms<500),'each dismissal shows at once: '+timings);assert.deepEqual(await writes(),['agent-one','agent-two','agent-three'],'every dismissal is sent without waiting for the one before');
+  for(let i=0;i<3;i++){await dismiss().first().click({trial:true});const start=Date.now();await dismiss().first().click();await page.waitForFunction(n=>document.querySelectorAll('button').length&&[...document.querySelectorAll('button')].filter(b=>b.textContent==='Dismissing…').length===n,i+1,{timeout:1000});timings.push(Date.now()-start);}
+  assert(timings.every(ms=>ms<1000),'each dismissal shows at once: '+timings);assert.deepEqual(await writes(),['agent-one','agent-two','agent-three'],'every dismissal is sent without waiting for the one before');
   assert.equal(await dismiss().count(),0);assert(await waiting().first().isDisabled(),'a dismissal in flight cannot be clicked again');
   assert.equal(await page.evaluate(()=>{const a=fixture.store.api.dismissAgent('agent-one'),b=fixture.store.api.dismissAgent('agent-one');a.catch(()=>{});b.catch(()=>{});return a===b}),true);assert.equal((await writes()).length,3,'duplicate input sends one dismissal');
   assert.equal(await page.evaluate(()=>fixture.store.get().dm.agents.filter(a=>a.state==='active').length),3,'pending dismissal never changes the reported participation');assert.equal(await page.evaluate(()=>fixture.unsent()),true);

@@ -3,7 +3,7 @@
 // says so), and read its details. Desktop shows a hover toolbar; phones a
 // sheet on long-press. Nothing destructive happens by gesture alone: delete
 // always asks first.
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
@@ -300,9 +300,31 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = area.current;
-    if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 240) + "px"; }
+    if (!el) return;
+    let width: number;
+    const fit = () => {
+      // Measure at the starting width, before the minimum rows or scrollbar affect the result.
+      el.removeAttribute("data-edit-expanded");
+      el.style.overflowY = "hidden";
+      el.style.height = "0px";
+      const style = getComputedStyle(el);
+      const threeLines = 3 * parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      el.toggleAttribute("data-edit-expanded", el.scrollHeight > Math.ceil(threeLines));
+
+      el.style.height = "";
+      const borders = el.offsetHeight - el.clientHeight;
+      el.style.height = el.scrollHeight + borders + "px";
+      el.style.overflowY = "";
+      width = el.offsetWidth;
+    };
+    fit();
+    const observer = new ResizeObserver(() => {
+      if (width !== el.offsetWidth) fit();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [text]);
   const change = (v: string) => setDraft(encode(v, shift(spans, text, v).kept));
   const save = async () => {
@@ -316,12 +338,12 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
   };
   return (
     <div className="flex flex-col gap-2">
-      <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={2} aria-label="New text"
+      <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={5} aria-label="New text"
         onKeyDown={(e) => {
           if (e.key === "Escape") { e.preventDefault(); cancel(); }
           if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || !e.shiftKey && !e.altKey)) { e.preventDefault(); void save(); }
         }}
-        className="w-full resize-none rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />
+        className="max-h-[45dvh] w-full resize-none overflow-y-auto rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />
       {isRequest(m) && <p className="text-[13px] text-text-2">The agent keeps what it already got; nothing runs again.</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
