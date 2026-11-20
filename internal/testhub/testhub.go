@@ -30,7 +30,12 @@ type Proc struct {
 	requests []string    // "AGENT METHOD /path" of every request, in arrival order
 	arrived  []time.Time // when each arrived
 	hold     func(*http.Request)
+	// slowLogf, with AGENTNET_TEST_STALL_PROBE set, reports each ordinary
+	// request the Hub took at least slowRequest to answer (metadata only).
+	slowLogf func(string, ...any)
 }
+
+const slowRequest = 500 * time.Millisecond
 
 // SetHold makes the Hub call hold with every later request before handling
 // it, so a test may keep requests waiting; nil: none.
@@ -92,7 +97,16 @@ func (p *Proc) wrap(delay func() time.Duration, next http.Handler) http.Handler 
 				return
 			}
 		}
+		start := time.Now()
 		next.ServeHTTP(w, r)
+		// The push stream and message waits are long by design.
+		if took := time.Since(start); p.slowLogf != nil && took >= slowRequest && r.URL.Path != "/v1/stream" && !strings.HasSuffix(r.URL.Path, "/wait") {
+			route := r.Pattern
+			if route == "" {
+				route = r.Method + " " + r.URL.Path
+			}
+			p.slowLogf("stall probe: hub %s from %s took %dms", route, r.Header.Get(protocol.HeaderAgent), took.Milliseconds())
+		}
 	})
 }
 
@@ -110,6 +124,9 @@ func StartConfig(t *testing.T, cfg hub.Config, addr string) *Proc {
 		t.Fatal(err)
 	}
 	p := &Proc{Dir: cfg.DataDir, Addr: ln.Addr().String(), done: make(chan struct{})}
+	if os.Getenv("AGENTNET_TEST_STALL_PROBE") != "" {
+		p.slowLogf = t.Logf
+	}
 	if cfg.PublicURL == "" {
 		cfg.PublicURL = "https://" + p.Addr
 	}
