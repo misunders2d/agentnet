@@ -180,14 +180,10 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
     const recover=w.e.recoverGroupIntents,kicked=[];w.e.recoverGroupIntents=(...args)=>{if(early){const work=recover(...args);kicked.push(work);return work;}kicked.push(null);return Promise.resolve();};
     await receiveRemote(wire.SubGroupProof,wire.groupJournalJSON({records:[committed,remoteCommit],more:false}));
     if(early){
-     // The proof's own recovery kick runs before the newer context: this device
-     // knows seq 3 only as a record, so it completes the committed seq 2 (as Go).
+     // The proof's own recovery kick runs before the newer context: seq 3 is
+     // known only as a record, so the fanout holds (client groupDeliveryHead).
      check(kicked.length>0,'remote proof carrier kicks group intent recovery');await Promise.allSettled(kicked);w.e.recoverGroupIntents=recover;await w.e.recoverGroupIntents();
-     const done=(await w.st.all('outbox')).filter(r=>r.group_terminal),fp=await wire.fingerprint(alicePub);
-     check((await w.st.get('kv',pendingKey)).published&&wire.parseGroupContext((await w.st.get('kv','group/'+created)).context).state.seq===2&&wire.groupCommitJSON(wire.parseGroupCommit(requests.at(-1)))===saved.record&&done.length===2&&done.every(r=>r.to===alicePub.address&&r.recipient_fp===fp),'proof-only newer record lets recovery complete the exact committed terminal for the exact prior human');
-     await receiveRemote(wire.SubGroupContext,wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]}));
-     check((await w.e.groupCurrent(created)).state.seq===3&&JSON.stringify((await w.st.all('outbox')).filter(r=>r.group_terminal))===JSON.stringify(done),'remote newer context installs after the completed terminal without rollback or new terminal copies');
-     continue;
+     check(!(await w.st.get('kv',pendingKey)).published&&wire.parseGroupContext((await w.st.get('kv','group/'+created)).context).state.seq===1&&!(await w.st.all('outbox')).some(r=>r.group_terminal),'remote newer proof record alone holds the older terminal fanout before its context');
     }
     await receiveRemote(wire.SubGroupContext,wire.groupContextJSON({root:initial.root,state:remoteState,withdrawals:[]}));w.e.recoverGroupIntents=recover;
     check(kicked.length>0&&(await w.e.groupCurrent(created)).state.seq===3,'actual remote newer current context arrives after committed terminal interruption');

@@ -6103,6 +6103,9 @@ export class Engine {
       const p=finalResolved.people.get(member.person);
       for(const device of p.devices) {
         if(device.address===this.address) continue;
+        // Like client groupDeliveryHead: a journal known past this state (a
+        // newer record whose context is not installed yet) holds the fanout.
+        if(records.length-1!==packet.state.seq)throw new Hold("proof_pending","Group custody is behind the latest known head.");
         if((await this.groupDevicePin(device,finalChecks)).skip)continue; // that device alone gets nothing until its key is trusted
         for(const page of this.groupProofPages(records)) {const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),device,{},false,true));}
         copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(deliveryPacket),device,{},false,true));
