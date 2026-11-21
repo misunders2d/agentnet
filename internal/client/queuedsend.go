@@ -416,7 +416,7 @@ func (a *Agent) QueuedSends(conv string) ([]ScheduledSend, error) {
 			ids = append(ids, r.ID)
 		}
 	}
-	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE immediate=1 AND `+queuedActive+` AND conv IN (?`+strings.Repeat(",?", len(ids)-1)+`) ORDER BY created_at,id`, ids...)
+	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE immediate=1 AND `+queuedActive+` AND conv IN (?`+strings.Repeat(",?", len(ids)-1)+`) ORDER BY created_at,rowid`, ids...)
 	if err != nil {
 		return nil, err
 	}
@@ -578,8 +578,13 @@ func (a *Agent) queuedWorker(ctx context.Context, conv string, wake chan struct{
 // never wait long behind it (TDLib's MessageDb flushes after 50 writes).
 const queuedBatchMax = 50
 
+// Queued sends leave in the order they were accepted. created_at alone cannot
+// say it: Windows' wall clock moves in steps, not nanoseconds, so sends
+// accepted within one step share one created_at, and a tie broken by the
+// random id reordered them. Within a step, the insertion order (rowid) decides.
+
 func (a *Agent) nextQueuedSends(conv string) ([]ScheduledSend, error) {
-	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE immediate=1 AND conv=? AND state IN ('pending','dispatching') ORDER BY created_at,id LIMIT ?`, conv, queuedBatchMax)
+	rows, err := a.store.db.Query(`SELECT `+scheduledCols+` FROM scheduled_sends WHERE immediate=1 AND conv=? AND state IN ('pending','dispatching') ORDER BY created_at,rowid LIMIT ?`, conv, queuedBatchMax)
 	if err != nil {
 		return nil, err
 	}

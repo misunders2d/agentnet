@@ -53,7 +53,9 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("AGENTNET_NOTIFY", "off")
 	terminalLauncher = ""
+	startStallProbe()
 	code := m.Run()
+	stopStallProbe()
 	fmt.Fprintf(os.Stderr, "schema image: %d fixture stores started from a copy, not schema proof\n", schematest.Copies())
 	os.Exit(code)
 }
