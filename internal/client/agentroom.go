@@ -78,6 +78,20 @@ func (a *Agent) SessionAgent(harness, agentID string) (LocalAgentInfo, error) {
 // group of theirs, with no other person, by that title, so every own device
 // converges on one room; created here when none has reached this device.
 func (a *Agent) MyAgentsRoom(ctx context.Context) (string, error) {
+	room, err := a.heldMyAgentsRoom()
+	if err != nil || room != "" {
+		return room, err
+	}
+	packet, err := a.CreateGroup(ctx, MyAgentsRoomTitle)
+	if err != nil {
+		return "", err
+	}
+	return packet.State.Conv, nil
+}
+
+// heldMyAgentsRoom is MyAgentsRoom's room when this device holds one, else
+// "": it never creates one.
+func (a *Agent) heldMyAgentsRoom() (string, error) {
 	me, found, err := a.Person()
 	if err != nil {
 		return "", err
@@ -102,11 +116,7 @@ func (a *Agent) MyAgentsRoom(ctx context.Context) (string, error) {
 	if room != nil {
 		return room.ID, nil
 	}
-	packet, err := a.CreateGroup(ctx, MyAgentsRoomTitle)
-	if err != nil {
-		return "", err
-	}
-	return packet.State.Conv, nil
+	return "", nil
 }
 
 // agentRoomTopic is the job's topic: the replied-to message's topic, else

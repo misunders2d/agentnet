@@ -318,9 +318,12 @@ unaffected.
 - `author` is `human` only when the request was signed by the person's own
   current verified human device (the same roster human-key check that lets
   own-device requests run without approval) and the daemon's own person is
-  that person. Requests from agents or agent hosts (the person's own too),
-  other people, continuations, replies and asks typed on the daemon's own
-  device (its key is shared with local agents) are `agent`. Heimdall acts
+  that person, and the stored request does not say an agent wrote it: an
+  `agent:` origin, or an author participation without the human role, such
+  as an agent's room ask (`agentnet room ask`) signed by the human device
+  that hosts that agent. Requests from agents or agent hosts (the person's
+  own too), other people, continuations, replies and asks typed on the
+  daemon's own device (its key is shared with local agents) are `agent`. Heimdall acts
   only on `human`. So the serving installation must be a device of that
   person's own roster (`agentnet person` there prints their person); a
   service installation with a steward answers `agent` for everyone.
@@ -330,6 +333,63 @@ unaffected.
 - A self-update re-executes the daemon in place (same PID) and only when no
   run is in progress, so no vouched run outlives its daemon. If the daemon
   stops, its runs are killed with it.
+
+#### Version 2: kind, chain and a reply handle
+
+Version 1 stays the default: a `{"v":1,...}` request gets exactly the answer
+above, byte for byte. A request that asks `{"v":2,"pid":N,"start":T}` gets
+version 1's fields and, all strings, in this order:
+
+```json
+{"v":2,"run":"REQUEST/ATTEMPT","person":"PERSON-ID","author":"human"|"agent",
+ "kind":"task"|"question"|"message","chain":"own"|"mixed",
+ "reply":"rh-…","agent":"Codex","device":"Laptop"}
+```
+
+or `{"v":2,"error":"..."}`. A request that cannot be read is still refused
+as `{"v":1,"error":"invalid request"}`. Two answers about one run compare
+equal field by field; anything that would change one is refused instead.
+
+- `kind` is the run's request kind. A run serving anything else is refused.
+- `chain` is `own` only when every request in the run's cause chain was
+  signed by one of `person`'s own devices and written by them or their
+  agents, and the chain ends at a request of theirs, from their own current
+  verified human device, that no agent wrote (version 1's `human` test;
+  an ask from this daemon's own device is never that, since its key is
+  shared with its local agents).
+  The chain is the one AgentNet already records and checks between devices:
+  a run's ask in the person's "My agents" room replies to the room request
+  it serves (`roomChain`). This daemon follows only requests it holds. A
+  guest's or another person's request, a link it does not hold, a loop, or
+  an agent's ask with nothing upstream here is `mixed`. That includes a
+  terminal agent's own ask and a run whose request came from another chat
+  (a DM): no signed field says which it was, so neither can count as `own`.
+- `reply` is an opaque handle this daemon mints once per request and keeps:
+  for `own`, the chain's own human request; for `mixed`, the run's own
+  request. It is left out when that request is in no chat (an older device
+  thread). It resolves only on this daemon, and only while the daemon's own
+  person is `person`:
+
+  ```sh
+  agentnet send --reply-handle rh-… --from-agent AGENT-ID [--client-id KEY] TEXT
+  ```
+
+  sends TEXT as that agent hosted here into the chat and topic of that
+  request, also after the request has finished. In the person's "My agents"
+  room the agent joins that topic as for an ask there; elsewhere it must
+  already be active in that chat. It prints `ID STATE` (the message's first
+  copy). `--client-id` (1 to 128 printable bytes) is recorded in the same
+  transaction as the message: a repeat sends nothing, prints the first
+  message's `ID STATE` and exits 0, so a caller that cannot tell whether a
+  send happened may repeat it. The handle and person are checked first; a
+  key already used with another handle is refused. Delivery is still at
+  least once.
+- `agent` is the asking agent's plain name when `author` is `agent`: this
+  device's own agent's label, else its harness's name (as its origin says,
+  a claim, for display only). `device` is the request's device by name.
+  Either is left out rather than shown as an address or ID.
+- Version 2 is frozen when the run starts and recomputed at every answer;
+  a changed chain or reply is refused while version 1 still answers.
 
 ## The Hub
 
