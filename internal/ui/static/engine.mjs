@@ -12226,7 +12226,9 @@ export class Engine {
       if (m) shared.push(m.id); else missing++;
     }
     const whose = hostHere ? "your" : label(info.host) + "'s";
-    const v = { member:!!info.member || !!groupPeople && !info.external,pids:[info.pid],inviters:(info.inviters||[]).map(p=>this.personView(p)),pid: info.pid, state: info.state, host: this.personView(info.host), host_here: hostHere, inviter: this.personView(info.inviter),
+    // Match Go AgentView: unresolved participation has empty identity fields, like the native view.
+    const personOrEmpty = p => this.personView(p) ?? { label: "", address: "", state: "" };
+    const v = { member:!!info.member || !!groupPeople && !info.external,pids:[info.pid],inviters:(info.inviters||[]).map(p=>this.personView(p)),pid: info.pid, state: info.state, host: personOrEmpty(info.host), host_here: hostHere, inviter: personOrEmpty(info.inviter),
       ...(info.external ? { external: true } : {}), owner_invited: !!info.owner_invited,
       ...(info.agent_id ? { agent_id: info.agent_id } : {}),
       note: info.note, shared, missing, tasks_from: info.taskKeys.map((fp) => {
