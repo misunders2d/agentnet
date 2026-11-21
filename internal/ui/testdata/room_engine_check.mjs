@@ -123,6 +123,15 @@ assert.equal(permanent.grant,null,'resolving a share must not mutate the origina
 e.me={...alice,label:'Alice'};e.address='alice/desk';e.fp=fp('a');
 const viewInfo={...pinfo,host:{...bob,address:'bob/laptop',fingerprint:fp('b'),label:'Bob'},inviter:{...alice,address:'alice/desk',label:'Alice'},inviters:[],grant:[],taskKeys:[],shares:[],held:0};
 const people=[{...alice,label:'Alice',admin:false},{...bob,label:'Bob'}];
+// An acceptance that arrives before its invitation must stay inert. The
+// browser and Go renderers expose empty PersonViews until identity verifies.
+const heldAcceptance = e.resolveAgent(inv.pid, [await rec(acc)], members(false));
+const pending = e.agentView(heldAcceptance, [], null);
+assert.equal(pending.state, "pending");
+assert.match(pending.state_text, /waiting for verified invitation context/);
+assert.deepEqual(pending.host, { label: "", address: "", state: "" });
+assert.deepEqual(pending.inviter, { label: "", address: "", state: "" });
+assert.deepEqual([pending.host_here, pending.can_ask, pending.can_decide, pending.can_dismiss], [false, false, false, false]);
 let view=e.agentView({...viewInfo,member:false,audience:'conversation',until:sec+60},[],null,people,'member');
 assert.equal(view.member,true);assert(!view.state_text.includes('Stays until explicitly removed'));
 view=e.agentView({...viewInfo,member:true,external:true},[],null,people,'member');

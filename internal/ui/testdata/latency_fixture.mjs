@@ -749,6 +749,8 @@ try {
   const tap=async(id,el,expected,description,complete=expected)=>{assert(el,'Missing control '+id);el.scrollIntoView({block:'nearest'});await frame();await measure(id,()=>el.click(),expected,description,complete);};
   const input=(el,value)=>{assert(el,'Missing input');Object.getOwnPropertyDescriptor(el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:el instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype,'value').set.call(el,value);el.dispatchEvent(new Event(el instanceof HTMLSelectElement?'change':'input',{bubbles:true}));};
   const fill=async(id,el,value,expected=()=>el.value===value,description='exact edited field value visible',complete=expected)=>{assert(el,'Missing input '+id);el.scrollIntoView({block:'nearest'});await frame();await measure(id,()=>input(el,value),expected,description,complete);};
+  // Both dialogs default to a time based on the clock. Measure an actual edit.
+  const editedTime=field=>field.value==='10:30'?'10:31':'10:30';
   const retire=()=>until(()=>!scope().querySelector('[data-ending-style]'),'previous transient retires');
   const closeSheet=async(id,title)=>{const d=sheet(title);assert(d,'Missing sheet '+title);await tap(id,control('Close',d)||control('Cancel',d)||control('Done',d)||control('Back to the conversation',d),()=>d.hasAttribute('data-ending-style')||!d.isConnected,'exact sheet starts closing',()=>!d.isConnected);await retire();};
   const settings=async(name,title=name)=>{
@@ -858,11 +860,14 @@ try {
    const expectedFileRetained=()=>!!root.querySelector('[aria-label="Remove portable-proof.txt"]')===!mobile;
    await plus('compose.portable-schedule-menu');await tap('compose.portable-schedule-open',control(/^Schedule…/),()=>!!sheet('Schedule message'),'schedule review for captured draft visible');await retire();
    const d=()=>sheet('Schedule message'),sendDate=d().querySelector('input[aria-label="Send date"]'),sendTime=d().querySelector('input[aria-label="Send time"]'),date=(new Date().getFullYear()+1)+'-04-03';
-   await fill('compose.portable-send-date',sendDate,date,()=>sendDate.value===date,'exposed date value selected without OS picker');await fill('compose.portable-send-time',sendTime,'10:30',()=>sendTime.value==='10:30','exposed time value selected without OS picker');
+   await fill('compose.portable-send-date',sendDate,date,()=>sendDate.value===date,'exposed date value selected without OS picker');
+   const localTime=editedTime(sendTime);
+   await fill('compose.portable-send-time',sendTime,localTime,()=>sendTime.value===localTime,'exposed time value selected without OS picker');
    await until(()=>control('Save schedule',d())&&!control('Save schedule',d()).disabled,'captured audience ready');
    let save=control('Save schedule',d());await tap('compose.portable-save-unknown',save,()=>onScreen(d()?.querySelector('[aria-label="Unconfirmed schedule save"]')),'captured original save state visible',()=>!!control('Retry same save',d())&&d().textContent.includes('Save not confirmed'));
    assert(portable.scheduleCreates.length===1&&retainedField().value===body&&expectedFileRetained()&&!!root.querySelector('[aria-label="Cancel reply"]'),'unknown result retains captured draft/reply and expected files');assert(!visibleText('Scheduled for'),'lost response does not claim confirmation');
    const first=portable.scheduleCreates[0],saved=schedules.find(s=>s.id===first.id);assert(saved&&saved.rev===1,'invented provider stored exactly one pending schedule before lost response');assert(first.reply_to===source.id&&first.quote===source.id&&first.body===body,'captured exact reply and text');
+   assert(Date.parse(first.due)===new Date(date+'T'+localTime).getTime(),'schedule keeps the edited local date and time');
    if(mobile)assert(first.files.length===0&&staged.length===0,'mobile text schedule captures no removed file or staged bytes');else assert(first.files.length===1&&first.files[0].sha256===fileDigest,'actual staged file bytes captured');
    await tap('compose.portable-check-saved',control('Check saved state',d()),()=>d().textContent.includes('Saved state found; confirm with same-ID save'),'lookup result visible while save remains unconfirmed',()=>d().textContent.includes('Saved state found; confirm with same-ID save'));
    assert(retainedField().value===body&&expectedFileRetained()&&!!root.querySelector('[aria-label="Cancel reply"]')&&!!control('Retry same save',d()),'lookup does not clear or confirm captured draft/reply/files');
@@ -885,12 +890,14 @@ try {
    await fill('outbox.portable-invalid-date',date,'202',()=>date.value==='202','editable incomplete date retained');
    const before=reports.apiCalls.filter(c=>c.path==='/api/remind'&&c.method==='write').length;
    await tap('outbox.portable-invalid-save',control('Move it',d()),()=>!!d().querySelector('[role=alert]')&&d().textContent.includes('YYYY-MM-DD'),'invalid date rejected with inline error');assert(date===shadow.activeElement,'invalid date returns field focus');assert(reports.apiCalls.filter(c=>c.path==='/api/remind'&&c.method==='write').length===before,'invalid date writes nothing');
-   const day=(new Date().getFullYear()+1)+'-04-03';await fill('outbox.portable-valid-date',date,day,()=>date.value===day&&!d().querySelector('[role=alert]'),'four-digit shared text date replaces invalid value');await fill('outbox.portable-custom-time',time,'10:30',()=>time.value==='10:30','portable time value retained');
+   const day=(new Date().getFullYear()+1)+'-04-03';await fill('outbox.portable-valid-date',date,day,()=>date.value===day&&!d().querySelector('[role=alert]'),'four-digit shared text date replaces invalid value');
+   const localTime=editedTime(time);
+   await fill('outbox.portable-custom-time',time,localTime,()=>time.value===localTime,'portable time value retained');
    const calendar=d().querySelector('input[aria-label="Calendar date"]');await tap('outbox.portable-calendar-show',control('Choose from calendar',d()),()=>calendar.getAttribute('aria-hidden')==='false'&&onScreen(calendar),'exposed date control visible; OS popup result unclaimed');
    const calendarDay=(new Date().getFullYear()+1)+'-04-04';await fill('outbox.portable-calendar-date',calendar,calendarDay,()=>calendar.value===calendarDay&&date.value===calendarDay,'normal exposed calendar change updates shared text date');
-   const target=overview.reminders[0].message,expected=Math.floor(new Date(calendarDay+'T10:30').getTime()/1000),save=control('Move it',d());await tap('outbox.portable-custom-save',save,()=>save.disabled,'custom reminder save in flight',()=>!d()&&overview.reminders[0].message===target&&!overview.reminders[0].overdue&&Date.parse(overview.reminders[0].due)===expected*1000);
+   const target=overview.reminders[0].message,expected=Math.floor(new Date(calendarDay+'T'+localTime).getTime()/1000),save=control('Move it',d());await tap('outbox.portable-custom-save',save,()=>save.disabled,'custom reminder save in flight',()=>!d()&&overview.reminders[0].message===target&&!overview.reminders[0].overdue&&Date.parse(overview.reminders[0].due)===expected*1000);
    const request=reports.apiCalls.filter(c=>c.path==='/api/remind'&&c.method==='write').at(-1);assert(request.request.id===target&&request.request.due===expected,'exact original reminder and local-time due');
-   reports.portableReminder={request:clone(request.request),localDate:calendarDay,localTime:'10:30',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,invalidProducedNoWrite:true,nativePopup:'not executed/proven; requires real platform date UI and trusted input',portableDateControl:true};
+   reports.portableReminder={request:clone(request.request),localDate:calendarDay,localTime,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,invalidProducedNoWrite:true,nativePopup:'not executed/proven; requires real platform date UI and trusted input',portableDateControl:true};
   }
 
   if(suite==='topics'&&!p1){
@@ -969,7 +976,9 @@ try {
    await until(()=>active('[role="gridcell"]'),'actual emoji grid loaded after tone selection');const emoji=active('[role="gridcell"]'),beforeEmoji=text().value;await tap('compose.emoji-pick',emoji,()=>!control('Skin tone')&&text().value!==beforeEmoji,'picked emoji visible in draft');await retire();
    await plus('compose.plus-schedule');await tap('compose.schedule-open',control(/^Schedule…/),()=>!!sheet('Schedule message'),'schedule review visible');await retire();
    const scheduleDialog=sheet('Schedule message'),due=scheduleDialog.querySelector('input[type="datetime-local"]');if(due)await fill('compose.schedule-time',due,new Date(Date.now()+2*86400000).toISOString().slice(0,16));
-   await tap('compose.schedule-save',control('Save schedule',scheduleDialog),()=>schedules.length===3&&!sheet('Schedule message'),'same captured draft schedule stored and dialog closed');await retire();
+   const save=control('Save schedule',scheduleDialog),scheduleSaved=()=>schedules.length===3&&!sheet('Schedule message');
+   await until(()=>save&&!save.disabled,'captured schedule is ready to save');
+   await tap('compose.schedule-save',save,()=>onScreen(sheet('Schedule message')?.querySelector('[aria-label="Unconfirmed schedule save"]'))||scheduleSaved(),'pending schedule visible until confirmed',scheduleSaved);await retire();
    await fill('compose.new-draft',text(),'Retained outbox draft');
    if(innerWidth<1024)await tap('compose.back-to-chats',control('Back to chats'),()=>!!initialChat(),'chat list visible with draft retained');
    await tap('compose.open-outbox',button(/^Outbox\b/),()=>!!active('section[aria-label="Outbox"]'),'outbox visible');
