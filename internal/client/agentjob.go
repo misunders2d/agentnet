@@ -311,7 +311,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		return j, false, pos, false, nil, err
 	}
 	rows, err := tx.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(status, ''),
-		conv, pid, coalesce(target, ''), state, local, arrival, request_followup
+		conv, pid, coalesce(target, ''), state, local, arrival, request_followup, queued_followup_parent IS NOT NULL
 		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND arrival > ?
 		  AND (? = '' OR (conv = ? AND json_extract(human,'$.author_pid') IS NOT NULL))
 		  AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
@@ -321,17 +321,18 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		return j, false, pos, false, nil, err
 	}
 	type row struct {
-		j        job
-		state    string
-		arrival  int64
-		followup sql.NullString
+		j              job
+		state          string
+		arrival        int64
+		followup       sql.NullString
+		queuedFollowup bool
 	}
 	var page []row
 	for rows.Next() {
 		var r row
 		var target string
 		if err := rows.Scan(&r.j.ID, &r.j.From, &r.j.Key, &r.j.Kind, &r.j.Body, &r.j.ReplyTo, &r.j.Status,
-			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival, &r.followup); err != nil {
+			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival, &r.followup, &r.queuedFollowup); err != nil {
 			rows.Close()
 			return j, false, pos, false, nil, err
 		}
@@ -367,6 +368,15 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		var res sql.Result
 		switch v {
 		case verdictRun:
+			if r.queuedFollowup {
+				ready, err := queuedFollowupReadyIn(tx, r.j.ID)
+				if err != nil {
+					return j, false, pos, false, nil, err
+				}
+				if !ready {
+					continue
+				}
+			}
 			// Admission/permission is unchanged. Scheduling follows the nearest
 			// exact local ancestor, including a callback through remote hosts.
 			// The root scheduler must not steal a descendant on a free executor:
@@ -424,7 +434,9 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 				continue
 			}
 			beforeAgentClaim()
-			res, err = tx.Exec(`UPDATE inbox SET state = ?, responder = ?, detail = NULL, attempts = attempts + 1, last_attempt_at = unixepoch()
+			res, err = tx.Exec(`UPDATE inbox SET state = ?, responder = ?, detail = NULL, attempts = attempts + 1, last_attempt_at = unixepoch(),
+				steering_parent=CASE WHEN queued_followup_parent IS NULL THEN steering_parent END,
+				steering_attempt=CASE WHEN queued_followup_parent IS NULL THEN steering_attempt END
 				WHERE id = ? AND state = ?`, stateRunning, responder, r.j.ID, r.state)
 			if err == nil {
 				n, _ := res.RowsAffected()
@@ -542,7 +554,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	if err != nil {
 		return "", err
 	}
-	c, err := a.agentContext(info, "", agentContextBytes, []protocol.GrantRef{a.jobContextRef(j)})
+	c, err := a.agentContextForRun(info, "", agentContextBytes, nil, nil, &j, []protocol.GrantRef{a.jobContextRef(j)})
 	if err != nil {
 		return "", err
 	}
@@ -1371,7 +1383,7 @@ func (c *agentContextCursor) noteFile(m ConvMessage, f FileInfo) {
 }
 
 func (a *Agent) agentContext(info ParticipationInfo, before string, limit int, excluded ...[]protocol.GrantRef) (ParticipationContext, error) {
-	return a.agentContextForRun(info, before, limit, nil, nil, excluded...)
+	return a.agentContextForRun(info, before, limit, nil, nil, nil, excluded...)
 }
 
 // Selection already proved either exact captured scope or a later native
@@ -1401,7 +1413,7 @@ func (a *Agent) retainedContextProof(msg ConvMessage, members dmMembers) (bool, 
 	return err == nil, nil
 }
 
-func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit int, delivered agentContextCursor, filesOnly *protocol.GrantRef, excluded ...[]protocol.GrantRef) (ParticipationContext, error) {
+func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit int, delivered agentContextCursor, filesOnly *protocol.GrantRef, parent *job, excluded ...[]protocol.GrantRef) (ParticipationContext, error) {
 	if limit <= 0 {
 		limit = defaultContextBytes
 	}
@@ -1431,6 +1443,18 @@ func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit 
 		}
 		msgs = append(msgs, frozen...)
 		sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].At < msgs[j].At })
+	}
+	var exclude []protocol.GrantRef
+	if len(excluded) > 0 {
+		exclude = excluded[0]
+	}
+	if parent != nil && !parent.Local {
+		// Check after loading the messages. A newly admitted correction and
+		// its binding commit together, so it cannot slip in as ambient text.
+		exclude, err = queuedFollowupRefs(a.store.db, *parent, exclude)
+		if err != nil {
+			return ParticipationContext{}, err
+		}
 	}
 	// Speakers by device and exact key, worded from their verified record.
 	names := map[string]string{}
@@ -1480,7 +1504,7 @@ func (a *Agent) agentContextForRun(info ParticipationInfo, before string, limit 
 			break
 		}
 		ref := contextRef(msg)
-		if len(excluded) > 0 && slices.Contains(excluded[0], ref) {
+		if slices.Contains(exclude, ref) {
 			continue
 		}
 		// Unchanged, already supplied legacy text needs no repeated reply
