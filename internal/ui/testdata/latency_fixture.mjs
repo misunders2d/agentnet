@@ -968,6 +968,13 @@ try {
   }
   if(suite==='compose'&&!p1){
    await chat();await fill('compose.draft-text',text(),'Fixture draft');
+   if(host.platform==='android'){
+    const field=text();
+    await measure('compose.android-format-selection',()=>field.setSelectionRange(0,7),()=>!!control('Formatting'),'selection shows the touch Formatting button');
+    await tap('compose.android-format-open',control('Formatting'),()=>!!control('Bold'),'touch formatting choices visible');
+    await tap('compose.android-format-apply',control('Bold'),()=>field.value==='**Fixture** draft','formatted selection visible in the draft');
+    await retire();await fill('compose.android-format-reset',field,'Fixture draft');
+   }
    await tap('compose.mention-open',control('Mention someone'),()=>!!active('[role="listbox"]'),'mention choices visible');
    const option=active('[role="option"]');if(option)await tap('compose.mention-pick',option,()=>text().value.includes('@'),'selected mention inserted in draft');
    await retire();await tap('compose.emoji-open',control('Emoji'),()=>!!control('Skin tone'),'emoji picker visible');await retire();
@@ -1419,6 +1426,35 @@ try {
    await tap('files.big-download',control('Retry download fixture-clip.mp4'),()=>!!bigBar(),'download progress visible at once',()=>!bigBar()&&!!control('Download fixture-clip.mp4'));
    const steps=bigCalls.filter(c=>c.path.endsWith('/progress'));assert(steps.length===4&&steps.every((c,i)=>i===0||c.start>=steps[i-1].start),'one held progress answer per step');
    reports.bigFileDownload={attempts:bigAttempts,progressRequests:steps.length,calls:bigCalls.length};bigFetch=null;
+   if(host.platform==='android'){
+    const id='9'.repeat(32),name='android-deferred.mp4',attachment={index:0,name,size:mp4.size,openable:true,fetch:'wait'};
+    const clip={...clone(fileMessage),id,lid:id,dir:'in',from:peer.address,body:'Deferred Android video fixture',reactions:[],unread:false,attachments:[attachment]};
+    presentationFiles.set(id+':0',new Uint8Array(await mp4.arrayBuffer()));
+    const calls=[];
+    bigFetch=async path=>{
+     const url=new URL(path,location.origin),action=url.pathname.split('/').at(-1);
+     assert(url.pathname===`/api/files/${id}/0/${action}`&&url.searchParams.get('dir')==='in','deferred Play fetches the exact attachment');
+     calls.push(action);await pause(300);
+     if(action==='fetch')return{have:0,total:mp4.size,done:false,fetching:true};
+     assert(action==='progress'&&calls.length===2,'deferred Play follows the existing download');
+     attachment.fetch='';emit();return{have:mp4.size,total:mp4.size,done:true};
+    };
+    try{
+     view.messages.push(clip);emit();
+     const play=()=>control('Play video '+name),video=()=>active(`video[aria-label="${name}"]`);
+     await until(play,'Play available before the Android download');
+     await tap('media.android-deferred-play',play(),()=>!!active(`[role="progressbar"][aria-label="Downloading ${name}"]`),'download progress shown before the held response',()=>video()?.readyState>=1);
+     const player=video();
+     assert(player.paused&&player.videoWidth===320&&player.videoHeight===180,'downloaded MP4 is decoded and opens paused');
+     player.muted=true;await player.play();
+     await until(()=>player.currentTime>0,'downloaded H.264 MP4 advances');
+     player.pause();player.currentTime=.5;
+     await until(()=>!player.seeking&&Math.abs(player.currentTime-.5)<.1,'downloaded MP4 seeks while paused');
+     assert(calls.join(',')==='fetch,progress','one download and one progress request');
+     await tap('media.android-deferred-close',control('Close video '+name),()=>!video(),'deferred player closes');
+     reports.androidDeferredVideo={played:true,paused:true,sought:true,requests:calls};
+    }finally{bigFetch=null;}
+   }
    reports.filePresentation={fileID,fileCalls:reports.fileCalls,assignmentNativeEffects:false,downloadNativeEffect:host.platform==='android'?'native export; provider cancelled by test monitor':false,providerWrite:'not_executed',originalBytesVerified:true};
 
    reports.mediaProcessing='Photo conversion is actual CPU work and reported separately; video cancellation/unsupported choice measures UI. Actual codec output/audio/orientation/deadline qualification remains earlier media evidence.';
