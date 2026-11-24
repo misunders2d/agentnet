@@ -1277,9 +1277,9 @@ func (a *Agent) Revoked(ctx context.Context, address string) (bool, error) {
 	return err == nil && e.Revoked, err
 }
 
-// Trust pins the directory's current keys for address and promotes messages
-// held because of a key change that now verify. Each message moves to the
-// inbox atomically, so an interrupted Trust can simply be run again.
+// Trust pins the directory's current keys for address and rechecks messages
+// held because of a key change. Admitted messages leave quarantine atomically,
+// so an interrupted Trust can be run again.
 func (a *Agent) Trust(ctx context.Context, address string) (string, error) {
 	return a.TrustKey(ctx, address, "")
 }
@@ -1313,8 +1313,18 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 			a.Logf("held message %s still does not verify: %v", env.ID, err)
 			continue
 		}
-		if in.V == envelope.Version2 { // a conversation message needs its conversation proof too
+		switch in.V {
+		case envelope.Version2: // a conversation message needs its conversation proof too
 			if err := a.admitConv(ctx, env, in, e.Public, true); err != nil {
+				return "", err
+			}
+			continue
+		case envelope.Version3:
+			if in.Sub == envelope.SubDecision {
+				// Key trust does not replay a quarantined operator decision.
+				continue
+			}
+			if err := a.admitControl(ctx, env, in, e.Public, true); err != nil {
 				return "", err
 			}
 			continue
