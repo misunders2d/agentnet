@@ -50,7 +50,7 @@ const (
 	convServe                         // answer a file request from another device of this person (historyfiles.go)
 	convFetch                         // keep received conversation files (historyfiles.go)
 	convRecipients                    // continue bounded exact revocation discovery
-	convRetryHeld                     // a presence-only member list: restart the held look, keep deferred history
+	convRetryHeld                     // restart the held look, keep deferred history
 )
 
 // proofPage bounds the held messages looked at in one sync.
@@ -1456,7 +1456,7 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 			retryCtx = withRelayIngress(ctx, env.ID)
 		}
 		if err := admit(retryCtx, env, in, sender, true); err != nil && transient(err) {
-			// The Hub is out of reach or late: this page is looked at again
+			// A transient failure: this page is looked at again
 			// after the transient retry wait (1 s doubling to 45 s), not only
 			// when other evidence comes. Any other failure keeps only this
 			// row held, in place.

@@ -1291,6 +1291,9 @@ func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in en
 		return redactRetractionIn(tx, in, a.Self().Fingerprint())
 	})
 	if err != nil {
+		if in.Sub == envelope.SubRetraction && transientStorage(err) {
+			return err
+		}
 		return hold(reasonProof, err.Error())
 	}
 	if res == admitConflict { // stored nowhere: held, so it has a receipt (MIXED-1)

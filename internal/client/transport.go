@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -75,8 +76,8 @@ func retryable(err error) bool {
 // transient reports whether err is a typed failure that receiving the same
 // message again may get past: the Hub or the network out of reach or busy
 // (no answer, 5xx, 429), the Hub refusing this build until it is updated
-// (refusedUntilUpdate), a cancelled or timed-out request, or a database
-// another process held. Anything else (a 4xx answer, a failed check, a
+// (refusedUntilUpdate), a cancelled or timed-out request, or a local storage
+// contention or capacity error. Anything else (a 4xx answer, a failed check, a
 // record this program cannot read) fails the same way every time, so it
 // must never leave a message unacknowledged at the head of the push stream.
 func transient(err error) bool {
@@ -91,7 +92,11 @@ func transient(err error) bool {
 	var ue *url.Error
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.As(err, &ne) || errors.As(err, &ue) || sqlitedb.Busy(err)
+		errors.As(err, &ne) || errors.As(err, &ue) || transientStorage(err)
+}
+
+func transientStorage(err error) bool {
+	return sqlitedb.Busy(err) || sqlitedb.Full(err) || errors.Is(err, syscall.ENOSPC)
 }
 
 // refusedUntilUpdate reports whether the Hub refused the request because
