@@ -5,6 +5,7 @@ const {execFileSync}=require('node:child_process'),{chromium}=require(process.en
 const web=path.resolve(__dirname,'../web'),work=fs.mkdtempSync(path.join(os.tmpdir(),'agentnet-local-changes-'));
 const evidence=process.env.AGENTNET_LOCAL_CHANGES_EVIDENCE;
 const trustOnly=process.env.AGENTNET_LOCAL_CHANGES_MODE==='trust';
+const overlay=process.env.AGENTNET_LOCAL_CHANGES_OVERLAY;
 const entry=`
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {Store,useStore} from './src/store';import {StoreContext} from './src/context';import {OwnedContext} from './src/owned';
@@ -16,7 +17,9 @@ const conv='c'.repeat(64),topic='b'.repeat(32),count=Number(new URL(location).se
 const overview={seq:1,version:'fixture',topic_list:true,me:{address:'self/laptop',fingerprint:'self-key'},person:{person:'self',label:'Me',address:'self/laptop',devices:[]},people:[],dms:[],threads:[],needs_you:[],reminders:[]};
 const view={seq:1,id:conv,kind:'dm',peer:{person:'peer',address:'peer/laptop',label:'Peer'},agents:[],guests:[],topics:[{id:topic,conv,peer:'',title:'Chosen topic',count,state:'active',last_at:'2026-10-26T12:00:00Z',unread:0,review:0}],
  messages:Array.from({length:count},(_,i)=>({id:String(i+1).padStart(32,'0'),lid:String(i+1).padStart(32,'0'),dir:'out',from:'self/laptop',kind:'message',body:'Original message '+(i+1),at:new Date(1793016000000+i*60000).toISOString(),revision:1,topic,can:['edit','delete','react'],reactions:[]}))};
-const f=window.fixture={writes:[],listeners:new Set(),holdReads:false,reads:[],timings:[],ready:false,trustCommits:[]};
+view.messages.at(-2).dir='in';view.messages.at(-2).from='peer/laptop';view.messages.at(-2).body='Quoted message';
+view.messages.at(-1).quote=view.messages.at(-2).lid;
+const f=window.fixture={writes:[],listeners:new Set(),holdReads:false,reads:[],timings:[],editTimings:{},ready:false,trustCommits:[]};
 const host={platform:'daemon',workspace:{id:'local-changes',state:'enrolled'},listen(fn){f.listeners.add(fn);return()=>f.listeners.delete(fn)},async api(p,b){
  if(p.startsWith('/api/overview'))return structuredClone(overview);
  if(p.startsWith('/api/dm?')){const snapshot=structuredClone(view);if(f.holdReads)await new Promise(resolve=>f.reads.push(resolve));return snapshot;}
@@ -57,6 +60,7 @@ f.ready=true;
 `;
 const aliases={'optimistic.mjs':'static/optimistic.mjs','pictures.mjs':'static/pictures.mjs','person-topics.mjs':'skins/shared/person-topics.mjs','reaction-preferences.mjs':'skins/shared/reaction-preferences.mjs','collective-mentions.mjs':'skins/shared/collective-mentions.mjs','drive-space.mjs':'skins/shared/drivespace.mjs','drive-setup.mjs':'skins/shared/drivespace-setup.mjs'};
 fs.cpSync(path.join(web,'src'),path.join(work,'src'),{recursive:true});
+if(overlay)fs.cpSync(overlay,path.join(work,'src','skin'),{recursive:true,filter:file=>path.basename(file)!=='fonts'});
 for(const [a,b] of Object.entries(aliases))fs.copyFileSync(path.resolve(web,'../',b),path.join(work,'src',a));
 fs.symlinkSync(path.join(web,'node_modules'),path.join(work,'node_modules'),'dir');
 const js=require(path.join(web,'node_modules/esbuild')).buildSync({stdin:{contents:entry,resolveDir:work,loader:'tsx'},bundle:true,format:'esm',target:'es2022',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},write:false}).outputFiles[0].text;
@@ -77,39 +81,68 @@ async function checkEditBox(page, area, originalWidth, capture) {
     return {
       bubbleWidth: bubble.getBoundingClientRect().width,
       columnWidth: column.clientWidth - parseFloat(row.paddingLeft) - parseFloat(row.paddingRight),
+      fieldWidth: el.getBoundingClientRect().width,
+      contentWidth: bubble.clientWidth - parseFloat(getComputedStyle(bubble).paddingLeft) - parseFloat(getComputedStyle(bubble).paddingRight),
       height: el.offsetHeight,
       lines: (el.clientHeight - parseFloat(box.paddingTop) - parseFloat(box.paddingBottom)) / parseFloat(box.lineHeight),
     };
   });
   assert(initial.bubbleWidth > originalWidth, 'editing expands the original bubble');
-  const shortWidth = initial.columnWidth * (viewportWidth >= 1024 ? 0.5 : 1);
-  assert(Math.abs(initial.bubbleWidth - shortWidth) <= 1, 'short edits use half the desktop column or the full narrow column');
-  assert(initial.lines >= 4.5 && initial.lines <= 5.5, 'short edits start with five visible lines');
-  await area.fill('2. Редактирование уже отправленного сообщения.');
-  assert.equal(await bubbleWidth(), initial.bubbleWidth, 'reported short edit keeps the starting width');
+  if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-initial-'+viewportWidth+'.png')});
+  assert(Math.abs(initial.bubbleWidth - initial.columnWidth) <= 1,
+    'short quoted edit needs the whole column: ' + JSON.stringify({originalWidth, ...initial}));
+  assert(Math.abs(initial.fieldWidth - initial.contentWidth) <= 1, 'field fills the bubble content');
+  assert(initial.lines >= 2.5 && initial.lines <= 3.5, 'short edit starts with three visible lines');
+  await area.fill('See the reply at https://example.test/project/notes');
+  assert.equal(await bubbleWidth(), initial.bubbleWidth, 'editing a short URL keeps the full width');
   assert.equal(await scrollPixels(), 0, 'short edit fits without scrolling');
   if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-short-'+viewportWidth+'.png')});
   await area.fill('First line\nSecond line\nThird line');
   assert.equal(await bubbleWidth(), initial.bubbleWidth, 'three lines keep the starting width');
   assert.equal(await scrollPixels(), 0, 'three lines fit without scrolling');
-  await area.fill('This edit starts as a single line in the source. The editor measures where the words wrap at half the column width and expands to make the long text easier to read.');
-  const expandedWidth = await bubbleWidth();
-  assert(Math.abs(expandedWidth - initial.columnWidth) <= 1, 'text that wraps past three lines at half width expands to the full column');
+  await area.fill('Longer text can wrap naturally in the editor at the same column width. It does not need to wait for the bubble to widen first.');
+  assert.equal(await bubbleWidth(), initial.bubbleWidth, 'wrapping keeps the full width');
   assert.equal(await scrollPixels(), 0, 'wrapped edit fits without scrolling');
   if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-expanded-'+viewportWidth+'.png')});
-  await area.fill('More room to edit\n'.repeat(8).trimEnd());
+  const limit = Math.min(viewportWidth >= 1024 ? 240 : 140, page.viewportSize().height * 0.45);
+  await area.fill('More room to edit\n'.repeat(viewportWidth >= 1024 ? 8 : 5).trimEnd());
   const grown = await area.evaluate(el => el.offsetHeight);
-  assert(grown > initial.height, 'editor grows as lines are added');
+  assert(grown > initial.height && grown < limit, 'ordinary multiline edit grows below the cap');
   assert.equal(await scrollPixels(), 0, 'ordinary multiline edit fits without scrolling');
   await area.fill('A long edit scrolls inside the field\n'.repeat(100).trimEnd());
   const capped = await area.evaluate(el => {
     el.scrollTop = el.scrollHeight;
-    return {height: el.offsetHeight, limit: innerHeight * 0.45, scroll: el.scrollTop, overflow: getComputedStyle(el).overflowY};
+    return {height: el.offsetHeight, scroll: el.scrollTop, overflow: getComputedStyle(el).overflowY};
   });
-  assert(capped.height > grown && Math.abs(capped.height - capped.limit) <= 1, 'editor caps growth at 45% of viewport height');
+  assert(capped.height > grown && Math.abs(capped.height - limit) <= 1, 'editor caps growth at the composer limit');
   assert(capped.overflow === 'auto' && capped.scroll > 0, 'long edit text scrolls inside the field');
   if (capture) await bubble.screenshot({path:path.join(evidence,'edit-box-capped-'+viewportWidth+'.png')});
-  return {originalWidth, shortWidth: initial.bubbleWidth, expandedWidth, columnWidth: initial.columnWidth, initialHeight: initial.height, grownHeight: grown, cappedHeight: capped.height, scrollable: true};
+  const viewport = page.viewportSize();
+  await page.setViewportSize({...viewport, height:280});
+  const compactHeight = await area.evaluate(el => el.offsetHeight);
+  assert(Math.abs(compactHeight - 126) <= 1, 'short windows cap the field at 45% of viewport height');
+  await page.setViewportSize(viewport);
+  return {originalWidth, bubbleWidth: initial.bubbleWidth, fieldWidth: initial.fieldWidth, columnWidth: initial.columnWidth, initialHeight: initial.height, grownHeight: grown, cappedHeight: capped.height, compactHeight, scrollable: true};
+}
+
+function measureEdit(page, id, event, selector, condition = 'visible', key) {
+  return page.evaluate(({id,event,selector,condition,key}) => {
+    const capture = input => {
+      if (key && input.key !== key) return;
+      document.removeEventListener(event,capture,true);
+      const record = fixture.editTimings[id] = {start:performance.now()};
+      const check = () => {
+        const el = document.querySelector(selector);
+        const ready = condition === 'closed' ? !el : condition === 'newline' ? el?.value.endsWith('\n') : el?.checkVisibility();
+        if (ready) {
+          record.readyFrameMs = performance.now() - record.start;
+          requestAnimationFrame(() => { record.presentedUpperMs = performance.now() - record.start; });
+        } else if (performance.now() - record.start < 1100) requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    };
+    document.addEventListener(event,capture,true);
+  }, {id,event,selector,condition,key});
 }
 
 (async()=>{let browser,lastPage;try{
@@ -146,13 +179,14 @@ async function checkEditBox(page, area, originalWidth, capture) {
    });observer.observe(document.body,{subtree:true,childList:true,characterData:true});},{capture:true,once:true});
   },{id,text});
   await page.goto('http://127.0.0.1:'+server.address().port+'/?count='+count);const row=page.locator('[data-mid="'+String(count).padStart(32,'0')+'"]');await row.waitFor();await row.scrollIntoViewIfNeeded();
-  const menu = async name => {
+  const menu = async (name, beforePick) => {
     const dialog = page.getByRole('dialog');
     await dialog.waitFor({state:'hidden'});
     await row.scrollIntoViewIfNeeded();
     if (width > 600) {
       await row.hover();
       await row.getByRole('button',{name:'More actions',exact:true}).click();
+      await beforePick?.();
       await page.getByRole('menuitem',{name,exact:true}).click();
       return;
     }
@@ -175,21 +209,71 @@ async function checkEditBox(page, area, originalWidth, capture) {
     } finally {
       await cdp.detach();
     }
+    await beforePick?.();
     await dialog.getByRole('button',{name,exact:true}).click();
   };
   const originalWidth = (await row.locator('[data-message-bubble]').boundingBox()).width;
-  await menu('Edit');
+  const areaSelector = 'textarea[aria-label="New text"]';
+  const pendingSelector = '[data-message-change="pending"]';
+  await menu('Edit', () => measureEdit(page, 'open', 'click', areaSelector));
   const area = page.getByRole('textbox',{name:'New text'});
+  await row.getByRole('button',{name:/Peer Quoted message/}).waitFor();
   const editBox = await checkEditBox(page, area, originalWidth, evidence && count === 100);
-  await area.fill('Visible before backend');
+  await area.fill('Cancel this edit');
   assert.equal(await area.evaluate(el => el.offsetHeight), editBox.initialHeight, 'shortening text restores the starting height');
-  assert.equal((await row.locator('[data-message-bubble]').boundingBox()).width, editBox.shortWidth, 'shortening text restores the starting width');
-  await measure('edit','Saving edit…');await page.getByRole('button',{name:'Save',exact:true}).click();
-  await row.getByText('Visible before backend',{exact:false}).waitFor();assert.equal(await page.evaluate(()=>fixture.writes.length),1);assert.equal(await page.evaluate(()=>fixture.writes[0].b.text),'Visible before backend');await row.getByText('Saving edit…',{exact:true}).waitFor();
+  assert.equal(await area.evaluate(el => el.scrollHeight - el.clientHeight),0,'shortening removes the need to scroll');
+  assert.equal((await row.locator('[data-message-bubble]').boundingBox()).width, editBox.bubbleWidth, 'shortening text keeps full width');
+  await measureEdit(page, 'escape', 'keydown', areaSelector, 'closed', 'Escape');
+  await area.press('Escape');
+  await area.waitFor({state:'hidden'});
+  await row.getByText('Original message '+count,{exact:false}).waitFor();
+  assert.equal(await page.evaluate(()=>fixture.writes.length),0,'Escape cancels without a write');
+  await menu('Edit', () => measureEdit(page, 'reopen', 'click', areaSelector));
+  assert.equal(await area.inputValue(),'Original message '+count,'reopening starts from the stored message');
+  await area.fill('Visible before backend');
+  await area.press('End');
+  await measureEdit(page, 'shiftEnter', 'keydown', areaSelector, 'newline', 'Enter');
+  await area.press('Shift+Enter');
+  assert.equal(await area.inputValue(),'Visible before backend\n','Shift+Enter inserts a newline');
+  assert.equal(await page.evaluate(()=>fixture.writes.length),0,'Shift+Enter does not save');
+  await page.waitForFunction(()=>fixture.editTimings.shiftEnter?.presentedUpperMs !== undefined);
+  await area.pressSequentially('Second line');
+  const editedText = 'Visible before backend\nSecond line';
+  await measureEdit(page, 'enter', 'keydown', pendingSelector, 'visible', 'Enter');
+  await area.press('Enter');
+  await row.getByText('Visible before backend',{exact:false}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>fixture.writes.map(w=>w.b.text)),[editedText]);
+  await row.getByText('Saving edit…',{exact:true}).waitFor();
+  await area.waitFor({state:'hidden'});
   await page.getByRole('textbox',{name:'Unrelated draft'}).fill('Keep typing during write');await page.getByRole('button',{name:'Toggle settings'}).click();assert.equal(await page.locator('[data-current-tab]').innerText(),'settings');
   if(evidence)await page.screenshot({path:path.join(evidence,'edit-pending-'+width+'-'+count+'.png')});
-  await page.evaluate(()=>fixture.finish(0,true));await row.getByText('Original message '+count,{exact:false}).waitFor();await row.getByRole('button',{name:'Edit again'}).click();assert.equal(await page.getByRole('textbox',{name:'New text'}).inputValue(),'Visible before backend');
-  await page.getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.writes.length===2);await page.evaluate(()=>fixture.finish(1));await page.waitForFunction(()=>!document.querySelector('[data-message-change]'));
+  await page.evaluate(()=>fixture.finish(0,true));await row.getByText('Original message '+count,{exact:false}).waitFor();
+  await row.getByRole('button',{name:'Edit again'}).click();
+  assert.equal(await area.inputValue(),editedText,'failed edit retains the newline and draft');
+  await measureEdit(page, 'retry', 'click', pendingSelector);
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.waitForFunction(()=>fixture.writes.length===2 && fixture.editTimings.retry?.presentedUpperMs !== undefined);
+  assert.equal(await row.locator(pendingSelector).count(),1,'retry stays visibly pending during the hold');
+  const confirmation = await page.evaluate(() => new Promise((resolve,reject) => {
+    const {start} = fixture.editTimings.retry;
+    setTimeout(() => {
+      const releasedMs = performance.now() - start;
+      const check = () => {
+        if (!document.querySelector('[data-message-change]')) {
+          resolve({releasedMs, confirmedMs:performance.now() - start});
+        } else if (performance.now() - releasedMs - start < 5000) requestAnimationFrame(check);
+        else reject(new Error('Held edit did not confirm'));
+      };
+      fixture.finish(1);
+      requestAnimationFrame(check);
+    }, Math.max(0, 400 - (performance.now() - start)));
+  }));
+  assert.equal(await row.getByText('Second line',{exact:false}).count(),1,'confirmed message keeps the edit');
+  const editTimings = await page.evaluate(()=>Object.fromEntries(Object.entries(fixture.editTimings).map(([id,{readyFrameMs,presentedUpperMs}])=>[id,{readyFrameMs,presentedUpperMs}])));
+  for (const id of ['open','escape','reopen','shiftEnter','enter','retry']) {
+    const ms = editTimings[id]?.presentedUpperMs;
+    assert(Number.isFinite(ms) && ms < 1100, id+' visible feedback must beat 1100 ms: '+ms);
+  }
   await menu('Delete…');await measure('delete','Deleting message…');await page.getByRole('button',{name:'Delete',exact:true}).click();await row.getByText('Deleting message…',{exact:false}).waitFor();assert.equal(await row.getByText('Visible before backend',{exact:false}).count(),0);
   await page.getByRole('dialog').waitFor({state:'hidden'});
   if(evidence)await page.screenshot({path:path.join(evidence,'delete-pending-'+width+'-'+count+'.png')});
@@ -207,6 +291,6 @@ async function checkEditBox(page, area, originalWidth, capture) {
   await topicMenu('Mark done');await page.waitForFunction(()=>fixture.writes.length===8);await page.evaluate(()=>fixture.finish(7));await page.waitForFunction(()=>Object.keys(fixture.store.get().topicBusy).length===0);
   await page.getByRole('region',{name:'Topic state'}).getByRole('button',{name:'Reopen',exact:true}).click();await page.getByText('Saving change…',{exact:true}).waitFor();assert.equal(await page.getByRole('region',{name:'Topic state'}).count(),0);await page.evaluate(()=>fixture.finish(8));await page.waitForFunction(()=>Object.keys(fixture.store.get().topicBusy).length===0);
   if(evidence)await page.screenshot({path:path.join(evidence,'recovery-'+width+'-'+count+'.png')});
-  console.log(JSON.stringify({width,count,editBox,editImmediate:true,deleteImmediate:true,topicImmediate:true,failedDraftsRetained:true,newerSyncPreserved:true,unrelatedInput:true,timings:await page.evaluate(()=>fixture.timings),errors}));await page.close();
+  console.log(JSON.stringify({skin:overlay?path.basename(path.dirname(overlay)):'comic',width,count,editBox,editTimings,confirmation,editImmediate:true,deleteImmediate:true,topicImmediate:true,failedDraftsRetained:true,newerSyncPreserved:true,unrelatedInput:true,timings:await page.evaluate(()=>fixture.timings),errors}));await page.close();
  }
 }catch(error){if(lastPage&&!lastPage.isClosed()){console.error(await lastPage.evaluate(()=>({text:document.body.innerText.slice(-2500),message:window.fixture?.store.get().dm?.messages.at(-1),writes:window.fixture?.writes.map(w=>({p:w.p,b:w.b}))})));if(evidence)await lastPage.screenshot({path:path.join(evidence,'failure.png')});}throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}})().catch(e=>{console.error(e.stack);process.exitCode=1});
