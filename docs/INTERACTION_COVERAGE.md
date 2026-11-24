@@ -3409,6 +3409,56 @@ Not run: the Linux desktop app's own WebKitGTK build, Android WebView, and
 image attachments with real file loads (the image-resize anchor path is the
 existing `TestReadScrollRendered` check).
 
+## MEL-773 status popup dismissal and composer access (November 24, 2026)
+
+Telegram Web A source inspected at `f67a40879a7d78c2683ec5a296cf55bc22417d56`.
+The portal begins at the top of the viewport, with the first toast offset
+below the header and later toasts stacked below it. `Notification` supports
+local dismissal, a separate action button and expiration. The keyboard handler
+tries the newest Escape registration first. Comic uses the same placement and
+dismissal flow, with named close buttons and pointer input limited to actual
+controls. Comic reuses its mounted Escape handler and gives the focused popup
+precedence within the stack. Editable controls, sheets, menus, open chat panels
+and message selection keep their existing keyboard handling.
+[Portal and placement](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/styles/index.scss#L141-L149)
+[Notification layout](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/ui/Notification.scss)
+[Dismissal and actions](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/components/ui/Notification.tsx)
+[Escape order](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/util/captureKeyboardListeners.ts#L73-L95)
+
+| Control or state | Rendered evidence in `TestComicStatusPopupsRendered` |
+|---|---|
+| Dismiss status on a confirmation or error | Click and tap remove the selected popup. The failed edit stays in the original conversation with its original text and Edit again. Retry uses the same edit payload and confirms after the synthetic server releases it. |
+| Dismiss working status | Click and tap clear it during a held write and DM sync. Saving edit stays visible. The linked-device edit renders when sync resumes and the notice stays dismissed. A later write can show Working again. |
+| Dismiss on an opening or failed notification | Click and tap clear both states. The held DM response leaves the dismissed popup cleared. |
+| Try again on a failed notification | Click and tap show Opening while the read is held. The returned missing result shows Try again again. `TestComicNotificationLandingRendered` covers later catch-up to the exact message. |
+| Escape | Composer mention picker, foreground sheet and message selection keep their own Escape actions. With focus outside editable controls, Escape dismisses one status at a time. Tested on notification, Working and ordinary toast states. Existing Back and panel Escape are covered by `TestNavigationKeysRendered`. |
+| Composer focus, typing and mention button | Each popup state stays above the composer and below the topic controls in the tested layouts. Popup text is click-through. Real clicks and taps focus the field, typing updates the same draft, and the mention picker opens with an error visible. |
+
+The comparison used the bundled Comic UI in local Chromium 155, with a cold
+notification entry followed by warm interactions. Each viewport and history
+case ran in its own browser context, in series. The test starts its clock
+before Playwright dispatch and observes the rendered change plus two animation
+frames. Reports include browser automation time and the 600 ms Working timer.
+On base `aa58315f`, the error toast intercepted a real composer click at 1440 px
+with both 100 and 1,000 messages. At 390 px the measured center taps fell clear.
+At both widths the base error had no dismiss button and survived Escape. Base
+edit pending took 93–124 ms and Working appeared in 693–737 ms.
+
+Candidate coverage is local Chromium with 1440×900 mouse and 390×844 touch
+emulation, at 100 and 1,000 retained messages. In the Go test run, close buttons
+took 56–106 ms, Escape 26–40 ms, composer focus 46–103 ms and typing 31–49 ms.
+The mention picker opened in 80–98 ms and notification Retry showed Opening in
+77–97 ms. Edit pending took 94–130 ms, edit retry pending 93–138 ms, and Working
+appeared in 710–730 ms. The retried edit was confirmed in 1,238–1,285 ms with
+its server response deliberately held for at least 1,150 ms. Every local
+measurement was below 1,100 ms. These were serial fixture runs on a shared host.
+The Escape ordering check holds the success toast's expiry so the popup and
+selection are both present at keydown. It records selection and toast age at
+dispatch, then checks that Escape clears the selection while leaving the toast
+visible. That fixture adjustment and the navigation and notification-landing
+tests passed three consecutive runs. Physical phone, native webviews and
+integrated skin qualification remain open.
+
 ## Composer emoji button and Twemoji (November 20, 2026)
 
 Owner requests: a separate emoji button (owner chose Telegram's placement:

@@ -7,11 +7,14 @@ const evidence=process.env.AGENTNET_SCREENSHOTS;
 if(evidence)fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const conv='a'.repeat(64),other='b'.repeat(64),target='c'.repeat(32),missing='d'.repeat(32),topic='e'.repeat(32),handle='f'.repeat(32);
 const at='2026-10-20T12:00:00Z',me={person:'1'.repeat(32),label:'Tester',address:'tester/laptop',state:'self'},peer={person:'2'.repeat(32),label:'Casey',address:'casey/desktop',state:'pinned',devices:[]};
+const statusWorkload=process.env.AGENTNET_STATUS_POPUPS==='1';
+const editable='1'.repeat(32);
 let fixture,bundle,browser;
-function reset(){
+function reset(count=120){
  const message=(id,body,extra={})=>({id,lid:id,dir:'in',from:peer.address,kind:'message',body,at,unread:true,actions:[],reactions:[],...extra});
- const messages=Array.from({length:120},(_,i)=>message(i.toString(16).padStart(32,'0'),'Context '+i+' '+('longer message context '.repeat(7)),{topic}));
- messages.splice(50,0,message(target,'Exact notified message',{topic}));
+ const messages=Array.from({length:statusWorkload?count-2:count},(_,i)=>message(i.toString(16).padStart(32,'0'),'Context '+i+' '+('longer message context '.repeat(7)),{topic,unread:!statusWorkload}));
+ messages.splice(statusWorkload?messages.length:50,0,message(target,'Exact notified message',{topic}));
+ if(statusWorkload)messages.push(message(editable,'Original editable message',{topic,dir:'out',from:me.address,unread:false,can:['edit'],revision:1}));
  const view=(id,messages)=>({id,created:at,kind:'dm',peer,mine:true,role:'member',members:[me,peer],agents:[],guests:[],frozen:'',messages,topics:id===conv?[{id:topic,conv,title:'Invoices',last:'Exact notified message',last_at:at,count:messages.length,unread:messages.length,state:'active',pending:false,review:0,running:0}]:[]});
  fixture={views:{[conv]:view(conv,messages),[other]:view(other,[message('9'.repeat(32),'Other chat context')])},requests:[],events:new Set(),held:[],holdOverview:false,holdDM:false,seq:1,uploads:0};
  fixture.overview={version:'fictional',seq:1,topic_list:true,me:{address:me.address,fingerprint:'own'},person:me,persons:true,agents:true,files:{max_count:8,max_file:1048576,max_message:2097152},controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:[],dms:[conv,other].map(id=>({id,created:at,peer,kind:'dm',role:'member',count:fixture.views[id].messages.length,title:id===conv?'Invoices':'Other chat',last:id===conv?'Exact notified message':'Other chat context',last_at:at,unread:1,held:0,waiting:0,guests:0})),directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[],needs_you:[],held:[],agent_devices:[]};
@@ -35,6 +38,13 @@ const server=http.createServer(async(req,res)=>{
   fixture.requests.push({path:p,api,body,at:Date.now()});
   if(api==='/api/overview'){if(fixture.holdOverview)await new Promise(resolve=>fixture.held.push(resolve));json(res,fixture.overview);return;}
   if(api==='/api/dm'){if(fixture.holdDM)await new Promise(resolve=>fixture.held.push(resolve));json(res,fixture.views[url.searchParams.get('id')]);return;}
+  if(api==='/api/message/edit'&&statusWorkload){
+   const allowed=await new Promise(resolve=>{fixture.edit={body,resolve};});
+   if(!allowed){res.writeHead(409,{'Content-Type':'text/plain'});res.end('Invented edit refusal');return;}
+   const edited=fixture.views[conv].messages.find(m=>m.id===editable);
+   edited.text=body.text;edited.edited=true;edited.revision++;
+   push();json(res,{note:'Edited'});return;
+  }
   if(api==='/api/upload'){fixture.uploads++;json(res,{id:'fixture-stage-'+fixture.uploads});return;}
   if(api==='/api/act'&&body?.do==='read'){for(const view of Object.values(fixture.views))for(const m of view.messages)if(body.ids.includes(m.id))m.unread=false;json(res,{note:'Read.'});return;}
   if(api==='/api/agents'){json(res,{agents:[],sessions:[],local:false});return;}
@@ -60,6 +70,15 @@ async function visibleTarget(page,id){
 (async()=>{try{
  await sourceBundle();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
+ if(statusWorkload){
+  const {checkStatusPopups}=require('./status_popups_rendered.cjs');
+  for(const width of [1440,390])for(const count of [100,1000]){
+   reset(count);
+   await checkStatusPopups({browser,origin,width,count,fixture,evidence,conv,target,missing,editable,hash,visibleTarget,push,release});
+   for(const res of fixture.events)res.end();
+  }
+  return;
+ }
  for(const width of [1280,390]){
   reset();const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(['error','warning'].includes(m.type()))errors.push(m.type()+': '+m.text());});
@@ -99,4 +118,4 @@ async function visibleTarget(page,id){
   console.log(JSON.stringify({flow:'production hash -> Comic exact cold/cached -> missing -> restart catch-up',width,cachedFrameMs:cachedMs,cachedBeforeRelease,source:!!bundle,pageTitle:await page.title(),pageErrors:errors,result:'PASS'}));
   await context.close();for(const res of fixture.events)res.end();
  }
-}finally{release();if(browser)await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}})().catch(error=>{console.error(error);process.exitCode=1;});
+}finally{release();fixture?.edit?.resolve(false);if(browser)await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -2,10 +2,11 @@
 // words, with a way to try again; nothing retries on a timer beyond the
 // store's bounded recovery.
 import { useEffect, useState } from "react";
+import { IconX } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { errorText, type T } from "../api";
 import { unsentIn, useStore } from "../store";
-import { Button } from "../ui/Button";
+import { Button, IconButton } from "../ui/Button";
 
 export function ConnectionBanner() {
   const store = useApp();
@@ -105,20 +106,25 @@ export function Toasts() {
   const toasts = useStore(store, (s) => s.toasts);
   const landing = useStore(store, (s) => s.messageLanding);
   const working = useStore(store, (s) => s.working);
+  const notice = "flex max-w-md items-center gap-2 rounded-2xl stroke pl-4 pr-1 py-1 text-sm font-semibold shadow-pop";
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-20 z-[60] flex flex-col items-center gap-2 px-4 lg:bottom-6">
-      {working && <div role="status" data-working className="pop-in max-w-md rounded-2xl stroke bg-surface px-4 py-2.5 text-sm font-semibold text-ink shadow-pop">Working on it…</div>}
+    <div aria-live="polite" className="pointer-events-none absolute inset-x-0 top-[min(9rem,20%)] z-[60] flex max-h-[30%] flex-col items-center gap-2 overflow-y-auto px-4 pb-2">
+      {working && <div role="status" data-working data-status-popup className={notice + " pop-in bg-surface text-ink"}>
+        <span>Working on it…</span>
+        <IconButton label="Dismiss working status" data-status-dismiss className="pointer-events-auto shrink-0" onClick={() => store.dismissWorking()}><IconX size={18} aria-hidden="true" /></IconButton>
+      </div>}
       {landing && (
-        <div role="status" aria-busy={landing.busy} className="pointer-events-auto flex w-full max-w-md flex-wrap items-center gap-2 rounded-2xl stroke bg-surface px-4 py-2.5 text-sm text-ink shadow-pop">
-          <span className="min-w-0 flex-1 basis-48 font-semibold">{landing.error || "Opening the notified message…"}</span>
-          {!landing.busy && <Button size="sm" variant="outline" onClick={() => void store.retryMessageLanding()}>Try again</Button>}
-          <Button size="sm" variant="outline" onClick={() => store.dismissMessageLanding()}>Dismiss</Button>
+        <div role="status" data-status-popup aria-busy={landing.busy} className={notice + " w-full flex-wrap bg-surface text-ink"}>
+          <span className="min-w-0 flex-1 basis-48 wrap-anywhere">{landing.error || "Opening the notified message…"}</span>
+          {!landing.busy && <Button size="sm" variant="outline" className="pointer-events-auto" onClick={() => void store.retryMessageLanding()}>Try again</Button>}
+          <Button size="sm" variant="outline" data-status-dismiss className="pointer-events-auto" onClick={() => store.dismissMessageLanding()}>Dismiss</Button>
         </div>
       )}
       {toasts.map((t) => (
-        <div key={t.id} role={t.tone === "error" ? "alert" : "status"}
-          className={"pop-in pointer-events-auto max-w-md rounded-2xl stroke px-4 py-2.5 text-sm font-semibold shadow-pop " + (t.tone === "error" ? "bg-danger-bg text-danger" : t.tone === "ok" ? "bg-ok-bg text-ok-ink" : "bg-surface text-ink")}>
-          {t.text}
+        <div key={t.id} role={t.tone === "error" ? "alert" : "status"} data-status-popup
+          className={notice + " pop-in " + (t.tone === "error" ? "bg-danger-bg text-danger" : t.tone === "ok" ? "bg-ok-bg text-ok-ink" : "bg-surface text-ink")}>
+          <span className="min-w-0 wrap-anywhere">{t.text}</span>
+          <IconButton label="Dismiss status" data-status-dismiss className="pointer-events-auto shrink-0" onClick={() => store.dismissToast(t.id)}><IconX size={18} aria-hidden="true" /></IconButton>
         </div>
       ))}
     </div>

@@ -7,11 +7,23 @@ import (
 )
 
 func TestComicNotificationLandingRendered(t *testing.T) {
+	checkComicNotificationFixture(t, false)
+}
+
+func TestComicStatusPopupsRendered(t *testing.T) {
+	checkComicNotificationFixture(t, true)
+}
+
+func checkComicNotificationFixture(t *testing.T, statuses bool) {
+	t.Helper()
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT")
 	}
 	cmd := exec.CommandContext(t.Context(), "node", "testdata/notification_landing_rendered.cjs")
 	cmd.Env = os.Environ()
+	if statuses {
+		cmd.Env = append(cmd.Env, "AGENTNET_STATUS_POPUPS=1")
+	}
 	if os.Getenv("AGENTNET_SCREENSHOTS") == "" {
 		cmd.Env = append(cmd.Env, "AGENTNET_SCREENSHOTS="+t.TempDir())
 	}
