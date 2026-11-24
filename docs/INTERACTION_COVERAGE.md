@@ -449,23 +449,24 @@ macOS/Windows/Android shells, physical devices.
 ## MEL-813 compact image groups — November 24, 2026
 
 Three sent 2:1 screenshots filled two square-tile rows on `aa58315f`.
-Comic now shows them in one row. At 1280 px the group dropped from 523 to
-99 px high, and at 390 px from 324 to 66 px, including filenames. Mixed
-portrait/landscape pairs share a row with widths proportional to their
-shapes. A document between images keeps its full-width row and its position.
-The single portrait preview measured 482 px before and after at both widths.
+Comic now gives the first image a full-width row with the other two below.
+The group dropped from 523 to 409 px at 1280 px and from 324 to 260 px at
+390 px, including filenames. It measured 212 px at 320 px. A mixed pair
+uses proportional widths, keeping 44 px tap targets on small screens.
+A document or failed preview keeps a full-width file row in attachment
+order. The single portrait preview measured 482 px before and after at
+1280 and 390 px.
 
-Telegram Desktop `a8de5f9` takes per-image sizes in attachment order, sizes
-row items as aspect ratio times row height, scales geometry to the available
-width and dispatches each tile to its original item. Comic uses the same row
-proportions through flexbox, with up to three photos per row, a 200 px height
-cap and 44 px tap targets. Previews contain the whole picture. Aspect ratios
-come from the existing lazy thumbnail load and share its cache lifetime.
-Layout is linear within an attachment group. The thumbnail and viewer share
-one original URL and the existing file route, with no dimension probe or
-separate decode for sizing.
-[Telegram Desktop row sizing](https://github.com/telegramdesktop/tdesktop/blob/a8de5f928ba68197195e6e752293af39d4db8e6c/Telegram/SourceFiles/ui/grouped_layout.cpp#L530),
-[group sizing and exact item dispatch](https://github.com/telegramdesktop/tdesktop/blob/a8de5f928ba68197195e6e752293af39d4db8e6c/Telegram/SourceFiles/history/view/media/history_view_media_grouped.cpp#L142).
+Telegram Desktop `a8de5f928ba68197195e6e752293af39d4db8e6c` chooses
+`layoutThreeTopAndOther` for three 2:1 images. Its complex layout starts
+at five items or when an aspect ratio exceeds 2. Comic reuses the
+top-plus-two shape for the reported trio and proportional widths in the
+lower row. It keeps the whole previews through CSS, with a 240 px lead cap,
+200 px thumbnail cap and its existing exact-attachment viewer. Other groups
+use the proportional row layout with up to three tiles per row. Aspect ratios
+come from existing lazy image loads and share their cache lifetime. Layout
+is linear within an attachment group. Sizing adds no reads or decodes.
+[Telegram Desktop layout selection](https://github.com/telegramdesktop/tdesktop/blob/a8de5f928ba68197195e6e752293af39d4db8e6c/Telegram/SourceFiles/ui/grouped_layout.cpp#L122-L175)
 
 | Control or state | Rendered evidence in `TestMessageImagesGroupedRendered` |
 |---|---|
@@ -473,7 +474,7 @@ separate decode for sizing.
 | Viewer Download | Click and tap emit a browser download with the exact filename and original bytes. Three fixture landscapes have distinct originals. The mixed document download also returns its own bytes. |
 | Close and return | Escape and Close tap restore focus to the exact source. The existing portrait fixture exercises Android Back, focus trap, zoom, pan and pinch. |
 | Viewer Drive action | Portrait fixture confirms the existing project-copy action with the exact attachment index and direction, against a fake host. |
-| Loading and failed image | A held original keeps its placeholder and opens after it arrives. An invalid PNG falls back to a readable filename and file actions. |
+| Loading and failed image | A held original keeps its placeholder and opens after it arrives. An invalid PNG falls back to a full-width file row. Its filename can wrap, and file actions remain available. |
 | Live arrival during viewer use | The exact viewer opens and downloads while an SSE-triggered chat refresh is held. The viewer stays open when the new message arrives. Reopening the same preview and downloading again reuse its original. |
 
 Disposable Chromium fixture at 1280×844 and 390×844, with trusted Enter on
@@ -481,7 +482,7 @@ desktop and tap on phone. Each fresh context opened the first viewer during
 a held refresh and downloaded its original, opened the other two, then
 reopened the first. Histories contained 10 or 100 messages before the
 concurrent arrival. The hold was
-464–470 ms on the candidate, including the time to observe the arrival in the
+468–505 ms on the corrected candidate, including the time to observe the arrival in the
 chat. Times below are milliseconds from trusted input. Open feedback includes
 two animation frames after the dialog appeared. Ready means the complete
 original decoded in the dialog. Download start is the browser event, and
@@ -489,10 +490,10 @@ download saved is verified bytes on disk.
 
 | Width and history | First open / same-image reopen, base → candidate | Max open / original ready, base → candidate | Max download start / saved, base → candidate | Max close, base → candidate |
 |---|---:|---:|---:|---:|
-| 1280, 10 | 49 / 42 → 47 / 37 | 49 / 62 → 47 / 66 | 6 / 9 → 13 / 17 | 42 → 51 |
-| 1280, 100 | 53 / 37 → 49 / 41 | 53 / 70 → 49 / 57 | 4 / 20 → 3 / 7 | 47 → 42 |
-| 390, 10 | 61 / 31 → 44 / 31 | 61 / 70 → 44 / 56 | 4 / 7 → 3 / 7 | 31 → 31 |
-| 390, 100 | 44 / 30 → 45 / 31 | 47 / 59 → 48 / 59 | 3 / 7 → 3 / 7 | 31 → 30 |
+| 1280, 10 | 47 / 52 → 55 / 41 | 52 / 66 → 55 / 73 | 5 / 7 → 7 / 9 | 45 → 47 |
+| 1280, 100 | 54 / 40 → 74 / 66 | 54 / 73 → 74 / 93 | 9 / 11 → 10 / 14 | 42 → 50 |
+| 390, 10 | 75 / 31 → 60 / 31 | 75 / 106 → 60 / 72 | 6 / 10 → 3 / 7 | 31 → 31 |
+| 390, 100 | 61 / 31 → 60 / 47 | 61 / 72 → 60 / 86 | 3 / 7 → 21 / 27 | 31 → 45 |
 
 Every measured local response stayed below 1100 ms. These samples measure
 the local fixture, with thumbnails already loaded when pressed. The separate
@@ -500,14 +501,14 @@ seven-image resource run fetched each original once at both widths and
 revoked all seven Blob URLs on unmount. `TestImageViewerRendered` also passed
 the existing viewer and exact desktop open-in-app route checks.
 
-Comic and disposable Office and Pulp overlay builds passed six scenarios
-at each width. Office and Pulp source came from `agentnet-skins` at
-`47774ca4`. Desktop and phone captures were inspected. Classic, Holonet
-and Zoom have independent `fileChips` renderers and do not consume Comic's
-group layout. Advance the external skin pin, rebuild Office and Pulp, and
-run the collection qualification against the integrated release candidate.
-Native app shells, physical phone input and other browser engines remain
-unverified by this fixture.
+The corrected Comic layout passed all six scenarios at 1280, 390 and 320 px.
+Desktop and phone captures were inspected, including the 320 px failed file.
+The 320 px mixed fixture retains the existing narrow document Preview button.
+The initial candidate passed disposable Office and Pulp builds from
+`agentnet-skins` at `47774ca4`. Rebuild them at the eventual integrated pin and
+run the collection qualification. Classic, Holonet and Zoom have independent
+`fileChips` renderers. Native shells, physical phone input and other browser
+engines remain unverified.
 
 ## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
 

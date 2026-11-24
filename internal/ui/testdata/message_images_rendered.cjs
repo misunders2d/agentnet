@@ -174,17 +174,19 @@ async function verifyOriginal(page, thumb, name, kind, phone, concurrent, metric
    for(const name of wanted){const b=page.getByRole('button',{name:'Open picture '+name,exact:true});await b.scrollIntoViewIfNeeded();await b.locator('img').waitFor();await b.locator('img').evaluate(im=>im.decode());}
    if(mode==='failed')await page.getByRole('button',{name:'Download failed.png',exact:true}).waitFor();
    const layout=await imageButtons(page).evaluateAll(buttons=>buttons.map(b=>{const r=b.getBoundingClientRect(),im=b.querySelector('img');return{name:b.getAttribute('aria-label').slice(13),x:r.x,y:r.y,w:r.width,h:r.height,image:im?{w:im.clientWidth,h:im.clientHeight,nw:im.naturalWidth,nh:im.naturalHeight}:null};}));
-   assert.deepEqual(layout.map(x=>x.name),wanted,'original image order');for(const b of layout){assert(b.w>0&&b.h>=44&&b.x>=0&&b.x+b.w<=width+1,'image target fits');assert(b.image.w>0&&b.image.h>0);assert(Math.abs(b.image.w/b.image.h-b.image.nw/b.image.nh)<.02,'whole-image preview keeps natural ratio');}
+   assert.deepEqual(layout.map(x=>x.name),wanted,'original image order');for(const b of layout){assert(b.w>0&&b.h>=44&&b.x>=0&&b.x+b.w<=width+1,'image target fits');assert(b.image.w>0&&b.image.h>0);const ratio=b.image.nw/b.image.nh;assert(Math.abs(b.image.w-b.image.h*ratio)<=Math.max(1,ratio),'whole-image preview keeps natural ratio within pixel rounding');}
    const group=page.locator('[data-image-group]');const grouped=await group.count();
    const row={mode,width,grouped,rows:new Set(layout.map(x=>Math.round(x.y))).size,previewHeights:layout.map(x=>Math.round(x.h)),groupHeight:grouped?Math.round((await group.boundingBox()).height):null};
    if(process.env.AGENTNET_IMAGE_COMPARE){console.log('IMAGE_COMPARE '+JSON.stringify(row));if(evidence){await imageButtons(page).first().scrollIntoViewIfNeeded();await page.screenshot({path:path.join(evidence,'images-'+width+'-'+mode+'.png')});}if(!latency)continue;}
    if(wanted.length>1){assert.equal(grouped,1);if(mode==='portraits')assert.equal(row.rows,1,'two portraits share one row');assert(layout.every(b=>b.h<=240),'multi-image previews stay bounded');}
    else assert.equal(grouped,0,'single image retains its existing proportional layout');
    if(mode==='landscapes'&&!process.env.AGENTNET_IMAGE_COMPARE){
-    assert.equal(row.rows,1,'three landscapes fill one row');
+    assert.equal(row.rows,2,'the first landscape leads a two-row group');
+    assert(layout[0].y<layout[1].y&&layout[1].y===layout[2].y,'the later landscapes are side by side');
     assert(layout.every(b=>b.h-b.image.h<5),'wide previews have no top and bottom letterboxing');
     const bounds=await group.boundingBox();
-    assert(Math.abs(layout.at(-1).x+layout.at(-1).w-bounds.x-bounds.width)<2,'the row fills the attachment width');
+    assert(Math.abs(layout[0].w-bounds.width)<2,'the lead fills the attachment width');
+    assert(Math.abs(layout.at(-1).x+layout.at(-1).w-bounds.x-bounds.width)<2,'the second row fills the attachment width');
     if(width!==390&&!latency){
      const buttons=imageButtons(page);
      await buttons.first().focus();
@@ -199,7 +201,10 @@ async function verifyOriginal(page, thumb, name, kind, phone, concurrent, metric
     const note=await item.evaluate(n=>n.parentElement.getBoundingClientRect().toJSON());
     assert(note.width>layout[0].w*1.5,'mixed document keeps a full row');
     assert(layout[0].y<note.y&&note.bottom<=layout[1].y,'document and images keep exact attachment order');
-    assert(layout[1].w>layout[2].w*2&&Math.abs(layout[1].h-layout[2].h)<2,'mixed row follows the two shapes');
+    const [,landscape,portrait]=layout;
+    assert(landscape.y===portrait.y&&landscape.w>portrait.w*2,'mixed row follows the two shapes');
+    assert(portrait.w>=44,'the narrow preview retains its tap target');
+    if(portrait.w>45)assert(Math.abs(landscape.h-portrait.h)<2,'mixed row shares height above the tap-target minimum');
    }
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
    if(['landscapes','mixed','single'].includes(mode)){
@@ -240,7 +245,16 @@ async function verifyOriginal(page, thumb, name, kind, phone, concurrent, metric
      if(width===390)assert.equal(await page.evaluate(()=>window.imageBack()),true,'Back closes viewer');else await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});assert(await thumb.evaluate(b=>b.getRootNode().activeElement===b),'focus returns to exact image');
     }
    }
-   if(mode==='failed'){const caption=group.locator('span.text-muted[title="failed.png"]');assert.equal(await caption.count(),1,'failed image retains readable filename caption');assert(await caption.isVisible());assert(await caption.evaluate(n=>n.scrollWidth<=n.clientWidth),'failed filename is readable at this viewport');assert.equal(await page.getByRole('button',{name:'Save a readable copy to Google Drive',exact:true}).count(),1,'failed image keeps file actions');}
+   if(mode==='failed'){
+    const filename=group.locator('span[title="failed.png"]');
+    assert.equal(await filename.count(),1,'fallback shows the filename once');
+    assert(await filename.isVisible());
+    assert(await filename.evaluate(n=>n.scrollWidth<=n.clientWidth),'failed filename is readable at this viewport');
+    const download=page.getByRole('button',{name:'Download failed.png',exact:true});
+    const fallback=await download.evaluate(b=>b.parentElement.getBoundingClientRect().width);
+    assert(Math.abs(fallback-(await group.boundingBox()).width)<2,'failed attachment keeps a full-width file row');
+    assert.equal(await page.getByRole('button',{name:'Save a readable copy to Google Drive',exact:true}).count(),1,'failed image keeps file actions');
+   }
    assert(fixture.reads.every(r=>r.id===message&&r.dir===fixture.dir&&fixture.files.some(f=>f.index===r.index)),'exact sparse file index and direction');assert(!fixture.posts.some(r=>/\/api\/(send|dm\/send|request\/followup)$/.test(r.api)));assert.deepEqual(errors,[]);
    if(evidence){await imageButtons(page).first().scrollIntoViewIfNeeded();await page.screenshot({path:path.join(evidence,'images-'+width+'-'+mode+'.png')});}
    if(resource){const after=await memory();const totalReads=fixture.reads.length;const resources=await page.evaluate(async()=>{const module=await import('/assets/skins/comic/entry.mjs');const root=document.querySelector('#skin').shadowRoot.querySelector('.an-root');await module.unmount(root);const r=window.imageResources;return {created:r.created.filter(x=>x.type.startsWith('image/')).map(x=>x.url),revoked:r.revoked,observers:r.observed.size,remainingImages:root.querySelectorAll('img').length};});assert.equal(resources.observers,0,'unmount disconnects picture observers');assert.equal(resources.remainingImages,0);assert(resources.created.every(url=>resources.revoked.includes(url)),'unmount revokes all original image object URLs');assert.equal(totalReads,wanted.length,'each original fetched once after explicit scrolling');console.log('IMAGE_RESOURCE '+JSON.stringify({width,softwareRendering:true,cpuThrottle:6,originalPixels:[1080*2400,2400*1200],originalCount:wanted.length,initial:initialResource,afterAllOpened:after,totalReads,cleanup:{created:resources.created.length,revoked:resources.created.filter(url=>resources.revoked.includes(url)).length,observers:resources.observers}}));}
