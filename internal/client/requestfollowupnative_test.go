@@ -373,6 +373,22 @@ func TestNativeRequestFollowupUnsupportedAndUnknownDoNotReplay(t *testing.T) {
 // A real worker invocation talks to the re-executed mock app-server. No native
 // user session, provider, credentials or model request is involved.
 func TestNativeRequestFollowupOwnedWorkerProcess(t *testing.T) {
+	installCodexFollowupFixture(t)
+	a, parent, ref := nativeFollowupFixture(t)
+	parent.nativeAttempt = 1
+	if _, err := a.store.db.Exec(`UPDATE inbox SET attempts=1,last_attempt_at=unixepoch() WHERE id=?`, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	id := protocol.NewID()
+	if _, err := a.QueueRequestFollowup(tctx(t), RequestFollowup{Conv: parent.Conv, Ref: ref, ID: id, Body: "Use English instead"}); err != nil {
+		t.Fatal(err)
+	}
+	a.runJob(tctx(t), parent, &Responder{Harness: "codex", Dir: t.TempDir(), Timeout: 15 * time.Second}, nil)
+	assertNativeFollowupResult(t, a, a, parent, id)
+}
+
+func installCodexFollowupFixture(t *testing.T) {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix executable wrapper fixture")
 	}
@@ -388,16 +404,10 @@ func TestNativeRequestFollowupOwnedWorkerProcess(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("AGENTNET_CODEX_FIXTURE_EXE", exe)
 	t.Setenv("AGENTNET_CODEX_ROOM_FIXTURE", "steer")
-	a, parent, ref := nativeFollowupFixture(t)
-	parent.nativeAttempt = 1
-	if _, err := a.store.db.Exec(`UPDATE inbox SET attempts=1,last_attempt_at=unixepoch() WHERE id=?`, parent.ID); err != nil {
-		t.Fatal(err)
-	}
-	id := protocol.NewID()
-	if _, err = a.QueueRequestFollowup(tctx(t), RequestFollowup{Conv: parent.Conv, Ref: ref, ID: id, Body: "Use English instead"}); err != nil {
-		t.Fatal(err)
-	}
-	a.runJob(tctx(t), parent, &Responder{Harness: "codex", Dir: t.TempDir(), Timeout: 15 * time.Second}, nil)
+}
+
+func assertNativeFollowupResult(t *testing.T, a, asker *Agent, parent job, id string) {
+	t.Helper()
 	waitState(t, a, id, stateAnswered)
 	waitState(t, a, parent.ID, stateAnswered)
 	var linked bool
@@ -405,7 +415,7 @@ func TestNativeRequestFollowupOwnedWorkerProcess(t *testing.T) {
 		t.Fatal("exact native correction parent/attempt/result lost", linked, err)
 	}
 	var count int
-	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, a, "OWNED_CORRECTION_ACCEPTED")).Scan(&count); err != nil || count == 0 {
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND reply_to=? AND kind=? AND body=?`, parent.Conv, parent.ID, envelope.KindAnswer, taggedAnswer(t, asker, "OWNED_CORRECTION_ACCEPTED")).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("owned process did not send the correlated original answer: %d %v", count, err)
 	}
 	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
@@ -947,5 +957,228 @@ func TestSteerRunningFollowupOfFinishedRequest(t *testing.T) {
 	late.ID, late.Body = protocol.NewID(), "Too late"
 	if _, err := a.QueueRequestFollowup(tctx(t), late); err == nil || !strings.Contains(err.Error(), "no longer current") {
 		t.Fatalf("steer into finished follow-up: %v", err)
+	}
+}
+
+func remoteQueuedFollowupFixture(t *testing.T, harness string) (*world, job, string) {
+	t.Helper()
+	w, _, packet, _ := groupTurnsFixture(t)
+	p := p6Member(t, w.alice, w.bob, packet.State.Conv)
+	if err := w.bob.Approve(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the host worker stopped while both ordinary sends arrive. No
+	// running status can reach the sender before it sends the second ask.
+	ask := func(body string) string {
+		t.Helper()
+		id := protocol.NewID()
+		sent, queued, err := w.alice.AskAgentInTopicQueued(tctx(t), id, p.PID, envelope.KindQuestion, body, "", nil, protocol.NewID(), 0)
+		if err != nil || queued != nil || sent.LID != id {
+			t.Fatalf("ordinary queued send: %+v %+v %v", sent, queued, err)
+		}
+		waitState(t, w.bob, id, stateAgentWaiting)
+		return id
+	}
+	first := ask("Compare the two sample colors")
+	second := ask("Use English instead")
+	parent, found, _, _, err := w.bob.store.claimAgentPage(harness, w.bob.Address, w.bob.Self().Fingerprint(), 0, agentPage)
+	if err != nil || !found || parent.ID != first {
+		t.Fatalf("first request was not selected: %s %v %v", parent.ID, found, err)
+	}
+	parent.nativeAttempt = 1
+	return w, parent, second
+}
+
+func TestBackToBackRemoteAsksReachOneNativeRun(t *testing.T) {
+	for _, harness := range []string{"pi", "claude", "codex"} {
+		t.Run(harness, func(t *testing.T) {
+			if harness == "codex" {
+				installCodexFollowupFixture(t)
+			}
+			w, parent, second := remoteQueuedFollowupFixture(t, harness)
+			a := w.bob
+			if _, found, _, _, err := a.store.claimAgentPage(harness, a.Address, a.Self().Fingerprint(), 0, agentPage); err != nil || found {
+				t.Fatal("second ordinary ask was independently claimable", found, err)
+			}
+			initial, err := a.agentPrompt(parent, &Responder{Harness: harness}, "")
+			if err != nil || strings.Contains(initial, "Use English instead") {
+				t.Fatal("correction entered the initial prompt before native handover", err)
+			}
+			if harness == "codex" {
+				a.runJob(tctx(t), parent, &Responder{Harness: harness, Dir: t.TempDir(), Timeout: 5 * time.Second}, nil)
+				assertNativeFollowupResult(t, a, w.alice, parent, second)
+				return
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var bridge nativeFollowupBridge
+			var decoder *json.Decoder
+			var acknowledge func(string)
+			if harness == "pi" {
+				pi, d, _ := piBridgeFixture(t)
+				bridge, decoder = pi, d
+				acknowledge = func(body string) {
+					piEvent(pi, map[string]any{"type": "response", "id": second, "command": "steer", "success": true, "data": map[string]string{"disposition": "queued"}})
+					piEvent(pi, map[string]any{"type": "message_start", "message": map[string]string{"role": "user", "content": body}})
+				}
+			} else {
+				claude, d, _ := claudeAdapterFixture(t)
+				bridge, decoder = claude, d
+				acknowledge = func(body string) { claudeAdapterEvent(claude, claudeAdapterUser(body)) }
+			}
+			done := make(chan struct{})
+			go func() { defer close(done); a.watchNativeFollowups(ctx, parent, bridge, nil) }()
+			defer func() { cancel(); <-done }()
+			input := make(chan map[string]any, 1)
+			go func() {
+				var request map[string]any
+				_ = decoder.Decode(&request)
+				input <- request
+			}()
+			var request map[string]any
+			select {
+			case request = <-input:
+			case <-time.After(3 * time.Second):
+				t.Fatal("second ask never reached the native bridge")
+			}
+			body, _ := request["message"].(string)
+			if harness == "claude" {
+				message, _ := request["message"].(map[string]any)
+				body, _ = message["content"].(string)
+			}
+			if strings.Count(body, "Use English instead") != 1 || !strings.Contains(body, second) {
+				t.Fatal("native input lost or repeated the correction", request)
+			}
+			if state := jobState(t, a, second); state != stateRunning {
+				t.Fatal("native claim was not durable before input", state)
+			}
+			acknowledge(body)
+			waitState(t, a, second, stateSteered)
+			eventually(t, "requester sees authenticated native acceptance", func() bool {
+				messages, err := w.alice.ConversationMessages(parent.Conv)
+				for _, msg := range messages {
+					if msg.LID == second && msg.Exec != nil && msg.Exec.State == stateSteered && msg.Exec.Host == a.Address {
+						return err == nil
+					}
+				}
+				return false
+			})
+			if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+				t.Fatal("consumed correction was available for another handover", found, err)
+			}
+		})
+	}
+}
+
+func TestBackToBackRemoteAsksQueueOnceWhenNativeCannotSteer(t *testing.T) {
+	stub := installAgentStub(t)
+	w, parent, second := remoteQueuedFollowupFixture(t, "agentstub")
+	a := w.bob
+	ready := make(chan struct{})
+	close(ready)
+	a.watchNativeFollowups(t.Context(), parent, refusedFollowup{ready, steerUnsupported}, nil)
+	if state := jobState(t, a, second); state != stateAgentWaiting {
+		t.Fatal("known refusal lost the queued turn", state)
+	}
+	if _, found, err := a.claimNativeFollowup(parent); err != nil || found {
+		t.Fatal("known refusal sent another native input", found, err)
+	}
+	a.finishAgent(tctx(t), parent, &Responder{Harness: "agentstub"}, envelope.StatusDone, "Comparison complete")
+	if state := jobState(t, a, parent.ID); state != stateAnswered {
+		t.Fatal("first turn did not finish", state)
+	}
+	next, found, _, _, err := a.store.claimAgentPage("agentstub", a.Address, a.Self().Fingerprint(), 0, agentPage)
+	if err != nil || !found || next.ID != second {
+		t.Fatal("next turn was not selected", next.ID, found, err)
+	}
+	a.runJob(tctx(t), next, &Responder{Harness: "agentstub", Dir: stub.dir, Timeout: 5 * time.Second}, nil)
+	waitState(t, a, second, stateAnswered)
+	if prompt := stub.last(); !strings.Contains(prompt, "Compare the two sample colors") || !strings.Contains(prompt, "Continue only the new correction") || !strings.Contains(prompt, "Use English instead") || stub.runs() != 1 {
+		t.Fatal("fallback lost its recorded context or ran more than once", stub.runs())
+	}
+}
+
+func TestBackToBackRemoteAsksRunNormallyWithoutTheOriginalAttempt(t *testing.T) {
+	for _, c := range []struct {
+		name, state string
+		attempt     int
+	}{
+		{"original stopped", stateCancelled, 1},
+		{"original resumed", stateAnswered, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stub := installAgentStub(t)
+			w, parent, second := remoteQueuedFollowupFixture(t, "agentstub")
+			a := w.bob
+			// The ordinary claim below observes the final state after Stop or
+			// after a helper wait resumed and finished a new attempt.
+			if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=? WHERE id=?`, c.state, c.attempt, parent.ID); err != nil {
+				t.Fatal(err)
+			}
+			next, found, _, _, err := a.store.claimAgentPage("agentstub", a.Address, a.Self().Fingerprint(), 0, agentPage)
+			if err != nil || !found || next.ID != second {
+				t.Fatalf("ordinary follow-up was not claimed: %s %v %v", next.ID, found, err)
+			}
+			a.runJob(tctx(t), next, &Responder{Harness: "agentstub", Dir: stub.dir, Timeout: 5 * time.Second}, nil)
+			if state := jobState(t, a, second); state != stateAnswered {
+				t.Fatalf("follow-up ended in %q", state)
+			}
+			if prompt := stub.last(); !strings.Contains(prompt, "Use English instead") || strings.Contains(prompt, "## Explicit queued follow-up") || stub.runs() != 1 {
+				t.Fatal("the ordinary request inherited a handover or ran more than once", stub.runs())
+			}
+		})
+	}
+}
+
+func TestRapidRemoteAskUsesVerifiedLinkedRequesterAndScope(t *testing.T) {
+	w, carol, packet, _ := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	phone, awaited, _ := linkPhone(t, w.alice, "correction-phone")
+	request := pendingLink(t, w.alice)
+	if err := w.alice.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if outcome := <-awaited; outcome.err != nil {
+		t.Fatal(outcome.err)
+	}
+	if err := phone.AcceptGroupContext(tctx(t), packet); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, phone)
+	publishGroupFixtureCaps(t, phone, true)
+	p := p6Member(t, w.alice, w.bob, conv)
+	eventually(t, "phone and other member see participation", func() bool {
+		return pollState(t, phone, p.PID).Claimable() && pollState(t, carol, p.PID).Claimable()
+	})
+	for _, asker := range []*Agent{w.alice, phone, carol} {
+		if err := w.bob.Approve(asker.Address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask := func(asker *Agent, body, topic string) string {
+		t.Helper()
+		id := protocol.NewID()
+		sent, _, err := asker.AskAgentInTopicQueued(tctx(t), id, p.PID, envelope.KindQuestion, body, topic, nil, protocol.NewID(), 0)
+		if err != nil || sent.LID != id {
+			t.Fatalf("ordinary ask from %s: %+v %v", asker.Address, sent, err)
+		}
+		waitState(t, w.bob, id, stateAgentWaiting)
+		return id
+	}
+	first := ask(w.alice, "Compare two colors", "")
+	other := ask(carol, "Describe the sample", "")
+	newTopic := ask(w.alice, "Summarize the notes", protocol.NewID())
+	correction := ask(phone, "Use English instead", "")
+	parent, found, _, _, err := w.bob.store.claimAgentPage("pi", w.bob.Address, w.bob.Self().Fingerprint(), 0, agentPage)
+	if err != nil || !found || parent.ID != first {
+		t.Fatal("wrong original request", parent.ID, found, err)
+	}
+	claim, found, err := w.bob.claimNativeFollowup(parent)
+	if err != nil || !found || claim.ID != correction || claim.From != phone.Address || !w.bob.nativeFollowupCurrent(parent, claim.job) {
+		t.Fatal("exact linked request did not reach its original", claim.ID, found, err)
+	}
+	var independent int
+	if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id IN (?,?) AND queued_followup_parent IS NULL AND state=?`, other, newTopic, stateAgentWaiting).Scan(&independent); err != nil || independent != 2 {
+		t.Fatal("different member or topic lost independent scheduling", independent, err)
 	}
 }

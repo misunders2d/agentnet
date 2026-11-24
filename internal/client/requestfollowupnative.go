@@ -47,16 +47,19 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 	}
 	ready := strings.Replace(requestFollowupReady, "earlier.id<>inbox.id", "earlier.id<>inbox.id AND earlier.id<>?", 1)
 	binding, eligible := `conv=? AND pid=?`, `state IN (?,?)`
-	args := []any{parent.Conv, parent.PID, rootID, rootKey, stateAgentWaiting, stateAccepted, parent.ID}
+	args := []any{parent.Conv, parent.PID, rootID, rootKey, parent.ID, parentAttempt, stateAgentWaiting, stateAccepted, parent.ID}
 	if parent.Conv == "" {
 		if !a.nativeJobCurrentIn(tx, parent, parentAttempt) {
 			return nativeFollowupClaim{}, false, nil
 		}
 		binding = `conv IS NULL AND pid IS NULL AND receiver_route IS NULL AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)`
 		eligible = `(state IN ('pending','accepted') OR attempts=0 AND ((state='held' AND kind='question') OR (state='awaiting' AND kind='task')) AND ` + ownTaskHolds + `)`
-		args = []any{rootID, rootKey, parent.ID}
+		args = []any{rootID, rootKey, parent.ID, parentAttempt, parent.ID}
 	}
-	rows, err := tx.Query(`SELECT id,sender,verified_by,kind,body,coalesce(reply_to,''),coalesce(conv,''),coalesce(pid,''),coalesce(target,''),state,local,coalesce(topic,'') FROM inbox WHERE replica=0 AND `+binding+` AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=? AND `+eligible+` AND `+ready+` ORDER BY arrival LIMIT 50`, args...)
+	rows, err := tx.Query(`SELECT id,sender,verified_by,kind,body,coalesce(reply_to,''),coalesce(conv,''),coalesce(pid,''),coalesce(target,''),state,local,coalesce(topic,'') FROM inbox WHERE replica=0 AND `+binding+` AND id IN (
+		SELECT id FROM inbox WHERE request_followup IS NOT NULL AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=?
+		UNION ALL SELECT id FROM inbox WHERE queued_followup_parent=? AND queued_followup_attempt=? AND steering_parent IS NULL)
+		AND `+eligible+` AND `+ready+` AND (queued_followup_parent IS NULL OR `+queuedFollowupEarlier+`) ORDER BY arrival LIMIT 50`, args...)
 	if err != nil {
 		return nativeFollowupClaim{}, false, err
 	}
@@ -85,15 +88,14 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 				continue
 			}
 		}
-		selected, e := storedRequestFollowup(tx, "in", c.j.ID)
+		selected, e := executionFollowup(tx, c.j.ID)
 		if e != nil {
 			return nativeFollowupClaim{}, false, e
 		}
-		if selected != nil && selected.Attempt > 0 && (selected.Attempt != parentAttempt || parent.nativeAttempt > 0 && selected.Attempt != parent.nativeAttempt) {
+		if selected == nil || selected.Attempt > 0 && (selected.Attempt != parentAttempt || parent.nativeAttempt > 0 && selected.Attempt != parent.nativeAttempt) {
 			continue
 		}
-		ref := envelope.Ref{ID: rootID, Fingerprint: rootKey}
-		original, e := a.followupOriginal(tx, parent.Conv, ref)
+		original, e := a.followupOriginal(tx, parent.Conv, selected.Ref)
 		if e != nil {
 			continue
 		}
@@ -194,7 +196,7 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job, accepted ...bool) 
 			}
 		}
 	}
-	ref, e := storedRequestFollowup(tx, "in", correction.ID)
+	ref, e := executionFollowup(tx, correction.ID)
 	if e != nil || ref == nil {
 		return false
 	}
@@ -293,7 +295,7 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 				if e == nil {
 					// Original text stays admitted once. Its currently permitted
 					// attachments can become ready after launch or initial omission.
-					refresh, e = a.agentContextForRun(info, "", agentContextBytes, cursor, &parentRef, excluded)
+					refresh, e = a.agentContextForRun(info, "", agentContextBytes, cursor, &parentRef, &parent, excluded)
 				}
 				if e != nil {
 					_ = a.endJob(correction.ID, stateNeedHuman, "Fresh authorized conversation evidence could not be selected; nothing was sent into the native run", correction.nativeAttempt)

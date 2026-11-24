@@ -271,7 +271,7 @@ func (a *Agent) QueueRequestFollowup(ctx context.Context, x RequestFollowup) (st
 // requestFollowupPrompt runs after an ordinary claim, before any process launch.
 // A copied original can provide sender UI context but never a local run claim.
 func (a *Agent) requestFollowupPrompt(j job) (string, error) {
-	ref, err := storedRequestFollowup(a.store.db, "in", j.ID)
+	ref, err := executionFollowup(a.store.db, j.ID)
 	if err != nil || ref == nil {
 		return "", err
 	}
@@ -318,7 +318,10 @@ func (a *Agent) requestFollowupPrompt(j job) (string, error) {
 	if b.Len() > maxContext {
 		return "", errors.New("follow-up context exceeds the bounded limit; review it manually")
 	}
-	rows, err := a.store.db.Query(`SELECT body,state,sender,coalesce(verified_by,''),kind,coalesce(pid,''),coalesce(topic,''),coalesce(target,''),coalesce(detail,'') FROM inbox WHERE coalesce(conv,'')=? AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=? AND arrival<(SELECT arrival FROM inbox WHERE id=?) AND replica=0 AND coalesce(sub,'')='' ORDER BY arrival LIMIT 65`, j.Conv, ref.ID, ref.Fingerprint, j.ID)
+	rows, err := a.store.db.Query(`SELECT body,state,sender,coalesce(verified_by,''),kind,coalesce(pid,''),coalesce(topic,''),coalesce(target,''),coalesce(detail,'') FROM inbox WHERE coalesce(conv,'')=? AND id IN (
+		SELECT id FROM inbox WHERE request_followup IS NOT NULL AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=?
+		UNION ALL SELECT id FROM inbox WHERE queued_followup_parent=? AND queued_followup_attempt=?)
+		AND arrival<(SELECT arrival FROM inbox WHERE id=?) AND replica=0 AND coalesce(sub,'')='' ORDER BY arrival LIMIT 65`, j.Conv, ref.ID, ref.Fingerprint, actual, ref.Attempt, j.ID)
 	if err != nil {
 		return "", err
 	}
@@ -361,7 +364,7 @@ func (a *Agent) requestFollowupPrompt(j job) (string, error) {
 }
 
 func (a *Agent) requestFollowupFiles(ctx context.Context, j job) string {
-	ref, err := storedRequestFollowup(a.store.db, "in", j.ID)
+	ref, err := executionFollowup(a.store.db, j.ID)
 	if err != nil || ref == nil {
 		return ""
 	}

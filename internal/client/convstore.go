@@ -338,6 +338,9 @@ func addConvInboxTx(tx *sql.Tx, st txStmts, in envelope.Inner, verifiedBy, state
 	if _, err := st.exec(tx, eraseArrival, in.ID); err != nil { // a turn deleted here keeps no text (convclear.go)
 		return "", false, err
 	}
+	if err := bindQueuedFollowup(tx, in, verifiedBy, state); err != nil {
+		return "", false, err
+	}
 	if fromQuarantine {
 		if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
 			return "", false, err

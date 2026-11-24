@@ -1,5 +1,52 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-777 remote follow-up before a running status arrives
+
+Two ordinary tagged asks from the same requester reach a disposable group
+host before it claims the first. At `aa58315f` the native watcher cannot claim
+the second. v0.11.7 restores explicit steering of a running continuation of
+finished work. The rapid-send case is the limit documented in v0.11.3.
+[v0.11.3 notes](https://github.com/misunders2d/agentnet/releases/tag/v0.11.3),
+[v0.11.7 notes](https://github.com/misunders2d/agentnet/releases/tag/v0.11.7).
+
+Codex records submitted input while it is waiting for the turn-start event,
+tracks queued input and pending steering, and requires the expected turn ID
+when delivering a steer. Claude Code documents submitting to an exact active
+cloud session without waiting for a reply. AgentNet reuses its own event-driven
+queue, exact native attempt, bridge acknowledgment and next-turn context.
+The host adds a local binding after signed admission when exactly one earlier
+request matches the verified requester, question or task kind, chat, topic and
+agent. Signed message and history bytes stay intact. The host waits for native
+acknowledgment before reporting steering. An uncertain handover retains the
+existing no-replay rule. SQLite's query plan uses the active-scope index for
+parent selection. [Codex queue at `2ee23c7f`](https://github.com/openai/codex/blob/2ee23c7f8fc886dd274d4d6e923430f6680d7708/codex-rs/tui/src/chatwidget/input_queue.rs),
+[Codex exact turn at `2ee23c7f`](https://github.com/openai/codex/blob/2ee23c7f8fc886dd274d4d6e923430f6680d7708/codex-rs/core/src/session/turn_input.rs),
+[Claude Code follow-ups](https://code.claude.com/docs/en/claude-code-on-the-web#send-follow-ups-from-the-cli).
+
+`TestBackToBackRemoteAsksReachOneNativeRun` covers Pi and Claude protocol
+fixtures, signed requester status, and the real AgentNet worker with a mock
+Codex subprocess. Queue refusal runs once with the original context in the
+existing scheduler. A linked requester device matches the same person and
+the other member and topic retain independent scheduling. These fixtures run
+on a local Hub with disposable identities. Installed harnesses, real models
+and the reported host were outside the fixture.
+
+If the original stops or finishes a different attempt after a helper wait,
+the next ordinary request runs once without inheriting that attempt's
+context. The same claim-time checks authorize it. The regression exercises
+both cases through the worker and confirms its fresh prompt. Both failed
+on the first candidate by ending in Needs human.
+
+`TestRapidRemoteAskFeedbackRendered` exercises the existing Comic composer
+at 1280 and 390 pixels with 100 and 1,000 retained rows. The fixture holds each
+send reply for 1,250 ms and pushes incoming updates every 250 ms. The two
+pending messages appear once each, and the newer draft and focus survive
+settlement. Local feedback took 59–112 ms with the archived v0.11.7 bundle and
+71–138 ms in the candidate run. The second candidate send took 2,344–2,449 ms
+to render the fixture's steering acknowledgment. The base and candidate
+runs used identical UI bytes and synthetic acknowledgment. Signed host
+delivery and native input are covered by the separate Go fixtures.
+
 ## Send path: stored at once, sent at once — unreleased, November 18, 2026
 
 Owner: sent messages took dozens of seconds to actually send. This branch

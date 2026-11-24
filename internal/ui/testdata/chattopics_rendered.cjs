@@ -14,6 +14,7 @@ const renamedMode=${!!process.env.P28_RENAMED_ONLY};
 const searchMode=${!!process.env.AGENTNET_ALL_STATUS_SEARCH};
 const stopMode=${!!process.env.P11_STOP_ONLY},draftsMode=${!!process.env.P11_DRAFTS_ONLY},pendingMode=${!!process.env.P11_PENDING_ONLY},importMode=${!!process.env.P11_HISTORY_IMPORT_ONLY};
 const stopResultMode=${!!process.env.P11_STOP_RESULT_ONLY};
+const rapidAskRows=Number(new URL(location).searchParams.get('rapidAskRows'));
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
 const person=(label,address,key)=>({person:label.toLowerCase().padEnd(32,'a'),label,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
 const me=person(renamedMode||directMode?'Atlas':'Sergey',renamedMode||directMode?'atlas/laptop':'sergey/laptop',directMode?'11111111-11111111-11111111-11111111':'own-key'),peer=person(renamedMode||directMode?'Briar':'Vitalii',renamedMode||directMode?'briar/desktop':'vitalii/desktop',directMode?'22222222-22222222-22222222-22222222':'peer-key');me.state='self';
@@ -51,10 +52,18 @@ if(importMode){
  overview.dms.push({id:destination.id,kind:'group',title:destination.title,peer:destination.peer,count:0,unread:0},{id:'e'.repeat(64),kind:'group',title:'Frozen archive',peer:{label:'Frozen archive',address:'',state:''},frozen:'frozen',count:0});
 }
 if(draftsMode)overview.files={max_file:1048576,max_message:2097152,max_count:8};
+const rapidPID='8'.repeat(32),rapidAgent='7'.repeat(32);
+if(rapidAskRows){
+ thread.agents=[{pid:rapidPID,agent_id:rapidAgent,host:peer,name:'Fixture Pi',member:true,state:'active',state_text:'Active',inviter:me,invited:at,host_here:false,can_ask:true,shared:[],held:0,missing:0}];
+ thread.messages=[main,...Array.from({length:rapidAskRows-1},(_,i)=>({...main,id:(i+128).toString(16).padStart(32,'0'),lid:(i+128).toString(16).padStart(32,'0'),body:'Retained message '+i}))];
+ overview.dms[0].count=rapidAskRows;
+}
 window.fixture={overview,thread,requests:[],topics,destination,previews:0,shares:{},directMessages:topics.map((_,i)=>({...message(i),placement:topics[i].id})),directOperations:{}};
 const updateDirect=()=>{for(const t of topics)t.count=fixture.directMessages.filter(m=>m.placement===t.id).length;overview.threads=topics.filter(t=>t.count>0);for(const scope of overview.topics)scope.total=overview.threads.filter(t=>t.agent_host===scope.agent_host&&t.agent_key===scope.agent_key&&t.agent_id===scope.agent_id).length;};
 fixture.topicCatalog=[...topics,{...topics[0],id:'f'.repeat(32),conv:'d'.repeat(64),peer:'outside/host',title:'needle unauthorized scope'}];let open,changed;
 window.refreshFixture=()=>changed?.({type:'change',seq:++overview.seq});
+window.rapidAskSync=()=>{const id=(100000+overview.seq).toString(16).padStart(32,'0');thread.messages.push({...main,id,lid:id,body:'Concurrent sync '+overview.seq,at:new Date().toISOString()});refreshFixture();};
+window.confirmRapidAsk=()=>{const [first,second]=thread.messages.filter(m=>m.kind==='question');first.exec={...first.exec,state:'running',attempt:1};second.exec={...second.exec,state:'steered',attempt:1};refreshFixture();};
 
 window.confirmStop=()=>{thread.messages[0].exec.state="cancelled";delete thread.messages[0].stop;if(stopResultMode)sessionStorage.setItem('confirmedStop','1');changed?.({type:"change",seq:++overview.seq});};
 window.replyStop=(state,refused='',execAttempt=2)=>{const m=thread.messages[0],result={decision:sessionStorage.getItem('stopDecision')||'8'.repeat(32),state,refused,at:1792501200};sessionStorage.setItem('stopResponse',JSON.stringify(result));m.exec={...m.exec,state:'running',attempt:execAttempt,stale:state!=='running'&&execAttempt===2};m.stop={host:peer.address,id:topics[0].id,key:me.fingerprint,attempt:2,pending:false,result};changed?.({type:'change',seq:++overview.seq});};
@@ -63,8 +72,14 @@ const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local 
  fixture.requests.push({path:p,body});const url=new URL(p,location.origin);
  if(stopMode&&p==='/api/operator/decide'){sessionStorage.setItem('stopQueued','1');if(stopResultMode){sessionStorage.setItem('stopDecision',body.send_id);sessionStorage.setItem('stopDecisionCount',String(Number(sessionStorage.getItem('stopDecisionCount')||0)+1));}thread.messages[0].stop.pending=true;changed?.({type:'change',seq:++overview.seq});return {note:'Stop queued; host offline.'};}
  if(p.startsWith('/api/overview'))return structuredClone(overview);
+ if(rapidAskRows&&p.startsWith('/api/agents'))return {host:peer.address,local:false,agents:[{record:{id:rapidAgent,host:peer.address,host_key:peer.fingerprint,label:'Fixture Pi',harness:'pi'},enabled:true}],sessions:[]};
  if(draftsMode&&p.startsWith('/api/dm?')&&url.searchParams.get('id')==='d'.repeat(64))return {...thread,id:'d'.repeat(64),messages:[],topics:[]};
  if(p.startsWith('/api/dm?')){if(pendingMode&&kind==='agent'&&fixture.holdUnrelatedDM)await new Promise(resolve=>fixture.releaseUnrelatedDM=resolve);return structuredClone(importMode&&url.searchParams.get('id')===destination.id?destination:thread);}
+ if(rapidAskRows&&p==='/api/dm/agent/ask'){
+  await new Promise(resolve=>setTimeout(resolve,1250));
+  thread.messages.push({...main,id:body.id,lid:body.id,from:me.address,dir:'out',kind:'question',body:body.body,pid:body.pid,target:{address:peer.address,fingerprint:peer.fingerprint,agent_id:rapidAgent},at:new Date().toISOString(),exec:{state:'queued',host:peer.address}});
+  refreshFixture();return {id:body.id,lid:body.id,state:'delivered'};
+ }
  if(directMode&&p.startsWith('/api/thread?')){const id=url.searchParams.get('id'),m=fixture.directMessages.find(m=>m.id===id),topic=topics.find(t=>t.id===(m?.placement||id));return {...thread,id,topic:structuredClone(topic),messages:structuredClone(fixture.directMessages.filter(m=>m.placement===topic.id))};}
  if(directMode&&p.startsWith('/api/topics?')){const fields=['agent_host','agent_key','agent_id'],rows=topics.filter(t=>t.count>0&&t.peer===url.searchParams.get('peer')&&fields.every(key=>!url.searchParams.has(key)||(t[key]||'')===url.searchParams.get(key)));return {topics:structuredClone(rows),matched:rows.length};}
  if(p.startsWith('/api/thread?')){if(pendingMode||stopMode)return structuredClone(thread);const t=topics.find(t=>t.id===url.searchParams.get('id'))||topics[0];return {id:t.id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:structuredClone(t),messages:[t.id==='f'.repeat(32)?window.freshMessage:{...message(topics.indexOf(t))}]};}
@@ -125,7 +140,8 @@ const server = http.createServer((req, res) => {
     await new Promise(r => server.listen(0, '127.0.0.1', r));
     const origin = 'http://127.0.0.1:' + server.address().port;
     browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
-    for (const skin of (process.env.P11_SKINS||'comic').split(',')) for (const kind of (process.env.DIRECT_AGENT_ORGANIZE_ONLY?['agent']:(process.env.P11_ORGANIZE_ONLY||process.env.P11_HISTORY_IMPORT_ONLY||process.env.P11_DRAFTS_ONLY||process.env.P11_MENTIONS_ONLY)?['dm','group']:(process.env.P11_PENDING_ONLY||process.env.P11_STOP_ONLY)?['group','agent']:['dm', 'group', 'agent'])) for (const width of [1280, 390]) {
+    const rapid=!!process.env.P11_RAPID_ASK_ONLY;
+    for (const skin of (process.env.P11_SKINS||'comic').split(',')) for (const kind of (rapid?['group']:process.env.DIRECT_AGENT_ORGANIZE_ONLY?['agent']:(process.env.P11_ORGANIZE_ONLY||process.env.P11_HISTORY_IMPORT_ONLY||process.env.P11_DRAFTS_ONLY||process.env.P11_MENTIONS_ONLY)?['dm','group']:(process.env.P11_PENDING_ONLY||process.env.P11_STOP_ONLY)?['group','agent']:['dm', 'group', 'agent'])) for (const width of [1280, 390]) for (const rows of (rapid?[100,1000]:[0])) {
       const tag = skin + '-' + kind + '-' + width;
       const ctx = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width < 500, reducedMotion: 'reduce' });
       await ctx.route('**/*', r => new URL(r.request().url()).origin === origin ? r.continue() : r.abort());
@@ -135,9 +151,44 @@ const server = http.createServer((req, res) => {
       const changed = () => page.evaluate(() => fixture.requests.filter(r => r.path.startsWith('/api/topic/') && r.path !== '/api/topic/transfer/location'));
       const all = () => page.getByRole('button', { name: process.env.P11_HISTORY_IMPORT_ONLY ? /^All topics/ : /^All(?: topics| \d|$)/ }).first();
       try {
-        await page.goto(origin + '/?skin=' + skin + '&kind=' + kind);
+        await page.goto(origin + '/?skin=' + skin + '&kind=' + kind + '&rapidAskRows=' + rows);
         await page.waitForFunction(() => window.ready); await page.evaluate(() => openChat());
         await all().waitFor();
+        if(rapid){
+          const composer=page.getByRole('form',{name:'Write a message'}),field=composer.getByRole('textbox');
+          const send=async body=>{
+            await field.fill(body);
+            await composer.getByRole('button',{name:'Mention someone',exact:true}).click();
+            await page.getByRole('option').filter({hasText:'Fixture Pi'}).click();
+            const button=composer.getByRole('button',{name:/^Ask /});await button.waitFor();
+            const row=page.locator('[data-mid]').filter({hasText:body});
+            const start=performance.now();
+            await button.click();
+            await row.waitFor({timeout:1100});
+            const local=Math.round(performance.now()-start);
+            assert.ok(local<1100,tag+' pending send '+local+' ms');
+            assert.equal(await row.count(),1);
+            assert.equal(await field.inputValue(),'','draft clears when pending row appears');
+            return {row,local,start};
+          };
+          await page.evaluate(()=>window.rapidSyncTimer=setInterval(rapidAskSync,250));
+          const first=await send('Compare the sample colors');
+          const second=await send('Use English in the comparison');
+          await field.fill('Keep the newer draft');await field.focus();
+          await page.waitForFunction(()=>fixture.thread.messages.filter(m=>m.kind==='question').length===2);
+          const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask'||r.path==='/api/request/followup'));
+          assert.deepEqual(calls.map(r=>r.path),['/api/dm/agent/ask','/api/dm/agent/ask']);
+          assert.equal(calls[0].body.pid,calls[1].body.pid);assert.notEqual(calls[0].body.id,calls[1].body.id);
+          assert.equal(await second.row.getByText('Accepted into current run',{exact:true}).count(),0);
+          await page.evaluate(()=>{clearInterval(window.rapidSyncTimer);confirmRapidAsk();});
+          await second.row.getByText('Accepted into current run',{exact:true}).waitFor();
+          const confirmed=Math.round(performance.now()-second.start);
+          assert.equal(await second.row.count(),1);assert.equal(await field.inputValue(),'Keep the newer draft');
+          assert.equal(await field.evaluate(el=>el.getRootNode().activeElement===el),true);
+          await shot('rapid-ask-'+rows);
+          console.log('PASS rapid asks '+tag+' '+JSON.stringify({rows,firstLocalMs:first.local,secondLocalMs:second.local,secondConfirmedMs:confirmed}));
+          combinations++;await ctx.close();continue;
+        }
         if (kind !== 'agent' && !process.env.P11_PENDING_ONLY && !process.env.P11_STOP_ONLY) {
           await page.getByText('Quick main flow message', { exact: false }).first().waitFor();
           assert.equal(await page.getByText('Topic 1 message', { exact: false }).isVisible(), false, tag + ': topic is separate from main');
