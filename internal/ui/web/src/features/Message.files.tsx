@@ -353,14 +353,17 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   const generation = useRef(0);
   const mounted = useRef(true);
   const pending = useRef(false);
+  const startPaused = useRef(false);
   const [url, setURL] = useState("");
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [playAfterDownload, setPlayAfterDownload] = useState(false);
   const [note, setNote] = useState("");
   const [expanded, setExpanded] = useState<VideoPlace | null>(null);
   const download = useDownload(m, f);
   const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
   const key = pictureKey(m, f);
   const here = download.phase === "here";
+  const opening = phase === "loading" || playAfterDownload;
   const frame = useRef<HTMLElement | null>(null);
   const [poster, setPoster] = useState<Poster | null>(() => posters.get(key) || null);
   useEffect(() => {
@@ -371,7 +374,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   // here; nothing else waits for it.
   useEffect(() => {
     const el = frame.current;
-    if (!el || !here || !inline || poster) return;
+    if (!el || !here || !inline || poster || opening) return;
     let alive = true;
     const io = new IntersectionObserver((seen) => {
       if (!seen.some((s) => s.isIntersecting)) return;
@@ -380,7 +383,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
     }, { rootMargin: "200px" });
     io.observe(el);
     return () => { alive = false; io.disconnect(); };
-  }, [key, here, inline, !!poster, !!url]);
+  }, [key, here, inline, !!poster, !!url, opening]);
 
   function release(reset = true) {
     generation.current++;
@@ -388,7 +391,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
     const video = media.current;
     if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
     if (owned.current) { URL.revokeObjectURL(owned.current); owned.current = ""; }
-    if (mounted.current) setExpanded(null);
+    if (mounted.current) { setExpanded(null); setPlayAfterDownload(false); }
     if (reset && mounted.current) { setURL(""); setPhase("idle"); setNote(""); }
   }
   // Where native fullscreen is off (the Linux app), the window-size view.
@@ -431,7 +434,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
     };
   }, [store]);
   useEffect(() => {
-    if (!url || !media.current || leavingRef.current) return;
+    if (!url || !media.current || leavingRef.current || startPaused.current) return;
     const visit = generation.current;
     // This follows an explicit Play click; async decrypt may consume its
     // transient activation. Keep controls for a second native Play tap.
@@ -441,7 +444,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
       else failed("This video can’t be played here. Download to play it.");
     });
   }, [url]);
-  async function open() {
+  async function open(paused = false) {
     if (!inline || leavingRef.current || pending.current || owned.current || document.hidden || store.api.host.android?.visible() === false) return;
     const visit = ++generation.current;
     pending.current = true; setPhase("loading"); setNote("Loading video…");
@@ -460,38 +463,52 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
       const blob = new Blob([b as BlobPart], { type });
       b = new Uint8Array(0);
       owned.current = URL.createObjectURL(blob);
-      setURL(owned.current); setPhase("ready"); setNote("");
+      startPaused.current = paused;
+      setURL(owned.current); setPhase("ready"); setNote(paused ? "Tap Play in the video controls to start." : "");
     } catch (e) {
       if (mounted.current && !leavingRef.current && generation.current === visit) failed(errorText(e));
     } finally { if (generation.current === visit) pending.current = false; }
   }
+  // A Play tap on Android can request the same download as the file chip.
+  // Keep the intent on this card only. A completed download can outlive it.
+  const deferred = store.api.host.platform === "android" && inline && !here && download.phase !== "gone";
+  function play() {
+    if (here) { void open(); return; }
+    if (!deferred || playAfterDownload || leavingRef.current || document.hidden || store.api.host.android?.visible() === false) return;
+    setPlayAfterDownload(true);
+    if (download.phase !== "fetching") download.start();
+  }
+  useEffect(() => {
+    if (!playAfterDownload) return;
+    if (here) { setPlayAfterDownload(false); void open(true); }
+    else if (download.phase !== "fetching") setPlayAfterDownload(false);
+  }, [playAfterDownload, download.phase]);
+
   // The card's frame: the poster (or a plain dark frame while it is made, or
-  // when none could be), with Play over it when this device can play the
-  // file here, as Telegram draws a video's thumbnail with its Play/Download
-  // in the middle (5ff61571 history_view_gif.cpp 794–871). A file still to
-  // download, or too big to play here, keeps the frame without Play; its
-  // Download and notes are the ones below, as before.
+  // when none could be), with Play over it when this device can open the
+  // video, as Telegram draws Play/Download in the middle of its thumbnail
+  // (5ff61571 history_view_gif.cpp 794–871).
   const still = poster?.url || "";
   const ratio = still && poster ? poster.width / poster.height : 16 / 9;
   const frameStyle = { aspectRatio: still && poster ? poster.width + " / " + poster.height : "16 / 9", width: still ? "min(100%, calc(min(60dvh, 480px) * " + ratio.toFixed(4) + "))" : "min(360px, 100%)" };
   const frameClass = "relative block max-w-full overflow-hidden rounded-xl border border-outline/30 bg-black text-white";
-  const playable = here && inline;
-  const preparing = playable && !poster;
+  const playable = (here && inline) || deferred;
+  const preparing = here && inline && !poster;
   const face = <>
     {still && <img src={still} alt="" draggable={false} decoding="async" className="absolute inset-0 size-full object-contain" />}
     {preparing && <span className="absolute inset-0 animate-pulse bg-white/10 motion-reduce:animate-none" />}
     {!playable && <span className="absolute inset-0 grid place-items-center text-white/70"><IconMovie size={32} stroke={1.5} /></span>}
   </>;
-  const posterState = still ? "ready" : preparing ? "loading" : playable ? "none" : "waiting";
+  const posterState = still ? "ready" : preparing ? "loading" : here && inline ? "none" : "waiting";
   return (
     <div role="group" aria-label={"Video " + f.name} className="w-full min-w-0 max-w-[480px] space-y-1.5">
       {url ? null : playable
-        ? <button ref={(el) => { frame.current = el; }} type="button" aria-label={"Play video " + f.name} title={"Play " + f.name} aria-busy={phase === "loading" || undefined}
-            data-poster={posterState} onClick={() => void open()} className={frameClass + " group"} style={frameStyle}>
+        ? <button ref={(el) => { frame.current = el; }} type="button" aria-label={"Play video " + f.name} title={"Play " + f.name} aria-busy={opening || undefined}
+            data-poster={posterState} onClick={play} className={frameClass + " group"} style={frameStyle}>
             {face}
             <span className="absolute inset-0 grid place-items-center">
               <span className="grid size-14 place-items-center rounded-full bg-black/60 shadow-lg transition-transform duration-150 group-hover:scale-105 motion-reduce:transition-none">
-                {phase === "loading" ? <IconLoader2 size={26} className="animate-spin motion-reduce:animate-none" /> : <IconPlayerPlayFilled size={26} className="translate-x-px" />}
+                {opening ? <IconLoader2 size={26} className="animate-spin motion-reduce:animate-none" /> : <IconPlayerPlayFilled size={26} className="translate-x-px" />}
               </span>
             </span>
           </button>
@@ -501,10 +518,10 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
         className="block max-h-[min(60dvh,480px)] w-full rounded-xl bg-black object-contain"
         onError={() => { if (owned.current) failed("This video can’t be played here. Download to play it."); }} />}
       <FileChip m={m} f={f} />
-      {!here ? null : inline ? (phase === "loading" || phase === "ready") && <div className="flex flex-wrap items-center gap-2">
+      {inline ? (opening || phase === "ready") && <div className="flex flex-wrap items-center gap-2">
         <Button className="min-h-11" aria-label={"Close video " + f.name} onClick={() => release()}>Close video</Button>
         {phase === "ready" && !document.fullscreenEnabled && <Button className="min-h-11" aria-label={"Expand video " + f.name} onClick={expand}>Expand</Button>}
-      </div> : <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
+      </div> : here && <p className="text-[12px] text-muted">{f.size > INLINE_VIDEO_LIMIT ? "Videos up to 16 MiB can play here." : "This video’s size is unknown."} Download to play this file.</p>}
       {note && <p role="status" className="text-[13px] text-text-2">{note}</p>}
       {url && expanded && <VideoViewer src={url} name={f.name} from={expanded} onClose={collapse} />}
     </div>

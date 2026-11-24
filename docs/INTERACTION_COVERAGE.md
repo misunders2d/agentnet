@@ -446,6 +446,32 @@ new macOS WebKit CI step (`AGENTNET_VIDEO_ENGINES=webkit`). Not run: the Linux
 app's WebKitGTK webview (capture uses Play's interleaved bytes there),
 macOS/Windows/Android shells, physical devices.
 
+## MEL-751 Play a deferred video on Android
+
+At `aa58315f`, Comic hid Play while the attachment was waiting. Android
+therefore offered only Download for the reported 12.3 MB MP4. AgentNet's
+`internal/client/filewait.go` defers videos over 10 MiB, and Comic can play
+verified video bytes up to 16 MiB in its existing player.
+
+Reused the inspected Telegram Desktop `5ff61571` thumbnail action
+(`history/view/media/history_view_gif.cpp` 828–871) and the explicit
+download threshold based on Telegram Android `3de37c8c`
+(`DownloadController.java`). On Android, Play for a deferred, eligible
+video starts the same fetch as Download and shows its progress at once.
+The player opens paused after the verified read. Closing the pending
+player drops that card's playback request while the download continues.
+Offline and failed downloads keep Retry. Decode errors keep Download.
+
+`TestAndroidDeferredVideoRendered` failed at the missing Play control on
+the base and passed with the fix. In 390 px Chromium with the Android
+bridge simulated, the 12 MiB H.264 MP4 showed progress in 80 ms during a
+held fetch. The test also covered offline retry, one read after completion,
+paused start, playback, pause, seeking, and Back from the in-app expanded
+view with draft and scroll intact. The sent MP4 decoded in the same
+fixture. `TestImageViewerRendered`, `TestInlineVideoPolicies`, and
+`TestFileFetchRoutes` passed. Native Android WebView playback, codec
+coverage, and native fullscreen/Back remain unverified.
+
 ## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
 
 Not qualified, not released, pre-CI hold. Focused evidence only.
