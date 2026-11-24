@@ -126,8 +126,21 @@ async function checkStatusPopups({browser, origin, width, count, fixture, eviden
     assert.deepEqual(retry.body, attempt.body);
     await working.waitFor();
     while (await page.evaluate(() => performance.now()) - retryStart < 1150) await frame();
+    // Keep the next success toast alive for the Escape ordering checks. Those
+    // checks test dismissal priority, independently of the real expiry timer.
+    await page.evaluate(() => {
+      const schedule = window.setTimeout;
+      window.statusPriority = {noticeAt: null, escape: null};
+      window.setTimeout = (callback, delay, ...args) => {
+        if (delay !== 3500) return schedule.call(window, callback, delay, ...args);
+        window.setTimeout = schedule;
+        window.statusPriority.noticeAt = performance.now();
+        return schedule.call(window, () => {}, delay);
+      };
+    });
     retry.resolve(true);
     await edited.waitFor();
+    assert(await page.evaluate(() => window.statusPriority.noticeAt !== null), 'success toast expiry is held for the priority check');
     await row.getByText('Keep this exact edit').waitFor();
     timings.editConfirmed = Math.ceil(await frame() - retryStart);
     assert(timings.editConfirmed >= 1150, 'edit confirmation was intentionally held past the local feedback bound');
@@ -141,10 +154,24 @@ async function checkStatusPopups({browser, origin, width, count, fixture, eviden
     assert(await edited.isVisible(), 'the foreground sheet gets Escape before a status');
     await openMessageActions();
     await click(sheet.getByRole('button', {name: 'Select', exact: true}));
-    await page.getByRole('button', {name: 'Stop selecting'}).waitFor();
+    const stopSelecting = page.getByRole('button', {name: 'Stop selecting'});
+    await stopSelecting.waitFor();
+    await sheet.waitFor({state: 'hidden'});
+    assert(await edited.isVisible(), 'both selection and success toast are present before Escape');
+    await page.evaluate(() => {
+      window.addEventListener('keydown', () => {
+        const root = document.querySelector('#skin').shadowRoot;
+        const state = window.statusPriority;
+        state.escape = {noticeAgeMs: Math.round(performance.now() - state.noticeAt),
+          selection: !!root.querySelector('[data-message-selection]')?.getClientRects().length};
+      }, {capture: true, once: true});
+    });
     await page.keyboard.press('Escape');
+    await stopSelecting.waitFor({state: 'detached'});
     await field.waitFor();
-    assert(await edited.isVisible(), 'message selection gets Escape before a status');
+    const escape = await page.evaluate(() => window.statusPriority.escape);
+    assert(escape?.selection, 'selection is still present when Escape starts');
+    assert(await edited.isVisible(), 'message selection gets Escape before a status: ' + JSON.stringify(escape));
     await dismiss(edited, 'okDismiss', 'Dismiss status');
 
     fixture.holdDM = true;

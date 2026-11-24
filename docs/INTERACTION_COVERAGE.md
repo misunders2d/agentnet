@@ -3410,8 +3410,12 @@ The mention picker opened in 80–98 ms and notification Retry showed Opening in
 appeared in 710–730 ms. The retried edit was confirmed in 1,238–1,285 ms with
 its server response deliberately held for at least 1,150 ms. Every local
 measurement was below 1,100 ms. These were serial fixture runs on a shared host.
-Physical phone, native webviews, other skins and release qualification remain
-open.
+The Escape ordering check holds the success toast's expiry so the popup and
+selection are both present at keydown. It records selection and toast age at
+dispatch, then checks that Escape clears the selection while leaving the toast
+visible. That fixture adjustment and the navigation and notification-landing
+tests passed three consecutive runs. Physical phone, native webviews and
+integrated skin qualification remain open.
 
 ## Composer emoji button and Twemoji (November 20, 2026)
 
