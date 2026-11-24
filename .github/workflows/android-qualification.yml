@@ -11,7 +11,7 @@ on:
         type: string
         required: true
       latency_suites:
-        description: Optional comma-separated affected workloads; empty keeps all seventeen
+        description: Optional comma-separated affected workloads; empty keeps all workloads
         type: string
         default: ''
   workflow_call:

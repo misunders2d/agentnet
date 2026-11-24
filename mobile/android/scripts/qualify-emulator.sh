@@ -6,7 +6,7 @@ set -euo pipefail
 : "${RUNNER_TEMP:?}"
 : "${AGENTNET_ANDROID_FIXTURE_DIR:?}"
 # Optional affected-workload reruns retain the complete default qualification.
-all_suites=(history navigation settings unread actions topics groups compose review outbox agents teams profile storage workspaces permissions media)
+all_suites=(history navigation settings unread actions topics groups compose review outbox agents teams profile storage workspaces permissions media video)
 suites=("${all_suites[@]}")
 if [[ -n ${AGENTNET_ANDROID_LATENCY_SUITES:-} ]]; then
   selection=$AGENTNET_ANDROID_LATENCY_SUITES
@@ -31,6 +31,11 @@ package=io.github.misunders2d.agentnet.preview
 runner="$package.test/io.github.misunders2d.agentnet.UpdaterInstrumentation"
 stop_fixture() {
   timeout --signal=KILL 20s adb -s "$serial" shell am force-stop "$package"
+}
+stop_fixture_before_notices() {
+  stop_fixture || return
+  # Drain the package-restart broadcast before the next fixture posts notices.
+  timeout --signal=KILL 30s adb -s "$serial" shell am wait-for-broadcast-idle --flush-broadcast-loopers
 }
 capture_hang() {
   local mode=$1 suite=$2 status=0
@@ -130,15 +135,12 @@ capture_rate() {
     python3 mobile/android/scripts/notification-cancellations.py > "$RUNNER_TEMP/android-notification-cancellations-$1.txt" || true
 }
 trap 'capture_rate final' EXIT
-stop_fixture
+stop_fixture_before_notices
 if ! instrument notifications "$RUNNER_TEMP/android-notifications.txt"; then failed=1; fi
 capture_rate notifications
 # NotificationManager state outlives an instrumentation invocation. Isolate
 # the next matrix on this CI/qemu-only fixture without changing saved data.
-stop_fixture
-# Drain the package-restart broadcast so force-stop cannot cancel the next
-# fixture's newly posted notices (Android's REASON_PACKAGE_CHANGED).
-timeout --signal=KILL 30s adb -s "$serial" shell am wait-for-broadcast-idle --flush-broadcast-loopers
+stop_fixture_before_notices
 if ! instrument indicators-video "$RUNNER_TEMP/android-indicators-video.txt"; then failed=1; fi
 capture_rate indicators
 # Prove the refused-notification path before any decoder workload can wedge

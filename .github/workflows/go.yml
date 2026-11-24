@@ -50,7 +50,7 @@ on:
         type: boolean
         default: false
       android_suites:
-        description: 'Optional comma-separated affected Android workloads; empty keeps all seventeen'
+        description: 'Optional comma-separated affected Android workloads; empty keeps all workloads'
         type: string
         default: ''
       platform_only:
