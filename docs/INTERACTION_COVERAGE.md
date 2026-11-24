@@ -402,6 +402,48 @@ request (Composer.followup.ts already accepts needs_human) is not exercised; CLI
 wording; device-thread review rows (`review[]` carries no state); latency
 measurement; agentnet-skins collection skins.
 
+## MEL-816 linked clarification in a Done topic
+
+The request status and **Pending requests** use the existing exact reply
+index and execution projection. The linked Pi clarification remains
+available through **View reply**. While waiting, the person who asked sees
+**Needs you** and other viewers see **Needs a person**. Host confirmation
+changes the status to **Resolved**. A later verified final answer shows
+**Answered**. The topic stays **Done** throughout.
+
+The existing F02 counterpart evidence applies to **Mark as handled**:
+Telegram Web A `f67a408`, `toggleReaction` in
+`src/global/actions/api/reactions.ts:234–272`, applies local feedback and
+reconciles with the authoritative update. AgentNet keeps its existing
+exact-request resolution path. The Pending sheet and both navigation
+controls use the already loaded chat. The request follows the host's
+execution update separately from the topic's closure.
+
+`TestLinkedNeedsHumanRequestRendered` extends the production Comic
+person-topic fixture. On Linux Chromium 155, fresh 1280×900 and 390×900
+contexts loaded 100 or 1,000 retained topic messages. With a chat sync read
+held, trusted clicks opened **Show pending requests**, selected the exact
+pending row, and jumped to the linked reply. Timings run from the click to
+the frame following visible sheet or target-highlight feedback. The last
+column starts at the fixture's exact host settlement and read release, and
+ends on the frame following removal of the row in the open sheet. Milliseconds,
+one sample per cell, base `aa58315f` → candidate:
+
+| View width / retained messages | Open sheet | Open request | View reply | Settled update |
+| --- | ---: | ---: | ---: | ---: |
+| 1280 / 100 | 25 → 26 | 29 → 29 | 28 → 27 | 25 → 32 |
+| 1280 / 1,000 | 27 → 24 | 28 → 27 | 28 → 25 | 33 → 44 |
+| 390 / 100 | 27 → 26 | 29 → 29 | 27 → 23 | 26 → 25 |
+| 390 / 1,000 | 26 → 25 | 27 → 29 | 31 → 31 | 32 → 24 |
+
+All local samples met the <1100 ms bound. The base showed **Answered**
+for the clarification before and after resolution and said the pending
+item kept the Done topic open. The candidate corrected both labels and the
+copy. The open Pending sheet cleared on settlement, its menu item
+disappeared, and **View reply** remained available. Desktop and narrow
+sheet captures were inspected. The held sync and settlement are provider
+fixtures. Physical clients, relay timing and other skins were outside this run.
+
 ## MEL-750 video posters — unreleased, November 9, 2026
 
 Owner: "video upload should show a preview or something." A video was a

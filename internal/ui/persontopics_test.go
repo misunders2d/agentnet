@@ -46,3 +46,16 @@ func TestPersonTopicUnreadRendered(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestLinkedNeedsHumanRequestRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed Playwright")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/person_topics_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_LINKED_NEEDS_HUMAN=1", "AGENTNET_LINKED_BASELINE=0", "PERSON_TOPIC_SKINS=comic")
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.Count(string(out), " PASS") != 4 {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Log(string(out))
+}

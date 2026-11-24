@@ -299,7 +299,8 @@ function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChan
   const view = useStore(store, s => s.views[topic.conv || topic.id]);
   const overview = useStore(store, s => s.overview);
   return <Sheet open={open} onOpenChange={onOpenChange} title="Pending requests"
-    description="These items keep this topic open. Open one to see its current status and available actions.">
+    description={(topic.state === "done" ? "This topic is already done. Requests can still need attention. " : "") +
+      "Open one to see its current status and available actions."}>
     <div className="grid gap-2">
       {(topic.unconfirmed || 0) > 0 && <p className="text-[14px] text-text-2">“No result recorded”: no answer and no current status has reached this device from the device that runs the request. Nothing is guessed or run again.</p>}
       {(topic.pendingIDs || []).map((id, i) => {
