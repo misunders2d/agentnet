@@ -136,6 +136,9 @@ capture_rate notifications
 # NotificationManager state outlives an instrumentation invocation. Isolate
 # the next matrix on this CI/qemu-only fixture without changing saved data.
 stop_fixture
+# Drain the package-restart broadcast so force-stop cannot cancel the next
+# fixture's newly posted notices (Android's REASON_PACKAGE_CHANGED).
+timeout --signal=KILL 30s adb -s "$serial" shell am wait-for-broadcast-idle --flush-broadcast-loopers
 if ! instrument indicators-video "$RUNNER_TEMP/android-indicators-video.txt"; then failed=1; fi
 capture_rate indicators
 # Prove the refused-notification path before any decoder workload can wedge

@@ -41,16 +41,29 @@ async function main(){
   });
   const root=path.resolve(__dirname,'../web/src/features'),real=['Conversation.tsx','Conversation.topics.tsx','Teams.tsx'].map(f=>path.join(root,f));
   const actual=await jsxSourceNodes(real);
-  for(const [file,line,tag] of [['Conversation.tsx',120,'Button'],['Conversation.topics.tsx',353,'Button'],['Conversation.topics.tsx',354,'Button'],['Conversation.topics.tsx',359,'input']])check('actual source '+file+':'+line,()=>{
-   const text=fs.readFileSync(path.join(root,file),'utf8');assert(actual.get(path.join(root,file)).some(n=>n.tag===tag&&text.slice(0,n.start).split('\n').length===line));
-  });
   for(const [file,expected] of [
-   ['Conversation.tsx',[[115,['onSelect']],[120,['onClick']]]],
-   ['Conversation.topics.tsx',[[349,['onOpenChange','title']],[353,['onClick']],[354,[]],[357,['onSubmit']],[359,['onChange']]]],
-   ['Teams.tsx',[[270,['onClick']],[277,['onClick']]]],
+   ['Conversation.tsx',[
+    ['<Timeline key={open.id','Timeline',['onSelect']],
+    ['<Button size="sm" variant="act" onClick={() => {','Button',['onClick']],
+   ]],
+   ['Conversation.topics.tsx',[
+    ['<Sheet open={open} onOpenChange={onOpenChange} title="Rename topic"','Sheet',['onOpenChange','title']],
+    ['<Button variant="ghost" disabled={busy} onClick={() => void save("")}','Button',['onClick']],
+    ['<Button variant="act" type="submit" form="rename-topic"','Button',[]],
+    ['<form id="rename-topic"','form',['onSubmit']],
+    ['<input id="rename-topic-name"','input',['onChange']],
+   ]],
+   ['Teams.tsx',[
+    ['<Button ref={searchToggle}','Button',['onClick']],
+    ['<Button size="sm" variant="outline" onClick={() => setLimit(n => n + pageSize)}','Button',['onClick']],
+   ]],
   ])check('actual own attributes '+file,()=>{
    const text=fs.readFileSync(path.join(root,file),'utf8'),ns=actual.get(path.join(root,file));
-   for(const [line,names] of expected){const n=ns.find(n=>text.slice(0,n.start).split('\n').length===line);assert(n,file+':'+line);assert.deepEqual(attrs(n).map(a=>a.name),names,file+':'+line);}
+   for(const [opening,tag,names] of expected){
+    const matches=ns.filter(n=>n.tag===tag&&text.startsWith(opening,n.start));
+    assert.equal(matches.length,1,opening);
+    assert.deepEqual(attrs(matches[0]).map(a=>a.name),names,opening);
+   }
   });
   // Tag the same source spans, then parse again: parent wrappers must not consume
   // descendant handlers, generic type arguments or following siblings.
