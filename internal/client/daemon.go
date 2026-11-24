@@ -710,8 +710,10 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 	// held, with those behind it free to come in. Which of them need the relay
 	// wait with it until the next look (readerWaits); it is looked at again away
 	// from the stream, with no budget.
-	relayLate := conv && transient(err) && readerBudgetSpent(ctx)
-	if transient(err) && !relayLate && (!conv || a.receiveFails.note(env.ID) < receiveAttempts) {
+	canRetry := transient(err)
+	storageRetry := conv && canRetry && transientStorage(err)
+	relayLate := conv && canRetry && !storageRetry && readerBudgetSpent(ctx)
+	if canRetry && !relayLate && (!conv || a.receiveFails.note(env.ID) < receiveAttempts) {
 		return err
 	}
 	if relayLate {
@@ -725,6 +727,9 @@ func (a *Agent) admissionFailed(ctx context.Context, env envelope.Envelope, err 
 	a.Logf("message %s from %s held (%s): admission failed: %v", env.ID, env.From, reason, err)
 	if e := a.holdDiagnostic(ctx, env, reason, "admission failed"); e != nil {
 		return errors.Join(err, e)
+	}
+	if storageRetry {
+		a.convWork.due(convRetryHeld) // retry the durable hold without waiting for new proof
 	}
 	a.kickNow() // its quarantined receipt
 	return nil

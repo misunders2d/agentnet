@@ -65,6 +65,17 @@ func (t androidReadTx) Rollback() error {
 
 // Busy recognizes actual SQLite primary lock errors, including wrapped errors.
 func Busy(err error) bool {
+	code := primaryCode(err)
+	return code == sqlite3.ErrBusy || code == sqlite3.ErrLocked
+}
+
+// Full reports whether SQLite refused a write for lack of storage capacity.
+func Full(err error) bool { return primaryCode(err) == sqlite3.ErrFull }
+
+func primaryCode(err error) sqlite3.ErrNo {
 	var e sqlite3.Error
-	return errors.As(err, &e) && (e.Code == sqlite3.ErrBusy || e.Code == sqlite3.ErrLocked)
+	if !errors.As(err, &e) {
+		return 0
+	}
+	return e.Code
 }

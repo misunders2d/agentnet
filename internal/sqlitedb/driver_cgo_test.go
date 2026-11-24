@@ -87,3 +87,12 @@ func TestCGOSQLiteBusyPrimaryCodesOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestCGOSQLiteFullResult(t *testing.T) {
+	if !Full(fmt.Errorf("writing: %w", sqlite3.Error{Code: sqlite3.ErrFull})) {
+		t.Fatal("wrapped SQLite capacity result was not recognized")
+	}
+	if Full(sqlite3.Error{Code: sqlite3.ErrConstraint}) {
+		t.Fatal("SQLite constraint result was mistaken for a capacity error")
+	}
+}

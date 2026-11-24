@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
 // answerRT answers matching Hub requests itself (a status and a body), as a
@@ -81,6 +83,8 @@ func TestTransientIsTyped(t *testing.T) {
 		want bool
 	}{
 		{errors.New("invalid topic action"), false},
+		{errors.New("database or disk is full"), false},
+		{fmt.Errorf("storing: %w", syscall.ENOSPC), true},
 		{fmt.Errorf("%w: a step", errPersonRecord), false},
 		{&HubError{Status: 404}, false},
 		{&HubError{Status: 503}, true},
@@ -164,6 +168,136 @@ func TestTransientAdmissionFailureIsSetAside(t *testing.T) {
 	carol.retryProof(tctx(t))
 	if !inboxHas(t, carol, env.ID) {
 		t.Fatal("a set-aside message was not admitted once the Hub answered")
+	}
+}
+
+func TestReceivedRetractionRetriesAfterStorageFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failures int
+	}{
+		{"relay redelivery", 1},
+		{"durable hold", receiveAttempts},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t, "")
+			ctx := tctx(t)
+			receiver := w.bob
+			original := sealTo(t, w.alice, receiver, envelope.Inner{Kind: envelope.KindMessage, Body: "ordinary text"})
+			if err := receiver.accept(ctx, original); err != nil {
+				t.Fatal(err)
+			}
+			receiver.convWork.take()
+			deletion := sealTo(t, w.alice, receiver, envelope.Inner{V: envelope.Version3, Kind: envelope.KindMessage,
+				Sub: envelope.SubRetraction, Body: `{}`, Ref: &envelope.Ref{ID: original.ID, Fingerprint: w.alice.Self().Fingerprint()}})
+			// The relay request budget can expire while local storage is busy.
+			ingress := withReaderBudget(withRelayIngress(ctx, deletion.ID), time.Now())
+			writeErr := fmt.Errorf("fixture write: %w", syscall.ENOSPC)
+			for i := 1; i <= tc.failures && i < receiveAttempts; i++ {
+				if err := receiver.admissionFailed(ingress, deletion, writeErr); !errors.Is(err, writeErr) {
+					t.Fatalf("attempt %d did not keep relay custody: %v", i, err)
+				}
+				if seen, err := receiver.store.seen(deletion.ID); err != nil || seen {
+					t.Fatalf("attempt %d disposition stored prematurely: %v %v", i, seen, err)
+				}
+			}
+			if tc.failures == receiveAttempts {
+				if err := receiver.admissionFailed(ingress, deletion, writeErr); err != nil {
+					t.Fatalf("could not set aside deletion: %v", err)
+				}
+				var raw, reason string
+				var relay bool
+				want, _ := json.Marshal(deletion)
+				if err := receiver.store.db.QueryRow(`SELECT envelope, reason, relay_ingress FROM quarantine WHERE id=?`, deletion.ID).Scan(&raw, &reason, &relay); err != nil || raw != string(want) || reason != reasonProof || !relay {
+					t.Fatalf("hold lost ciphertext or provenance: reason=%q relay=%v err=%v", reason, relay, err)
+				}
+				if state, err := receiver.store.disposition(deletion.ID); err != nil || state != protocol.StateQuarantined {
+					t.Fatalf("held receipt: %q %v", state, err)
+				}
+				receiver.syncByHand(ctx) // scheduled recovery, with storage now writable
+			} else {
+				if err := receiver.accept(ctx, deletion); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Recovery commits before replay, even after a quarantined receipt.
+			if !inboxHas(t, receiver, deletion.ID) || heldReason(t, receiver, deletion.ID) != "" {
+				t.Fatal("deletion was not promoted after recovery")
+			}
+			if err := receiver.accept(ctx, deletion); err != nil {
+				t.Fatal(err)
+			}
+			if state, err := receiver.store.disposition(deletion.ID); err != nil || state != protocol.StateDelivered {
+				t.Fatalf("recovered receipt: %q %v", state, err)
+			}
+			if msg := legacyView(t, receiver, original.ID); !msg.Deleted || msg.Body != "" {
+				t.Fatalf("deletion was not applied: %+v", msg)
+			}
+		})
+	}
+}
+
+func TestConversationRetractionRetriesWhenRedactionCannotBeStored(t *testing.T) {
+	w, carol, conv, _, guest, _ := roomDM(t)
+	ctx := tctx(t)
+	const original = "ordinary text for the storage fixture"
+	sent, err := carol.SendConv(ctx, conv, ConvOutgoing{Body: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob holds the conversation turn", func() bool {
+		_, ok := findLID(t, w.bob, conv, sent.LID)
+		return ok
+	})
+	recipient, err := w.bob.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := envelope.Seal(envelope.Inner{
+		V: envelope.Version3, ID: protocol.NewID(), From: carol.Address, To: w.bob.Address, TS: time.Now().Unix(),
+		Kind: envelope.KindMessage, Sub: envelope.SubRetraction, Body: `{}`, Conv: conv, LID: protocol.NewID(),
+		Ref: &envelope.Ref{ID: sent.LID, Fingerprint: carol.Self().Fingerprint()}, Human: captured(t, carol, guest.PID, guest.PID),
+	}, carol.id.Sign, recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cap only this fixture database. Force a typed SQLite capacity result
+	// inside the redaction transaction, with room left for other writes.
+	db := w.bob.store.db
+	if _, err := db.Exec(`CREATE TABLE write_pressure(body BLOB);
+		CREATE TRIGGER fail_fixture_redaction BEFORE UPDATE OF body ON inbox
+		WHEN OLD.body = 'ordinary text for the storage fixture'
+		BEGIN INSERT INTO write_pressure VALUES(zeroblob(2097152)); END`); err != nil {
+		t.Fatal(err)
+	}
+	var pages int
+	if err := db.QueryRow("PRAGMA page_count").Scan(&pages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA max_page_count = %d", pages+16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.storeReceived(ctx, env); !sqlitedb.Full(err) {
+		t.Fatalf("expected relay to retain the deletion, got %v", err)
+	}
+	if seen, err := w.bob.store.seen(env.ID); err != nil || seen {
+		t.Fatalf("failed write left a disposition: seen=%v err=%v", seen, err)
+	}
+	if m, ok := findLID(t, w.bob, conv, sent.LID); !ok || m.Body != original || m.Deleted {
+		t.Fatal("failed write changed the original")
+	}
+	if _, err := db.Exec("DROP TRIGGER fail_fixture_redaction"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.storeReceived(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := w.bob.store.disposition(env.ID); err != nil || state != protocol.StateDelivered {
+		t.Fatalf("committed deletion receipt: %q %v", state, err)
+	}
+	var body string
+	if err := db.QueryRow("SELECT body FROM inbox WHERE conv = ? AND lid = ? AND verified_by = ?", conv, sent.LID, carol.Self().Fingerprint()).Scan(&body); err != nil || body != "" {
+		t.Fatalf("redelivery did not redact the stored body: body=%q err=%v", body, err)
 	}
 }
 
