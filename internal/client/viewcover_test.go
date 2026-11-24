@@ -126,10 +126,13 @@ func TestViewCoverSchemaMarksTheSelectKeys(t *testing.T) {
 		t.Cleanup(func() { db.Close() })
 		return db
 	}
-	if schema[len(schema)-1] != ViewCoverSchema {
-		t.Fatal("ViewCoverSchema is not the last step")
+	coverStep := slices.Index(schema, ViewCoverSchema)
+	if coverStep < 0 {
+		t.Fatal("ViewCoverSchema is missing")
 	}
-	long, short := open(append(slices.Clone(schema[:len(schema)-1]), selects.String())), open(schema)
+	selectSchema := slices.Clone(schema)
+	selectSchema[coverStep] = selects.String()
+	long, short := open(selectSchema), open(schema)
 	coverText := func(db *sql.DB) (names []string, size int) {
 		rows, err := db.Query(`SELECT name,length(sql) FROM sqlite_master WHERE type='trigger' AND name LIKE 'view\_cover\_%' ESCAPE '\' ORDER BY name`)
 		if err != nil {

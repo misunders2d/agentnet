@@ -141,7 +141,7 @@ func (a *Agent) SetViewCachesOff(off bool) { a.topicCache.off.Store(off) }
 // more tables: these triggers name the rest, so a change event can say which
 // chats moved and the page reads again only those (MEL-748; TDLib sends one
 // update per changed chat, updateChatLastMessage and the rest, td_api.tl at
-// 03220f6b). ViewCoverSchema is the last schema step (store.go). The
+// 03220f6b). ViewCoverSchema is installed by the schema steps in store.go. The
 // background flush's note after it stored rows (backgroundsend.go) is
 // noteStoredChange, not NoteChange: as NoteChange it made every received
 // message's change unscoped (measured: 0 of 20 events then spared the open
