@@ -3,6 +3,8 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const assets=path.resolve(process.env.AGENTNET_TOPIC_ASSETS||path.join(__dirname,'../static'));
 const evidence=process.env.AGENTNET_SCREENSHOTS;
+const linked=process.env.AGENTNET_LINKED_NEEDS_HUMAN==='1';
+const linkedBaseline=linked&&process.env.AGENTNET_LINKED_BASELINE==='1';
 if(evidence)fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const adoptDocument = async (href, base) => {
   const r = await fetch(href);
@@ -90,6 +92,29 @@ let changed,open,release;
 const requests=[];window.fixture={ids,views,overview,requests,native,delay:'',release:()=>release?.(),open:(...args)=>open(...args),addLate:()=>{localStorage.setItem('fictional-late','1');if(!overview.dms.some(d=>d.id===ids.late))overview.dms.push(summary(views[ids.late]));changed?.({type:'change',seq:++overview.seq});},tick:()=>changed?.({type:'change',seq:++overview.seq})};
 fixture.unreadCounts=()=>{unreadCounts();if(${process.env.AGENTNET_UNREAD_REVIEW==='1'})overview.unread_total=overview.dms.reduce((n,d)=>n+d.unread,0);};
 const unreadRevisions=new Map();
+if (${linked}) {
+ const v=views[ids.main],pid='5'.repeat(32),pi='7'.repeat(32),request='8'.repeat(32),clarification='9'.repeat(32),finalRequest='a'.repeat(32);
+ const agent=peer.address;
+ const ask=(id,body,state,extra={})=>msg(id,body,{topic:native,kind:'question',dir:'out',from:me.address,pid,target:{address:agent,agent_id:pi},exec:{host:agent,state,attempt:2,at:1},...extra});
+ const answer=(id,body,to,status)=>msg(id,body,{topic:native,kind:'answer',pid,agent_id:pi,origin:'agent:pi',verified_agent:true,reply_to:to,status});
+ const count=Number(new URL(location).searchParams.get('count'));
+ v.agents=[{pid,agent_id:pi,state:'active',host:peer,inviter:me,shared:[],member:true}];
+ v.messages=[
+  ...Array.from({length:count-5},(_,i)=>msg((100+i).toString(16).padStart(32,'0'),'Earlier retained note '+i,{topic:native})),
+  ask(request,'Check the Friday shipment','needs_human',{lid:'6'.repeat(32)}),
+  answer(clarification,'Which dock should I check?', '6'.repeat(32),'needs_human'),
+  ask(finalRequest,'Check the Monday shipment','answered',{exec:undefined}),
+  answer('c'.repeat(32),'The Monday request initially needed the dock.',finalRequest,'needs_human'),
+  answer('b'.repeat(32),'Monday shipment confirmed.',finalRequest,'done'),
+ ];
+ v.topics=[{...topic(native,'Shipment review',ids.main,'done'),count,unread:0,pending:true,pending_ids:[request],done_by:'person',concluded_by:me.address}];
+ fixture.settled=()=>{
+  fixture.settledAt=performance.now();
+  v.messages[count-5].exec={host:agent,state:'resolved',attempt:2,at:2};
+  v.topics[0]={...v.topics[0],pending:false,pending_ids:[]};
+  fixture.tick();
+ };
+}
 fixture.markUnread=(conv,id)=>{const m=views[conv].messages.find(m=>m.id===id),key=conv+'/'+id,rev=Math.max(unreadRevisions.get(key)||0,m.attention?.rev||0)+1;unreadRevisions.set(key,rev);Object.assign(m,{unread:true,attention:{rev,writer:'11111111-11111111-11111111-11111111'}});};
 fixture.pauseRead=${process.env.AGENTNET_UNREAD_REVIEW==='1'};
 fixture.scheduleRows=[];fixture.scheduleStages=new Map();fixture.scheduleStageCount=0;fixture.scheduleAudience={persons:[me.person,peer.person],pids:[views[ids.main].guests[0].pid]};fixture.loseScheduleResponse=true;
@@ -150,7 +175,7 @@ const server=http.createServer((req,res)=>{
  let browser,activePage,activeWidth,activeEvidence;try{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
-  for(const skin of (process.env.PERSON_TOPIC_SKINS||'comic').split(','))for(const width of [1280,390]){
+  for(const skin of (process.env.PERSON_TOPIC_SKINS||'comic').split(','))for(const width of [1280,390])for(const count of linked?[100,1000]:[0]){
    const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce',isMobile:width===390,hasTouch:width===390});
    await context.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
    const page=await context.newPage(),errors=[],consoleIssues=[],consoleLocations=[],failedResponses=[],failedRequests=[],fontResponses=[];
@@ -168,7 +193,83 @@ const server=http.createServer((req,res)=>{
    const list=()=>page.getByRole('dialog',{name:'All topics',exact:true});
    const edit=async text=>{await field().fill(text);};
    const choose=async(pattern)=>{await all().click();await list().getByRole('button',{name:pattern}).click();};
-   await page.goto(origin+'/?skin='+skin);await page.waitForFunction(()=>window.ready);
+   await page.goto(origin+'/?skin='+skin+'&count='+count);await page.waitForFunction(()=>window.ready);
+   if(linked){
+    const request=page.locator('[data-mid="'+'8'.repeat(32)+'"]');
+    const successful=page.locator('[data-mid="'+'a'.repeat(32)+'"]');
+    await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
+    await all().click();await list().getByRole('button',{name:/^Done(?:\s|$)/}).click();
+    await list().getByRole('button',{name:/Shipment review/}).click();
+    const topicState=page.getByRole('region',{name:'Topic state'});
+    await topicState.getByText('Done',{exact:true}).waitFor();
+    const chip=page.getByRole('button',{name:/Shipment review.*open topic, menu/});
+    const openPending=()=>page.getByRole('menuitem',{name:'Show pending requests (1)',exact:true});
+    const pending=page.getByRole('dialog',{name:'Pending requests',exact:true});
+    const row=pending.getByRole('button',{name:/Open pending question 1/});
+    const measure=async (control,target,condition='shown')=>{
+     await control.evaluate((button,{target,condition})=>{
+      button.addEventListener('click',event=>{
+       const start=performance.now(),root=document.querySelector('#skin').shadowRoot;
+       window.linkedTiming=new Promise(resolve=>{
+        const check=()=>{
+         const element=root.querySelector(target);
+         const reached=condition==='jump'?element?.getAnimations().length>0:element?.checkVisibility({visibilityProperty:true,opacityProperty:true});
+         if(reached)requestAnimationFrame(()=>resolve({trusted:event.isTrusted,ms:performance.now()-start}));
+         else if(performance.now()-start<1100)requestAnimationFrame(check);
+         else resolve({trusted:event.isTrusted,ms:null});
+        };
+        requestAnimationFrame(check);
+       });
+      },{capture:true,once:true});
+     },{target,condition});
+     await control.click();
+     const timing=await page.evaluate(()=>window.linkedTiming);
+     assert(timing?.trusted&&timing.ms!==null&&timing.ms<1100,JSON.stringify({target,condition,timing}));
+     return Math.round(timing.ms);
+    };
+    // Keep an existing open-view sync read in flight through all three inputs.
+    await page.evaluate(()=>{fixture.delay=fixture.ids.main;fixture.tick();});
+    await page.waitForFunction(()=>fixture.delay==='');
+    await chip.click();
+    const sheetMs=await measure(openPending(),'[role="dialog"]');
+    await row.waitFor();
+    const observed={pending:await row.innerText(),description:await pending.getByText(/Open one to see/).innerText()};
+    const requestSelector='[data-mid="'+'8'.repeat(32)+'"]';
+    const requestMs=await measure(row,requestSelector,'jump');await pending.waitFor({state:'hidden'});
+    const status=async message=>message.getByRole('button',{name:/^Asked /}).innerText();
+    observed.request=await status(request);
+    observed.success=await status(successful);
+    assert.match(observed.pending,linkedBaseline?/Answered/:/Needs you/);
+    assert.match(observed.request,linkedBaseline?/Answered/:/Needs you/);
+    assert.match(observed.success,/Answered/);
+    assert.match(observed.description,linkedBaseline?/These items keep this topic open/:/This topic is already done/);
+    const replyMs=await measure(request.getByRole('button',{name:'View reply',exact:true}),'[data-mid="'+'9'.repeat(32)+'"]','jump');
+    await shown('Which dock should I check?').waitFor();
+    await chip.click();await openPending().click();await row.waitFor();
+    if(evidence)await pending.screenshot({path:path.join(evidence,'linked-pending-'+width+'-'+count+'.png')});
+    const settledMs=await page.evaluate(async ()=>{
+     fixture.settled();fixture.release();
+     const root=document.querySelector('#skin').shadowRoot;
+     const frame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+     while(![...root.querySelectorAll('[role="dialog"] p')].some(p=>p.textContent==='No pending requests remain in this topic.')){
+      if(performance.now()-fixture.settledAt>=1100)return null;
+      await frame();
+     }
+     await frame();return Math.round(performance.now()-fixture.settledAt);
+    });
+    assert(settledMs!==null&&settledMs<1100,'settled sync clears the open Pending sheet');
+    await pending.getByRole('button',{name:'Close',exact:true}).click();await pending.waitFor({state:'hidden'});
+    await topicState.getByText('Done',{exact:true}).waitFor();
+    if(!linkedBaseline)await request.getByRole('button',{name:/Resolved/}).waitFor();
+    await chip.click();await page.getByRole('menuitem',{name:'Reopen',exact:true}).waitFor();
+    assert.equal(await openPending().count(),0,'settled request leaves Pending');
+    observed.settled=await status(request);
+    assert.match(observed.settled,linkedBaseline?/Answered/:/Resolved/);
+    assert.equal(await request.getByRole('button',{name:'View reply',exact:true}).count(),1);
+    assert.deepEqual(errors,[]);assert.deepEqual(consoleIssues,[]);
+    console.log(JSON.stringify({width,count,sheetMs,requestMs,replyMs,settledMs,observed}));
+    await context.close();console.log('linked needs_human '+width+' '+count+' PASS');continue;
+   }
    if(process.env.AGENTNET_COMPOSER_SCHEDULE==='1'){
     const composer=page.locator('[data-part="composer"][data-conv="'+'a'.repeat(64)+'"]');
     const draftValue=()=>composer.locator('textarea').inputValue();

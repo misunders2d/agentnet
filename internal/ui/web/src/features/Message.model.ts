@@ -154,7 +154,14 @@ const localJob: Record<string, string> = {
   part_waiting: "Not started yet", not_delivered: "Reply kept here", manual: "Answered by hand", conv_held: "Held for you",
   helpers_waiting: "Waiting for the agents it asked",
 };
-const word = (s?: string) => jobWord(s) || (s ? localJob[s] || "" : "");
+function requestWord(kind: string, clarification: boolean, state?: string) {
+  if (clarification) {
+    if (state === "needs_human") return "Needs you";
+    if (state === "resolved") return "Resolved";
+    if (kind === "question" && (state === "answered" || state === "done")) return "Answered";
+  }
+  return jobWord(state) || (state ? localJob[state] || "" : "");
+}
 
 const stopTerminalLabels: Record<string, string> = {
   done: "Host reports finished", answered: "Host reports finished: answered",
@@ -191,27 +198,31 @@ function msgIndex(all: AnyMsg[]): MsgIndex {
   return ix;
 }
 
-/** A stored reply from this request's exact executor. A quotation is inert. */
+/** A stored reply from this request's exact executor. A final reply takes
+ * precedence over a clarification. A quotation is inert. */
 export function answerTo(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
   if (!isRequest(m) || m._local || excerpt(m)) return undefined;
   const ix = msgIndex(all);
   const byID = ix.replies.get(m.id) || [], byLid = !isThreadMsg(m) && m.lid && m.lid !== m.id ? ix.replies.get(m.lid) || [] : [];
   const candidates = byLid.length ? [...byID, ...byLid].sort((a, b) => ix.pos.get(a)! - ix.pos.get(b)!) : byID;
-  return candidates.find((x) => {
-    if (!isReply(x) || x._local || excerpt(x) || !x.reply_to) return false;
+  let clarification: AnyMsg | undefined;
+  for (const x of candidates) {
+    if (!isReply(x) || x._local || excerpt(x) || !x.reply_to) continue;
     const logical = !isThreadMsg(m) && !!m.lid && x.reply_to === m.lid;
-    if (x.reply_to !== m.id && !logical) return false;
-    if (logical && (ix.lids.get(m.lid!) || []).some(other => other !== m && other.id !== m.id)) return false;
+    if (x.reply_to !== m.id && !logical) continue;
+    if (logical && (ix.lids.get(m.lid!) || []).some(other => other !== m && other.id !== m.id)) continue;
     if (isThreadMsg(m)) {
-      if (!isThreadMsg(x)) return false;
+      if (!isThreadMsg(x)) continue;
       const host = m.target?.address || m.to;
       const from = x.from || (x.dir === "out" ? ctx?.overview?.me.address : "");
-      return !!host && from === host && (m.target?.agent_id || "") === (x.agent_id || "") &&
-        (!x.history || !m.target?.fingerprint || x.from_key === m.target.fingerprint);
-    }
-    return !isThreadMsg(x) && !!m.pid && !!m.target?.address && x.verified_agent && x.pid === m.pid &&
-      x.from === m.target.address && (x.agent_id || "") === (m.target.agent_id || "");
-  });
+      if (!host || from !== host || (m.target?.agent_id || "") !== (x.agent_id || "") ||
+        (x.history && m.target?.fingerprint && x.from_key !== m.target.fingerprint)) continue;
+    } else if (isThreadMsg(x) || !m.pid || !m.target?.address || !x.verified_agent || x.pid !== m.pid ||
+      x.from !== m.target.address || (x.agent_id || "") !== (m.target.agent_id || "")) continue;
+    if (x.status !== "needs_human") return x;
+    clarification ??= x;
+  }
+  return clarification;
 }
 
 /** requestState: how far a question or task got, only as its executor or the
@@ -220,21 +231,25 @@ export function requestState(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview
   const answer = answerTo(m, all, ctx);
   // A proposal (MEL-521) answers with a task the agent may not run itself:
   // nothing was done. Confirmation comes from the host's actions[] list.
-  if (answer && "status" in answer && answer.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
-  if (answer) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
+  if (answer?.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
+  const clarification = answer?.status === "needs_human";
+  // A clarification is a linked reply, but its executor still owns the
+  // request lifecycle. Keep the link while showing the host's current state.
+  if (answer && !clarification) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
   const snapshot = terminalStopLabel(m.stop,m.exec);
   if (snapshot) return {text:snapshot,tone:"muted"};
   const e = m.exec;
   if (e && e.state) {
     if (e.state === "unavailable") return { text: "Host removed", tone: "muted" };
-    const w = word(e.state);
+    const w = requestWord(m.kind, clarification, e.state);
     if (w) return { text: w + (e.stale ? " · last known" : ""), tone: tone(e.state) };
   }
   if (m.dir === "in" && (isThreadMsg(m) || m.pid)) {
-    const w = word(m.state);
+    const w = requestWord(m.kind, clarification, m.state);
     if (w) return { text: w, tone: tone(m.state || "") };
   }
   if ((m.actions || []).includes("cancel")) return { text: "Working…", tone: "work" };
+  if (clarification) return { text: "Needs you", tone: "wait" };
   if (m.delivery_uncertain) return { text: "Delivery unconfirmed", tone: "wait" };
   if (m.send_stopped && ["failed","not_delivered"].includes(m.state || "")) return {text:"Not sent",tone:"muted"};
   const d = deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "");
@@ -251,7 +266,9 @@ function tone(state: string): "ok" | "work" | "wait" | "bad" | "muted" {
 
 /** working: a request its executor says is running now (and not answered yet). */
 export function working(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview">) {
-  if (!isRequest(m) || answerTo(m, all, ctx) || terminalStopLabel(m.stop,m.exec)) return false;
+  if (!isRequest(m) || terminalStopLabel(m.stop,m.exec)) return false;
+  const answer = answerTo(m, all, ctx);
+  if (answer && answer.status !== "needs_human") return false;
   if (m.exec?.state === "running") return !m.exec.stale;
   return m.state === "running" || (m.actions || []).includes("cancel");
 }
