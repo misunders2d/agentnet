@@ -472,6 +472,11 @@ fixture. `TestImageViewerRendered`, `TestInlineVideoPolicies`, and
 `TestFileFetchRoutes` passed. Native Android WebView playback, codec
 coverage, and native fullscreen/Back remain unverified.
 
+The shipped Comic bundle was regenerated with the pinned npm dependencies.
+The parent reran the deferred-video fixture against that bundle. Progress
+appeared in 195 ms on the shared host, the sent and received MP4 checks
+passed, and Back kept the draft and scroll position.
+
 ## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
 
 Not qualified, not released, pre-CI hold. Focused evidence only.
