@@ -406,9 +406,10 @@ measurement; agentnet-skins collection skins.
 
 The request status and **Pending requests** use the existing exact reply
 index and execution projection. The linked Pi clarification remains
-available through **View reply**. The request shows **Needs you** while
-waiting and **Resolved** after host confirmation. A later verified final
-answer shows **Answered**. The topic stays **Done** throughout.
+available through **View reply**. While waiting, the person who asked sees
+**Needs you** and other viewers see **Needs a person**. Host confirmation
+changes the status to **Resolved**. A later verified final answer shows
+**Answered**. The topic stays **Done** throughout.
 
 The existing F02 counterpart evidence applies to **Mark as handled**:
 Telegram Web A `f67a408`, `toggleReaction` in

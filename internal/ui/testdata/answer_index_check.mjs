@@ -21,7 +21,7 @@ registerHooks({load(url,context,next){
  }
  return next(specifier,context);
 }});
-const {answerTo,isRequest,isReply,isThreadMsg,excerpt}=await import(new URL('web/src/features/Message.model.ts',root));
+const {answerTo,isRequest,isReply,isThreadMsg,excerpt,requestState}=await import(new URL('web/src/features/Message.model.ts',root));
 // The scan answerTo was before its index, verbatim.
 function scanned(m,all,ctx){
   if (!isRequest(m) || m._local || excerpt(m)) return undefined;
@@ -71,3 +71,22 @@ for(let chat=0;chat<3000;chat++){
 }
 assert(found>20,'the chats found answers: '+found);
 console.log(`answerTo through its index equals the whole-chat scan: ${checked} requests, ${found} answered PASS`);
+
+// A linked clarification asks its requester for input. Other members see
+// the same verified reply without being told that it needs them.
+const request = {
+  id: 'question', lid: 'question-lid', kind: 'question', pid: 'p1',
+  target: {address: 'h2', agent_id: 'ag'}, state: 'delivered',
+};
+const clarification = {
+  id: 'clarification', kind: 'answer', reply_to: request.lid,
+  pid: request.pid, from: 'h2', agent_id: 'ag', verified_agent: true, status: 'needs_human',
+};
+for (const [dir, expected] of [['out', 'Needs you'], ['in', 'Needs a person']]) {
+  for (const exec of [undefined, {state: 'needs_human'}]) {
+    const visible = {...request, dir, exec};
+    assert.deepEqual(requestState(visible, [visible, clarification], ctx), {text: expected, tone: 'wait'});
+  }
+}
+const localHost = {...request, dir: 'in', state: 'needs_human'};
+assert.equal(requestState(localHost, [localHost, clarification], ctx).text, 'Needs a person');

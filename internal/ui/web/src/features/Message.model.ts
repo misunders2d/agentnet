@@ -154,11 +154,11 @@ const localJob: Record<string, string> = {
   part_waiting: "Not started yet", not_delivered: "Reply kept here", manual: "Answered by hand", conv_held: "Held for you",
   helpers_waiting: "Waiting for the agents it asked",
 };
-function requestWord(kind: string, clarification: boolean, state?: string) {
+function requestWord(m: AnyMsg, clarification: boolean, state?: string) {
   if (clarification) {
-    if (state === "needs_human") return "Needs you";
+    if (state === "needs_human" && m.dir === "out") return "Needs you";
     if (state === "resolved") return "Resolved";
-    if (kind === "question" && (state === "answered" || state === "done")) return "Answered";
+    if (m.kind === "question" && (state === "answered" || state === "done")) return "Answered";
   }
   return jobWord(state) || (state ? localJob[state] || "" : "");
 }
@@ -241,15 +241,15 @@ export function requestState(m: AnyMsg, all: AnyMsg[], ctx?: Pick<Ctx, "overview
   const e = m.exec;
   if (e && e.state) {
     if (e.state === "unavailable") return { text: "Host removed", tone: "muted" };
-    const w = requestWord(m.kind, clarification, e.state);
+    const w = requestWord(m, clarification, e.state);
     if (w) return { text: w + (e.stale ? " · last known" : ""), tone: tone(e.state) };
   }
   if (m.dir === "in" && (isThreadMsg(m) || m.pid)) {
-    const w = requestWord(m.kind, clarification, m.state);
+    const w = requestWord(m, clarification, m.state);
     if (w) return { text: w, tone: tone(m.state || "") };
   }
   if ((m.actions || []).includes("cancel")) return { text: "Working…", tone: "work" };
-  if (clarification) return { text: "Needs you", tone: "wait" };
+  if (clarification) return { text: requestWord(m, true, "needs_human"), tone: "wait" };
   if (m.delivery_uncertain) return { text: "Delivery unconfirmed", tone: "wait" };
   if (m.send_stopped && ["failed","not_delivered"].includes(m.state || "")) return {text:"Not sent",tone:"muted"};
   const d = deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "");
