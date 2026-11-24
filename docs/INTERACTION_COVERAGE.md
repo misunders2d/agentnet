@@ -583,6 +583,12 @@ The parent reran the deferred-video fixture against that bundle. Progress
 appeared in 195 ms on the shared host, the sent and received MP4 checks
 passed, and Back kept the draft and scroll position.
 
+The combined candidate's Back check also closes the expanded player after
+metadata becomes available and before the viewer applies the saved position.
+It caught the video returning to the start. The viewer now restores the
+original position until the expanded player has set its own. Chromium
+passed this regression and the existing image/video viewer checks.
+
 ## v0.11.0 Cancel of a queued send: recovery batch — November 7, 2026
 
 Not qualified, not released, pre-CI hold. Focused evidence only.
@@ -3789,6 +3795,12 @@ The regression covers a spoiler crossing from HTML into a code block, a
 destination with spaces and a tooltip. The prior bundle fails the cross-block
 case. The corrected bundle passed all four rendered cases with 127 ms peak
 local feedback and 1,233–1,310 ms held confirmation.
+
+The combined MEL-811 and MEL-815 fixture opens a quoted edit on touch, selects
+its text, applies underline from Formatting and saves through a held write.
+The floating trigger covered the quote before the integration fix. With
+the editor's trigger below the field, the quote and control stay visible
+together. All four formatting cases passed with 62 ms peak local feedback.
 
 Standalone Classic, Holonet and Zoom must refresh their packaged
 `link-text.mjs` from `internal/ui/skins/shared/link-text.mjs` and consume its

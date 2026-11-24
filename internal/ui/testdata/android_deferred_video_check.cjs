@@ -87,9 +87,20 @@ const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT);
     const expand = received.getByRole('button', { name: 'Expand video received.mp4' });
     await expand.scrollIntoViewIfNeeded();
     const before = await scroll();
+    await video.evaluate(inline => {
+      const root = inline.getRootNode();
+      const deferPosition = event => {
+        if (event.target === inline || !event.target.closest('[role="dialog"]')) return;
+        root.removeEventListener('loadedmetadata', deferPosition, true);
+        // Close after metadata is readable but before the viewer handles it.
+        event.stopImmediatePropagation();
+      };
+      root.addEventListener('loadedmetadata', deferPosition, true);
+    });
     await expand.tap();
     const viewer = page.getByRole('dialog', { name: 'received.mp4', exact: true });
     await viewer.waitFor();
+    await page.waitForFunction(v => v.readyState >= 1 && v.currentTime === 0, await viewer.locator('video').elementHandle());
     assert.equal(await page.evaluate(() => window.videoBack()), true);
     await viewer.waitFor({ state: 'hidden' });
     assert.deepEqual(await video.evaluate(v => [v.paused, Math.abs(v.currentTime - 1.5) < .15]), [true, true]);

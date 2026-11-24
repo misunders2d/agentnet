@@ -343,7 +343,7 @@ export function EditBox({ m, ctx, wide, onDone }: { m: AnyMsg; ctx: Ctx; wide: b
           if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || !e.shiftKey && !e.altKey)) { e.preventDefault(); void save(); }
         }}
         className={"w-full resize-none overflow-y-auto rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none " +
-          (wide ? "max-h-[min(240px,45dvh)]" : "max-h-[min(140px,45dvh)]")} />)}
+          (wide ? "max-h-[min(240px,45dvh)]" : "max-h-[min(140px,45dvh)]")} />, {floating: false})}
       {isRequest(m) && <p className="text-[13px] text-text-2">The agent keeps what it already got; nothing runs again.</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>

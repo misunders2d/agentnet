@@ -14,7 +14,8 @@ export function VideoViewer({ src, name, from, onClose }: {
 }) {
   const portal = usePortal(), modal = useModal(true);
   const video = useRef<HTMLVideoElement>(null);
-  const close = () => { const v = video.current; onClose(v && v.readyState ? { time: v.currentTime, playing: !v.paused && !v.ended } : from); };
+  const positioned = useRef(false);
+  const close = () => { const v = video.current; onClose(v && positioned.current ? { time: v.currentTime, playing: !v.paused && !v.ended } : from); };
   return (
     <Dialog.Root open onOpenChange={open => { if (!open) close(); }} modal="trap-focus">
       <Dialog.Portal container={portal}>
@@ -25,7 +26,12 @@ export function VideoViewer({ src, name, from, onClose }: {
             <Dialog.Close aria-label="Close" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-white/10"><IconX size={20} /></Dialog.Close>
           </div>
           <video ref={video} src={src} controls playsInline preload="auto" aria-label={name} className="block min-h-0 w-full flex-1 object-contain"
-            onLoadedMetadata={e => { const v = e.currentTarget; v.currentTime = from.time; if (from.playing) void v.play().catch(() => {}); }} />
+            onLoadedMetadata={e => {
+              const v = e.currentTarget;
+              v.currentTime = from.time;
+              positioned.current = true;
+              if (from.playing) void v.play().catch(() => {});
+            }} />
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

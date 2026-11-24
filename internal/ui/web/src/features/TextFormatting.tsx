@@ -109,7 +109,7 @@ export function useTextFormatting(
     setMenu({ anchor: { getBoundingClientRect: () => new DOMRect(x, y, 0, 0) } });
   }
 
-  function controls(children: ReactNode, { disabled = false, className = "" } = {}) {
+  function controls(children: ReactNode, { disabled = false, className = "", floating = true } = {}) {
     const selected = hasSelection && !disabled;
     const position = "z-50 outline-none";
     const validURL = /^(https?:\/\/|mailto:)[^<>\s]+$/i.test(url);
@@ -117,7 +117,8 @@ export function useTextFormatting(
       {children}
       <Menu.Root open={!!menu} triggerId={trigger} modal={false} onOpenChange={open => setMenu(current => open ? current || {} : null)}>
         <Menu.Trigger id={trigger} hidden={!selected || !touch} onMouseDown={event => event.preventDefault()}
-          className="absolute right-2 bottom-full z-30 mb-1 min-h-11 rounded-full bg-surface px-3 text-sm font-semibold text-ink stroke shadow-pop">Formatting</Menu.Trigger>
+          className={"min-h-11 rounded-full bg-surface px-3 text-sm font-semibold text-ink stroke shadow-pop " +
+            (floating ? "absolute right-2 bottom-full z-30 mb-1" : "mt-1")}>Formatting</Menu.Trigger>
         <Menu.Portal container={portal}>
           <Menu.Positioner anchor={menu?.anchor} positionMethod={menu?.anchor ? "fixed" : "absolute"} side={touch ? "top" : "bottom"} align={touch ? "end" : "start"}
             className={position} sideOffset={4} collisionPadding={8}>

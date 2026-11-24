@@ -178,6 +178,10 @@ const operations = [
       await sync;
       await synced;
       assert.equal(await field.inputValue(), 's', 'sync leaves typed text intact');
+      if (phone && !base) {
+        await received.locator('[data-message-bubble]').first().click({button: 'right'});
+        await page.getByRole('dialog').getByRole('button', {name: 'Reply', exact: true}).tap();
+      }
       const body = '**sent formatting** ||private outgoing||';
       await field.fill(body);
       const response = page.waitForResponse(r => r.url().endsWith('/api/dm/send'));
@@ -191,7 +195,7 @@ const operations = [
       const id = await sent.evaluate(el => el.closest('[data-mid]').dataset.mid);
       const row = page.locator('[data-mid=' + JSON.stringify(id) + ']');
       if (!base) assert.equal(await row.getByText('private outgoing', {exact: false}).count(), 0);
-      if (!phone) {
+      if (!phone || !base) {
         await row.locator('[data-message-bubble]').first().click({button: 'right'});
         await page.getByRole('dialog').getByRole('button', {name: 'Edit', exact: true}).click();
         const editor = page.getByRole('textbox', {name: 'New text'});
@@ -200,8 +204,16 @@ const operations = [
         await editor.fill(base ? updated : 'edit exact');
         if (!base) {
           await select(editor, 0);
+          if (phone) {
+            const quote = row.getByRole('button', {name: /Before.*Hidden text/});
+            const trigger = row.getByRole('button', {name: 'Formatting', exact: true});
+            await trigger.waitFor();
+            const [q, f] = await Promise.all([quote.boundingBox(), trigger.boundingBox()]);
+            assert(q && f && f.y >= q.y + q.height - 1, 'touch formatting keeps the quoted reply unobstructed');
+          }
           await menus(editor);
-          await page.getByRole('menuitem', {name: 'Underline', exact: true}).click();
+          const underline = page.getByRole('menuitem', {name: 'Underline', exact: true});
+          await (phone ? underline.tap() : underline.click());
           assert.equal(await editor.inputValue(), updated);
         }
         if (!base && count === 40) {
