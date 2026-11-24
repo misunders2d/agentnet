@@ -71,30 +71,42 @@ export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): To
   const tokens = lex(shield());
   if (seen.size === ranges.length) return tokens;
   // GFM can consume a marker as literal code, HTML or a link destination.
-  // Restore those ranges only if the reparse keeps the same visible prose.
-  // Otherwise a malformed destination can spill a spoiler into a paragraph.
+  // A reparse can move text between tokens, even within the same layout.
+  // Accept only expansion of each literal's own markers in place.
+  const marker = new RegExp(prefix + "(\\d+)\uE001", "g");
+  const expand = (value: string): string => value.replace(marker, (whole, index) => {
+    const range = ranges[Number(index)];
+    return range ? text.slice(range.start, range.end).replace(/\r\n?/g, "\n") : whole;
+  });
   const restored = seen.size ? lex(shield(true)) : markdownTokens(text, "literal");
-  return sameProse(tokens, restored) ? restored : tokens;
+  return sameProse(tokens, restored, expand) ? restored : tokens;
 }
 
-function sameProse(before: Token[], after: Token[]): boolean {
+const unindent = (value: string) => value.replace(/^[ \t]+/gm, "");
+
+function sameProse(before: Token[], after: Token[], expand: (value: string) => string): boolean {
   return before.length === after.length && before.every((token, i) => {
     const a = token as Tokens.Generic, b = after[i] as Tokens.Generic;
     if (a.type !== b.type) return false;
     switch (a.type) {
-      case "code": case "codespan": case "html": case "def": return true;
-      case "link":
-        if (a.autolink !== b.autolink) return false;
-        if (a.autolink) return true; // the whole address is a literal link
+      case "code":
+        // The lexer strips list or fence indentation from the restored lines.
+        return unindent(expand(a.text)) === unindent(b.text);
+      case "codespan": case "html": return expand(a.text) === b.text;
+      case "def": return expand(a.raw) === b.raw;
+      case "link": case "image":
+        if (a.autolink !== b.autolink || a.title !== b.title || expand(a.href) !== b.href) return false;
+        if (a.href !== b.href && /\s/.test(b.href)) return false;
+        if (a.autolink) return expand(a.text) === b.text;
         break;
-      case "list": return sameProse(a.items, b.items);
+      case "list": return sameProse(a.items, b.items, expand);
       case "table": {
         const aRows = [a.header, ...a.rows], bRows = [b.header, ...b.rows];
         return aRows.length === bRows.length && aRows.every((row, j) =>
-          row.length === bRows[j].length && row.every((cell: Tokens.TableCell, k: number) => sameProse(cell.tokens, bRows[j][k].tokens)));
+          row.length === bRows[j].length && row.every((cell: Tokens.TableCell, k: number) => sameProse(cell.tokens, bRows[j][k].tokens, expand)));
       }
     }
-    if (a.tokens && b.tokens) return sameProse(a.tokens, b.tokens);
+    if (a.tokens && b.tokens) return sameProse(a.tokens, b.tokens, expand);
     return (a.text ?? a.raw) === (b.text ?? b.raw);
   });
 }

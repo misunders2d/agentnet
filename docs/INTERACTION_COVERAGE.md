@@ -3493,6 +3493,12 @@ destinations, mixed valid and malformed links, and a range crossing an
 indented code block. The same four rendered cases passed on a shared host
 with 275 ms peak local feedback and 1,234–1,276 ms held confirmation.
 
+Literal restoration also checks that each token expands only its own markers.
+The regression covers a spoiler crossing from HTML into a code block, a
+destination with spaces and a tooltip. The prior bundle fails the cross-block
+case. The corrected bundle passed all four rendered cases with 127 ms peak
+local feedback and 1,233–1,310 ms held confirmation.
+
 Standalone Classic, Holonet and Zoom must refresh their packaged
 `link-text.mjs` from `internal/ui/skins/shared/link-text.mjs` and consume its
 `maskSpoilers`, `replaceSpoilers`, `formats`, `fieldSelection` and

@@ -47,10 +47,13 @@ for (const malformed of [
   "[a](http://e.test/||secret words||)",
   "<https://e.test/||secret words||> ||real||",
   "[a](https://e.test/a||b||c) <https://e.test/x||secret words||> ||real||",
+  "<div>\n||a\n\n    secret words||\n\n    X",
+  "[a](<https://e.test/||secret words||>)",
+  "[a](https://e.test/ '||secret words||')",
   "    literal ||\nplain secret words||",
 ]) {
   const tokens = markdownTokens(malformed, "reveal");
-  assert(!JSON.stringify(tokens).includes("secret words"), "a malformed literal cannot expose the spoiler");
+  assert(!JSON.stringify(tokens).includes("secret words"), "literal fallback exposed a spoiler in " + malformed);
   if (malformed.endsWith("||real||")) assert.equal(tokens[0].tokens.at(-1).type, "spoiler");
 }
 const entire = text => ({from: 0, to: text.length, direction: "forward"});
