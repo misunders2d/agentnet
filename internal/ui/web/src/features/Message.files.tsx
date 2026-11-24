@@ -569,7 +569,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
       <Sheet open={preview !== null} onOpenChange={(open) => { if (!open) setPreview(null); }} title={f.name} description={bytes(f.size)} wide
         footer={<Button variant="act" disabled={!preview} onClick={() => preview && save(preview.url, f.name, portal)}>Download</Button>}>
         {/\.md$/i.test(f.name)
-          ? <Markdown text={preview?.text || ""} className="text-[14px] leading-relaxed" />
+          ? <Markdown spoilers="literal" text={preview?.text || ""} className="text-[14px] leading-relaxed" />
           : <pre className="whitespace-pre-wrap break-words text-[14px] [overflow-wrap:anywhere]">{preview?.text}</pre>}
       </Sheet>
       {hasPerson && pictureURL && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: pictureURL, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}

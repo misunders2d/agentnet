@@ -10,7 +10,7 @@ import { Popover } from "@base-ui/react/popover";
 import { parseCollective } from "../collective-mentions.mjs";
 import { sendID } from "../optimistic.mjs";
 import { localRunningDetail } from "../runningDetail";
-import { previewText } from "../linkText";
+import { maskSpoilers } from "../linkText";
 import { requestResultText } from "../requestResult";
 import {
   IconArrowBackUp, IconBolt, IconMessageQuestion, IconCheck, IconChecks, IconClock, IconAlertTriangle, IconEye, IconCircleCheckFilled, IconCircle,
@@ -108,7 +108,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     topic:!targets&&live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
     copy: () => {
-      void copyText(plain(shownText(m)), store.host.android).then(ok => store.toast(ok ? "Copied" : "Couldn’t copy here", ok ? "ok" : "error"));
+      void copyText(plain(maskSpoilers(shownText(m))), store.host.android).then(ok => store.toast(ok ? "Copied" : "Couldn’t copy here", ok ? "ok" : "error"));
     },
     edit: () => setEditing(true),
     del: () => setConfirm(true),
@@ -158,7 +158,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           {who.agent ? <AgentAvatar seed={who.seed} size={32} guest={who.guest} device={who.device} /> : <PersonAvatar name={who.name} seed={who.seed} size={32} guest={who.guest} />}
         </span>
       )}
-      {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
+      {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(maskSpoilers(shownText(request!))).split("\n")[0]}</button>}
       {!grouped && m._local && <div className="text-xs text-muted" role="status" data-local-send={m._failed ? "stopped" : "waiting"}>{sendFailure(m.state_text, ctx.overview?.role === "admin")?.reason || m.state_text}<LocalSendActions m={m} /></div>}
       {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
@@ -169,11 +169,11 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
             {proposal && !proposal.deleted && onJump && <button type="button" className="block min-h-11 text-left text-[13px] underline" onClick={() => onJump(proposal.id)}>View proposal</button>}
             <details data-approved-task-text>
               <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] underline">Approved task text</summary>
-              <Markdown text={m.body} mention={mention} />
-              {m.edited && <><p className="mt-2 text-[13px] text-muted">Edited message</p><Markdown text={shownText(m)} mention={mention} /></>}
+              <Markdown text={m.body} mention={mention} spoilers="reveal" />
+              {m.edited && <><p className="mt-2 text-[13px] text-muted">Edited message</p><Markdown text={shownText(m)} mention={mention} spoilers="reveal" /></>}
             </details>
             <div className="flow-root">{time}</div>
-          </> : !compact && text ? <Markdown text={text} mention={mention} tail={time} />
+          </> : !compact && text ? <Markdown text={text} mention={mention} tail={time} spoilers="reveal" />
             : null}
       {!m.deleted && !editing && <MessageFiles m={m} />}
       {m._change && <p role="status" className="mt-1 text-xs text-muted" data-message-change={m._change.status}>
@@ -338,7 +338,7 @@ function Meta({ m, who, shared, answered, formatTime }: { m: AnyMsg; who: Who; s
 function ReplyQuote({ parent, ctx, onJump }: { parent?: AnyMsg; ctx: Ctx; onJump?: (id: string) => void }) {
   if (!parent) return <p className="mb-1.5 rounded-lg border-l-[3px] border-outline/30 bg-ink/[.05] px-2 py-1 text-[13px] text-muted">Reply to a message not shown here</p>;
   const who = whoWrote(parent, ctx);
-  const line = parent.deleted ? "Message deleted" : plain(shownText(parent)).split("\n")[0] || "Files";
+  const line = parent.deleted ? "Message deleted" : plain(maskSpoilers(shownText(parent))).split("\n")[0] || "Files";
   return (
     <button type="button" onClick={(e) => { e.stopPropagation(); onJump?.(parent.id); }}
       className="mb-1.5 block w-full min-w-0 rounded-lg border-l-[3px] border-agent-ink/60 bg-ink/[.05] px-2 py-1 text-left text-[13px] leading-snug hover:bg-ink/[.08]">
@@ -366,7 +366,7 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
           <span>{label}</span>
           {st.text && <><span aria-hidden="true" className="text-muted">·</span><span className={tone}>{st.text}</span></>}
         </button>
-        {detail && !(m.actions || []).length && <span className="mt-0.5 text-muted [overflow-wrap:anywhere]">{firstLine(previewText(requestResultText(detail)), 140)}</span>}
+        {detail && !(m.actions || []).length && <span className="mt-0.5 text-muted [overflow-wrap:anywhere]">{firstLine(requestResultText(detail), 140)}</span>}
         {answer && onJump && <button type="button" className="min-h-11 underline" onClick={() => onJump(answer.id)}>View reply</button>}
       </div>
     );

@@ -147,7 +147,7 @@ func (a *Agent) maskNativeNotification(n NativeNotification, author string) Nati
 }
 
 func (a *Agent) maskNativeNotificationDefault(n NativeNotification, author string, fallback NotificationPreview, category string) NativeNotification {
-	n.Title, n.Body = notificationText(n.Title, 100), notificationText(n.Body, 240)
+	n.Title, n.Body = notificationText(n.Title, 100), notificationText(MaskSpoilers(n.Body), 240)
 	preview, err := a.notificationPreview()
 	if err != nil {
 		preview = NotificationPreviewHidden
@@ -291,7 +291,7 @@ func (a *Agent) notificationMessage(n *NativeNotification, id string) (author st
 		n.Body = "Message deleted."
 		return
 	}
-	preview := notificationText(controls.Shown(m.Body), 240)
+	preview := notificationText(MaskSpoilers(controls.Shown(m.Body)), 240)
 	if preview == "" {
 		if len(m.Attachments) > 0 {
 			preview = "Attachment: " + m.Attachments[0].Name

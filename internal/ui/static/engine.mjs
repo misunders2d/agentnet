@@ -13,6 +13,7 @@
 // and have the old one revoked).
 
 import * as wire from "./wire.mjs";
+import { maskSpoilers } from "./spoilers.mjs";
 import { threadIndexed, readThreadRows, projectDeviceThreads, readChatView } from "./chatprojection.mjs";
 import { contributionPreview, contributionApply, contributionRecheck } from "./historycontribution.mjs";
 import {deviceHistory,deviceHistoryDirection,deviceHistoryPeer,directHistoryRow} from "./devicehistory.mjs";
@@ -646,7 +647,7 @@ const firstLine = (s) => {
 };
 // Presentation-only parity with shared/collective-mentions.mjs and model.ts.
 // Keep this inline: the engine's served module graph does not include skins.
-const bodyPreview = (s) => firstLine(String(s || "").split("\n")[0].replace(/\[@([^\[\]\r\n]{1,80})\]\((agentnet:(?:(?:person|guest|agent)\/[A-Za-z0-9_-]{1,64}|collective\/v1\/[^\s()]{1,280000}))\)/g, (all, name, href) => {
+const bodyPreview = (s) => firstLine(maskSpoilers(String(s || "")).split("\n")[0].replace(/\[@([^\[\]\r\n]{1,80})\]\((agentnet:(?:(?:person|guest|agent)\/[A-Za-z0-9_-]{1,64}|collective\/v1\/[^\s()]{1,280000}))\)/g, (all, name, href) => {
   if (href.startsWith("agentnet:collective/v1/")) {
     const refs = href.slice("agentnet:collective/v1/".length).split(",");
     if (refs.length > 4096 || !refs.every(ref => /^[pga]\.[A-Za-z0-9_-]{1,64}$/.test(ref))) return all;
@@ -9574,7 +9575,7 @@ export class Engine {
     const out = [];
     for (const m of inbox) {
       if (m.v !== 1 || m.control || m.kind !== "message" || m.status !== "review_notice" || m.reply_to || (m.attachments || []).length || m.resolved) continue;
-      const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + words(m.from), excerpt: firstLine(m.body), at: iso(m.at), notice: true };
+      const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + words(m.from), excerpt: firstLine(maskSpoilers(m.body || "")), at: iso(m.at), notice: true };
       try {
         const v = JSON.parse(m.body);
         if (v && v.v === 2 && Array.isArray(v.items) && typeof v.host === "string" && (!v.host || v.host === m.from)) { // a machine reports only its own requests
@@ -9585,11 +9586,11 @@ export class Engine {
             if (it.conv === true) o.conv = true; // a DM or group request: decided, never answered by hand from here
             const native=it.native;
             if(!m.history&&!m.replica&&nativeHosts.has(m.from)&&native&&native.harness==="codex"&&native.host===m.from&&native.request===o.id&&native.key===key&&native.attempt===o.attempt&&o.state==="running"&&wire.validID(native.token||"")&&Number.isSafeInteger(native.expires)&&native.expires>=0&&(native.expires===0||native.expires>Date.now())&&JSON.stringify(native).length<=16*1024&&Array.isArray(native.choices)&&native.choices.every(c=>["allow","deny","cancel","submit"].includes(c)))o.native=native;
-            if ((o.actionable || o.state === "needs_human") && typeof it.excerpt === "string" && it.excerpt) o.excerpt = o.state === "needs_human" ? it.excerpt : firstLine(it.excerpt);
+            if ((o.actionable || o.state === "needs_human") && typeof it.excerpt === "string" && it.excerpt) o.excerpt = o.state === "needs_human" ? maskSpoilers(it.excerpt) : firstLine(maskSpoilers(it.excerpt));
             // A task carrying out its agent's proposal (client.ProposalView, first lines): for the operator approving it.
             const p = it.proposal;
             if (o.actionable && p && typeof p === "object" && typeof p.proposal_id === "string" && p.proposal_id) {
-              o.proposal = Object.fromEntries(["question_id", "question", "asker", "proposal_id", "proposal", "confirmed_by", "task"].map((k) => [k, firstLine(typeof p[k] === "string" ? p[k] : "")]));
+              o.proposal = Object.fromEntries(["question_id", "question", "asker", "proposal_id", "proposal", "confirmed_by", "task"].map((k) => [k, firstLine(maskSpoilers(typeof p[k] === "string" ? p[k] : ""))]));
               if(p.edited===true)o.proposal.edited=true;
             }
             const res = this.decisionResult(inbox, outbox, m, o);
@@ -9643,7 +9644,7 @@ export class Engine {
       const v = JSON.parse(m.body);
       if (v && v.v === 2 && Array.isArray(v.items) && (!v.host || v.host === m.from)) { const k = v.items.length || (Number.isSafeInteger(v.count) ? v.count : 0); return k + (k === 1 ? " request" : " requests") + " reported by " + m.from; }
     } catch (e) { /* count text */ }
-    return firstLine(m.body);
+    return firstLine(maskSpoilers(m.body || ""));
   }
 
   // decisionResult is the host's latest answer to this device's decisions
@@ -12182,7 +12183,7 @@ export class Engine {
     }
     for (const m of msgs) {
       if (m.state === "conv_held") {
-        if (this.heldOpen(m, msgs)) held.push({ reason: "person_turn", actions: ["resolve"], conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(m.body), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
+        if (this.heldOpen(m, msgs)) held.push({ reason: "person_turn", actions: ["resolve"], conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(maskSpoilers(m.body || "")), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
         continue;
       }
       const info = m.pid && m.target && ["question", "task"].includes(m.kind) ? infos.find((p) => p.pid === m.pid) : null;
@@ -12197,7 +12198,7 @@ export class Engine {
       // and asks nothing of the person; running is work, never a decision.
       const why = e.stale ? "No result reported · " + this.hostStateWords(e.host, m, words) : (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.";
       needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running" }[e.state], conv, pid: m.pid, id: m.id, target:m.target, peer: here ? this.address : m.from, kind: m.kind,
-        why, excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host, ...(e.stale ? { stale: true } : {}), ...(!e.stale && this.continuationOf(m,fp,e)?{continuation:this.continuationOf(m,fp,e),actions:["continue"]}:{}) });
+        why, excerpt: firstLine(maskSpoilers(m.body || "")), at: iso(m.at), decide_on: e.host, ...(e.stale ? { stale: true } : {}), ...(!e.stale && this.continuationOf(m,fp,e)?{continuation:this.continuationOf(m,fp,e),actions:["continue"]}:{}) });
     }
   }
 

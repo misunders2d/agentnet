@@ -1601,6 +1601,7 @@ func reviewReason(kind, state string) string {
 
 // excerpt is the first line of s, shortened.
 func excerpt(s string) string {
+	s = client.MaskSpoilers(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}

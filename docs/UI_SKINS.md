@@ -645,6 +645,13 @@ types are the Go structs in `internal/ui/*.go`, generated into
   stays what was sent), `deleted`, and `can[]` (`react`, `edit`, `delete`): show
   only the actions listed. An edit never reruns anything; a deletion hides text
   and files and recalls nothing already read, saved or given to an agent.
+  Message text can contain `^^underlined^^` and `||hidden text||` alongside
+  existing Markdown. Hosts return the original body and the displayed edit so
+  the skin can draw the open message and retain the edit selection. Use the
+  bundled `skins/shared/link-text.mjs` spoiler projection before deriving any
+  preview, reply quote, search text or clipboard preview from a raw message.
+  Render the placeholder in the message until the reader explicitly reveals
+  it. Earlier packages that read the raw fields can display the original text.
 - Reminders: `overview.remind` says this device keeps personal reminders,
   including current browser devices, and `overview.reminders[]` lists the pending ones
   (`{message, conv?, from, title, due, overdue, revision?, writer?}`, soonest first).

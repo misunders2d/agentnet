@@ -1,4 +1,7 @@
-import { Lexer, type Token, type Tokens } from "marked";
+import { Lexer, type Token, type Tokens, type TokenizerThis, type MarkedOptions } from "marked";
+import { hiddenText, maskSpoilers, replaceSpoilers } from "./spoilers.mjs";
+export { fieldSelection, formats, formatText } from "./features/TextFormatting.model";
+export { hiddenText, maskSpoilers, spoilerRanges, replaceSpoilers } from "./spoilers.mjs";
 export { localRunningDetail } from "./runningDetail";
 export { requestResultText } from "./requestResult";
 
@@ -8,12 +11,64 @@ export const markdownText = (s: string): string => s.replace(/&(#x[0-9a-f]{1,6}|
   const n = /^#x/i.test(ref) ? parseInt(ref.slice(2),16) : parseInt(ref.slice(1),10);
   return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : all;
 });
-export const markdownTokens = (text: string): Token[] => new Lexer({gfm:true,breaks:true}).lex(text);
+type SpoilerMode = "mask" | "reveal" | "literal";
+type Extensions = NonNullable<MarkedOptions["extensions"]>;
+
+function underline(this: TokenizerThis, source: string): Tokens.Generic | undefined {
+  const pair = /^\^\^(?!\^)([^\s^][^\n^]*?)\^\^(?!\^)/.exec(source);
+  if (pair && !/\s$/.test(pair[1])) return {type: "underline", raw: pair[0], text: pair[1], tokens: this.lexer.inlineTokens(pair[1])};
+}
+
+const markdownOptions = { gfm: true, breaks: true };
+const underlineExtensions: Extensions = {
+  renderers: {}, childTokens: {}, inline: [underline], startInline: [source => source.indexOf("^^")],
+};
+
+export function markdownInlineTokens(text: string): Token[] {
+  return new Lexer(text.includes("^^") ? { ...markdownOptions, extensions: underlineExtensions } : markdownOptions).inlineTokens(text);
+}
+
+export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): Token[] {
+  if (!text.includes("||") || spoilers === "literal") {
+    return new Lexer(text.includes("^^") ? { ...markdownOptions, extensions: underlineExtensions } : markdownOptions).lex(text);
+  }
+  if (spoilers === "mask") return markdownTokens(maskSpoilers(text), "literal");
+
+  // Shield spans before block lexing. GFM otherwise splits on blank lines,
+  // table pipes and quote markers before an inline tokenizer can see the pair.
+  const occupied = new Set(Array.from(text.matchAll(/\uE000AN(\d+):/g), match => match[1]));
+  let nonce = 0;
+  while (occupied.has(String(nonce))) nonce++;
+  const prefix = "\uE000AN" + nonce + ":";
+  const secrets: string[] = [];
+  text = replaceSpoilers(text, secret => prefix + (secrets.push(secret) - 1) + "\uE001");
+  if (!secrets.length) return markdownTokens(text, "literal");
+
+  const underlined = text.includes("^^");
+  const extensions: Extensions = {
+    renderers: {}, childTokens: {},
+    inline: [source => {
+      if (!source.startsWith(prefix)) return;
+      const match = /^(\d+)\uE001/.exec(source.slice(prefix.length));
+      if (!match) return;
+      const secret = secrets[Number(match[1])];
+      if (secret !== undefined) return {type: "spoiler", raw: prefix + match[0], text: secret};
+    }, ...(underlined ? underlineExtensions.inline! : [])],
+    startInline: [source => source.indexOf(prefix), ...(underlined ? underlineExtensions.startInline! : [])],
+  };
+  return new Lexer({ ...markdownOptions, extensions }).lex(text);
+}
+
+// Marked keeps certain constructs (such as HTML and link destinations) as a
+// single token. If they swallowed a placeholder, keep its replacement inert.
+const unresolvedSpoiler = /\uE000AN\d+:\d+\uE001/g;
+export const spoilerFallback = (text: string) => text.includes("\uE000AN") ? text.replace(unresolvedSpoiler, hiddenText) : text;
+export const hasSpoilerPlaceholder = (text: string) => spoilerFallback(text) !== text;
 
 // Only previews use this projection. Literal code/escapes and raw HTML remain
 // text; the message's signed body, copy target and user-chosen title stay intact.
 export function previewText(text: string): string {
-  if (!/[\\`*_~[\]<>!&#\n]|^\s*(?:[-+>]\s|\d+[.)]\s)/.test(text)) return text;
+  if (!text.includes("^^") && !text.includes("||") && !/[\\`*_~[\]<>!&#\n]|^\s*(?:[-+>]\s|\d+[.)]\s)/.test(text)) return text;
   const read = (tokens: Token[]): string => tokens.map(token => {
     const t = token as Tokens.Generic;
     if (t.type === "space" || t.type === "br") return "\n";

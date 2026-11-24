@@ -32,7 +32,7 @@ func (l *Live) firstLineOf(r client.Reminder) string {
 		if err == nil {
 			for _, m := range msgs {
 				if m.ID == r.Message {
-					return firstLine(m.Body)
+					return firstLine(client.MaskSpoilers(m.Body))
 				}
 			}
 		}
@@ -41,7 +41,7 @@ func (l *Live) firstLineOf(r client.Reminder) string {
 	if t, err := l.Thread(r.Message); err == nil {
 		for _, m := range t.Messages {
 			if m.ID == r.Message {
-				return firstLine(m.Body)
+				return firstLine(client.MaskSpoilers(m.Body))
 			}
 		}
 	}

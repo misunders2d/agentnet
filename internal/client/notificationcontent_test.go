@@ -398,12 +398,12 @@ func TestNativeNotificationEditedDeletedAndBoundedPreview(t *testing.T) {
 	var notices []NativeNotification
 	show := func(n NativeNotification) { notices = append(notices, n) }
 	stop, _ = runWith(t, w, w.bob, RunOptions{HumanOnly: true, NotifyContent: show})
-	id := sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "Private obsolete contents"})
+	id := sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "Private ||obsolete contents||"})
 	ref, err := w.alice.RefOf(conv, id, "out")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = w.alice.Revise(tctx(t), ref, "Current shown contents"); err != nil {
+	if _, err = w.alice.Revise(tctx(t), ref, "Current ||shown\ncontents||"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "current revision received", func() bool {
@@ -414,7 +414,7 @@ func TestNativeNotificationEditedDeletedAndBoundedPreview(t *testing.T) {
 	if _, err = w.bob.showDueAlerts(time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if len(notices) != 1 || notices[0].Body != "Current shown contents" {
+	if len(notices) != 1 || notices[0].Body != "Current [Hidden text]" {
 		t.Fatalf("edited preview: %+v", notices)
 	}
 	stop, _ = runWith(t, w, w.bob, RunOptions{HumanOnly: true, NotifyContent: show})
@@ -437,7 +437,7 @@ func TestNativeNotificationEditedDeletedAndBoundedPreview(t *testing.T) {
 		if err := w.bob.SetAlertPrefs(AlertPrefs{Preview: v.mode}); err != nil {
 			t.Fatal(err)
 		}
-		w.bob.nativeNotification("msg="+id+"&dir=in", id, "Reminder", "Private obsolete contents")
+		w.bob.nativeNotification("msg="+id+"&dir=in", id, "Reminder", "Private ||obsolete contents||")
 		if n := notices[len(notices)-1]; n.Body != v.body || strings.Contains(n.Body, "obsolete") {
 			t.Fatal("retracted text escaped privacy mask", v.mode, n)
 		}

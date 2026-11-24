@@ -3,6 +3,8 @@
 // says so), and read its details. Desktop shows a hover toolbar; phones a
 // sheet on long-press. Nothing destructive happens by gesture alone: delete
 // always asks first.
+import { maskSpoilers } from "../linkText";
+import { useTextFormatting } from "./TextFormatting";
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Dialog } from "@base-ui/react/dialog";
@@ -114,7 +116,7 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
   const reply = () => { flushSync(() => onOpenChange(false)); acts.reply(); focusComposer(root, ctx.conv); };
   const react = useReact(m, ctx);
   const mine = useReactionView(m, ctx).list.filter((r) => r.mine).map((r) => r.emoji);
-  const snippet = plain(shownText(m)).split("\n")[0];
+  const snippet = plain(maskSpoilers(shownText(m))).split("\n")[0];
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={title || (who === "You" ? "Your message" : who + "’s message")}
       description={snippet ? <span className="line-clamp-2">{snippet}</span> : undefined}>
@@ -294,6 +296,7 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
   const { text, spans } = decode(draft);
   const cancel = () => { retained.discard(); store.discardFailedEdit(controlRef(m, ctx)); onDone(); };
   const area = useRef<HTMLTextAreaElement>(null);
+  const formatting = useTextFormatting(area, m.id, text, spans, (value, refs) => setDraft(encode(value, refs)), store.host.platform === "browser");
   useEffect(() => {
     const el = area.current;
     if (!el) return;
@@ -338,12 +341,14 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
   };
   return (
     <div className="flex flex-col gap-2">
-      <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={5} aria-label="New text"
+      {formatting.controls(<textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={5} aria-label="New text"
+        onSelect={e => formatting.select(e.currentTarget)}
         onKeyDown={(e) => {
+          if (formatting.key(e)) return;
           if (e.key === "Escape") { e.preventDefault(); cancel(); }
           if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || !e.shiftKey && !e.altKey)) { e.preventDefault(); void save(); }
         }}
-        className="max-h-[45dvh] w-full resize-none overflow-y-auto rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />
+        className="max-h-[45dvh] w-full resize-none overflow-y-auto rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />)}
       {isRequest(m) && <p className="text-[13px] text-text-2">The agent keeps what it already got; nothing runs again.</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>

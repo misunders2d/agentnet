@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 const source=await readFile(process.argv[2]||new URL('../web/src/features/Composer.tsx',import.meta.url),'utf8');
 const fn=source.match(/^  function keys\([\s\S]*?^  }/m)?.[0];assert.ok(fn,'actual composer keyboard handler');
 let opened=0,sent=0,prevented=0;
-const env={dm:{id:'current'},closed:null,sending:false,open:false,spans:[],offered:[],plainPaste:{current:false},openMentions:()=>opened++,send:()=>sent++};
+const env={dm:{id:'current'},closed:null,sending:false,open:false,spans:[],offered:[],plainPaste:{current:false},formatting:{key:()=>false},openMentions:()=>opened++,send:()=>sent++};
 const keys=runInNewContext('('+stripTypeScriptTypes(fn)+')',env);
 const event=patch=>({key:'2',code:'Digit2',ctrlKey:true,metaKey:false,altKey:false,shiftKey:false,nativeEvent:{isComposing:false,keyCode:50},preventDefault:()=>prevented++,...patch});
 for(const patch of [{},{key:'ц'},{ctrlKey:false,metaKey:true,key:'"'},{ctrlKey:true,metaKey:true}]){

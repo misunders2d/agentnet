@@ -1,3 +1,4 @@
+import { maskSpoilers } from "../linkText";
 // Review exact selected originals before one shared display-only operation.
 import { useEffect, useRef, useState } from "react";
 import { errorText, type T, type TopicOrganizationReview } from "../api";
@@ -69,7 +70,7 @@ export function OrganizeMessages({ dm, thread, ids, merge, onClose, onDone }: {
     <details className="mb-3"><summary className="min-h-11 cursor-pointer font-semibold">Selected messages ({count})</summary>
       <ol className="max-h-52 overflow-auto space-y-2">{ids.map(id => {
         const m = thread?.messages?.find(m=>m.id===id) || dm?.messages?.find(m => m.id === id || m.lid === id);
-        return <li key={id} className="border-b border-hairline py-2 text-[13px] whitespace-pre-wrap">{m ? shownText(m) || "Message with files" : "Selected message no longer loaded"}</li>;
+        return <li key={id} className="border-b border-hairline py-2 text-[13px] whitespace-pre-wrap">{m ? maskSpoilers(shownText(m)) || "Message with files" : "Selected message no longer loaded"}</li>;
       })}</ol>
     </details>
     {merge && <p className="mb-3 text-[13px] text-text-2">Only these reviewed messages merge. Later posts remain in the source topic.</p>}

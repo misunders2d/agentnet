@@ -392,7 +392,8 @@ func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 }
 
 // firstLines reads small first-line prefixes for ids exchanged with peer.
-// Candidate mentions get a bounded message scan before display clipping.
+// Candidate mentions get a bounded first-line scan. Spoilers on that line
+// need the body so a multiline closing delimiter is available before clipping.
 func (s *store) firstLines(peer string, ids []string) (map[string]string, error) {
 	out := map[string]string{}
 	seen := map[string]bool{}
@@ -403,12 +404,16 @@ func (s *store) firstLines(peer string, ids []string) (map[string]string, error)
 			unique = append(unique, id)
 		}
 	}
-	line := `substr(body, 1, min(coalesce(nullif(instr(body, char(10)), 0) - 1, ` + strconv.Itoa(topicLineScan) + `), ` + strconv.Itoa(topicLineScan) + `))`
-	// Normal lines keep the small read. Only a possible canonical mention
-	// needs its closing delimiter before display clipping. Several compact
-	// labels may precede the visible tail, so bound that scan by a message,
-	// not by one collective payload. Neither branch returns raw text to UI.
-	line = `CASE WHEN instr(substr(body, 1, ` + strconv.Itoa(topicLineScan) + `), '](agentnet:') > 0 THEN substr(body, 1, min(coalesce(nullif(instr(body, char(10)), 0) - 1, ` + strconv.Itoa(protocol.MaxBody) + `), ` + strconv.Itoa(protocol.MaxBody) + `)) ELSE ` + line + ` END`
+	firstLinePrefix := `substr(body, 1, ` + strconv.Itoa(topicLineScan) + `)`
+	firstLineLength := `nullif(instr(body, char(10)), 0) - 1`
+	line := `substr(body, 1, min(coalesce(` + firstLineLength + `, ` + strconv.Itoa(topicLineScan) + `), ` + strconv.Itoa(topicLineScan) + `))`
+	// Preserve the small read for ordinary previews. A long canonical mention
+	// can hide the start of a spoiler further along the first line.
+	wide := `substr(body, 1, min(coalesce(` + firstLineLength + `, ` + strconv.Itoa(protocol.MaxBody) + `), ` + strconv.Itoa(protocol.MaxBody) + `))`
+	line = `CASE WHEN instr(` + firstLinePrefix + `, '||') > 0 THEN body
+		WHEN instr(` + firstLinePrefix + `, '](agentnet:') > 0 THEN
+			CASE WHEN instr(` + wide + `, '||') > 0 THEN body ELSE ` + wide + ` END
+		ELSE ` + line + ` END`
 	if len(unique) == 0 {
 		return out, nil
 	}
