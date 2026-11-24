@@ -14,6 +14,11 @@ for (const [text, expected] of [
   ["escaped \\||literal\\|| then ||private||", "escaped \\||literal\\|| then [Hidden text]"],
   ["`||code||` then ||private||", "`||code||` then [Hidden text]"],
   ["before\n~~~sh\n||sample||\n~~~\n||secret||", "before\n~~~sh\n||sample||\n~~~\n[Hidden text]"],
+  ["```\r\n||sample||\r\n``` \t\r\n||secret||", "```\r\n||sample||\r\n``` \t\r\n[Hidden text]"],
+  ...["\uFEFF", "\u0085", "\u2028"].map(whitespace => {
+    const fenced = "```\n||sample||\n```" + whitespace + "\n||also code||\n```\n";
+    return [fenced + "||secret||", fenced + "[Hidden text]"];
+  }),
   ["||a|| ||b|| |||literal||| ||unfinished", "[Hidden text] [Hidden text] |||literal||| ||unfinished"],
 ]) {
   assert.equal(browserMask(text), expected);
@@ -25,6 +30,19 @@ assert.equal(block.tokens[0].type, "strong");
 assert.equal(block.tokens[0].tokens[0].type, "spoiler");
 assert.equal(block.tokens[0].tokens[0].text, "**nested**\n\nsecret");
 assert.equal(block.tokens[2].type, "underline");
+const code = "test -f a || exit 1\n\ntest -f b || exit 2";
+const nestedCode = "1. step\n   - sub\n     ```sh\n     " + code.replaceAll("\n", "\n     ") + "\n     ```";
+const [nested, , afterCode] = markdownTokens(nestedCode + "\n\n||secret||", "reveal");
+assert.equal(nested.items[0].tokens[1].items[0].tokens[1].text, code);
+assert.equal(afterCode.tokens[0].type, "spoiler");
+const [indentedCode] = markdownTokens("    " + code.replaceAll("\n", "\n    "), "reveal");
+assert.equal(indentedCode.text, code);
+const [links] = markdownTokens("[check](https://example.test/a||b||c) <https://example.test/a||b||c> ||secret||", "reveal");
+assert.deepEqual(links.tokens.filter(token => token.type === "link").map(token => token.href),
+  ["https://example.test/a||b||c", "https://example.test/a||b||c"]);
+assert.equal(links.tokens.at(-1).type, "spoiler");
+const [html] = markdownTokens("<div>Here ||example||</div>", "reveal");
+assert.equal(html.text, "<div>Here ||example||</div>");
 const entire = text => ({from: 0, to: text.length, direction: "forward"});
 const apply = (text, style, range = entire(text), spans = [], url) => formatText(text, spans, range, style, url);
 assert.equal(apply("**outer *inner*** and a_b_c", "clear").value, "outer inner and a_b_c");

@@ -25,7 +25,7 @@ function SourceLink({id, conv, children}: {id: string; conv?: string; children: 
 
 const decode = (text: string) => markdownText(spoilerFallback(text));
 
-function Spoiler({ text }: { text: string }) {
+function Spoiler({ text, mention }: { text: string; mention?: RenderMention }) {
   const [open, setOpen] = useState(false);
   const content = useMemo(() => open ? markdownInlineTokens(text) : [], [open, text]);
   const toggle = () => setOpen(value => !value);
@@ -41,7 +41,7 @@ function Spoiler({ text }: { text: string }) {
       if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
         event.preventDefault(); event.stopPropagation(); toggle();
       }
-    }}>{open ? inline(content) : hiddenText}</span>;
+    }}>{open ? inline(content, mention) : hiddenText}</span>;
 }
 
 /** Markdown renders text; tail (a message's time) sits at the end of its last line when that line is text. */
@@ -122,7 +122,7 @@ function span(t: Tokens.Generic, mention?: RenderMention): ReactNode {
     case "text": return t.tokens ? inline(t.tokens, mention) : decode(t.text);
     case "escape": return spoilerFallback(t.text);
     case "underline": return <u>{inline(t.tokens || [], mention)}</u>;
-    case "spoiler": return <Spoiler key={t.text} text={t.text} />;
+    case "spoiler": return <Spoiler key={t.text} text={t.text} mention={mention} />;
     case "strong": return <strong className="font-bold">{inline(t.tokens || [], mention)}</strong>;
     case "em": return <em>{inline(t.tokens || [], mention)}</em>;
     case "del": return <del className="opacity-70">{inline(t.tokens || [], mention)}</del>;

@@ -1,5 +1,5 @@
 import { Lexer, type Token, type Tokens, type TokenizerThis, type MarkedOptions } from "marked";
-import { hiddenText, maskSpoilers, replaceSpoilers } from "./spoilers.mjs";
+import { hiddenText, maskSpoilers, spoilerRanges } from "./spoilers.mjs";
 export { fieldSelection, formats, formatText } from "./features/TextFormatting.model";
 export { hiddenText, maskSpoilers, spoilerRanges, replaceSpoilers } from "./spoilers.mjs";
 export { localRunningDetail } from "./runningDetail";
@@ -33,6 +33,8 @@ export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): To
     return new Lexer(text.includes("^^") ? { ...markdownOptions, extensions: underlineExtensions } : markdownOptions).lex(text);
   }
   if (spoilers === "mask") return markdownTokens(maskSpoilers(text), "literal");
+  const ranges = spoilerRanges(text);
+  if (!ranges.length) return markdownTokens(text, "literal");
 
   // Shield spans before block lexing. GFM otherwise splits on blank lines,
   // table pipes and quote markers before an inline tokenizer can see the pair.
@@ -40,10 +42,7 @@ export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): To
   let nonce = 0;
   while (occupied.has(String(nonce))) nonce++;
   const prefix = "\uE000AN" + nonce + ":";
-  const secrets: string[] = [];
-  text = replaceSpoilers(text, secret => prefix + (secrets.push(secret) - 1) + "\uE001");
-  if (!secrets.length) return markdownTokens(text, "literal");
-
+  const seen = new Set<number>();
   const underlined = text.includes("^^");
   const extensions: Extensions = {
     renderers: {}, childTokens: {},
@@ -51,12 +50,29 @@ export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): To
       if (!source.startsWith(prefix)) return;
       const match = /^(\d+)\uE001/.exec(source.slice(prefix.length));
       if (!match) return;
-      const secret = secrets[Number(match[1])];
-      if (secret !== undefined) return {type: "spoiler", raw: prefix + match[0], text: secret};
+      const index = Number(match[1]);
+      const range = ranges[index];
+      if (!range) return;
+      seen.add(index);
+      return {type: "spoiler", raw: prefix + match[0], text: text.slice(range.start + 2, range.end - 2)};
     }, ...(underlined ? underlineExtensions.inline! : [])],
     startInline: [source => source.indexOf(prefix), ...(underlined ? underlineExtensions.startInline! : [])],
   };
-  return new Lexer({ ...markdownOptions, extensions }).lex(text);
+  function shield(onlySeen = false) {
+    let source = "", at = 0;
+    for (const [index, range] of ranges.entries()) {
+      if (onlySeen && !seen.has(index)) continue;
+      source += text.slice(at, range.start) + prefix + index + "\uE001";
+      at = range.end;
+    }
+    return source + text.slice(at);
+  }
+  const lex = (source: string) => new Lexer({ ...markdownOptions, extensions }).lex(source);
+  const tokens = lex(shield());
+  if (seen.size === ranges.length) return tokens;
+  // GFM can consume a marker as literal code, HTML or a link destination.
+  // Keep those ranges in the original source so its indentation and URLs survive.
+  return seen.size ? lex(shield(true)) : markdownTokens(text, "literal");
 }
 
 // Marked keeps certain constructs (such as HTML and link destinations) as a

@@ -16,6 +16,7 @@ import (
 
 const formattingOldBody = "__old bold__ and _old italic_ with `||literal code||`"
 const formattingHiddenBody = "Before **||outer _nested_\n\nsecond secret||** after"
+const formattingCodeBody = "1. step\n   - sub\n     ```sh\n     test -f a || exit 1\n\n     test -f b || exit 2\n     ```\n\n||code-neighbor secret||"
 
 type formattingFixture struct {
 	*pictureFixture
@@ -88,6 +89,9 @@ func (f *formattingFixture) seed(count int) {
 	for i := range count {
 		id := "history-" + strconv.Itoa(i)
 		body := "Retained message " + strconv.Itoa(i)
+		if i == count-3 {
+			body = formattingCodeBody
+		}
 		if i == count-2 {
 			body = formattingOldBody
 		}

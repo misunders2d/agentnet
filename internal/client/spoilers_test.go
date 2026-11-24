@@ -13,6 +13,9 @@ func TestMaskSpoilers(t *testing.T) {
 		{"escaped \\||literal\\|| then ||private||", "escaped \\||literal\\|| then [Hidden text]", "escaped \\||literal\\|| then [Hidden text]"},
 		{"`||code||` then ||private||", "`||code||` then [Hidden text]", "`||code||` then [Hidden text]"},
 		{"before\n```sh\n||sample||\n```\n||secret||", "before\n```sh\n||sample||\n```\n[Hidden text]", "before"},
+		{"```\r\n||sample||\r\n``` \t\r\n||secret||", "```\r\n||sample||\r\n``` \t\r\n[Hidden text]", "```\r"},
+		{"```\n||sample||\n```\uFEFF\n||also code||\n```\n||secret||", "```\n||sample||\n```\uFEFF\n||also code||\n```\n[Hidden text]", "```"},
+		{"```\n||sample||\n```\u0085\n||also code||\n```\n||secret||", "```\n||sample||\n```\u0085\n||also code||\n```\n[Hidden text]", "```"},
 		{"||a|| ||b|| |||literal||| ||unfinished", "[Hidden text] [Hidden text] |||literal||| ||unfinished", "[Hidden text] [Hidden text] |||literal||| ||unfinished"},
 	} {
 		if got := MaskSpoilers(tc.body); got != tc.want {

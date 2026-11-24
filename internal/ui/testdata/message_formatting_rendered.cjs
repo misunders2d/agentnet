@@ -82,6 +82,19 @@ const operations = [
       assert.equal(await old.locator('code').textContent(), '||literal code||');
       const received = page.locator('[data-mid="history-' + (count - 1) + '"]');
       if (!base) {
+        if (!phone) {
+          await field.fill('sample');
+          await select(field, 0);
+          const browserMenu = await field.evaluate(target => target.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true, composed: true, cancelable: true, shiftKey: true, button: 2,
+          })));
+          assert(browserMenu, 'Shift+right-click keeps the browser edit menu available');
+          await field.fill('');
+        }
+        const code = page.locator('[data-mid="history-' + (count - 3) + '"]');
+        assert.equal(await code.locator('pre code').textContent(), 'test -f a || exit 1\n\ntest -f b || exit 2');
+        await code.getByRole('button', {name: '[Hidden text]', exact: true}).waitFor();
+        assert(!String(await code.textContent()).includes('code-neighbor secret'));
         const spoiler = received.getByRole('button', {name: '[Hidden text]', exact: true});
         await spoiler.waitFor();
         assert.equal(await page.getByText('second secret', {exact: false}).count(), 0);

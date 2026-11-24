@@ -3451,7 +3451,7 @@ and [Firefox shortcut reference](https://support.mozilla.org/en-US/kb/keyboard-s
 
 | Control | Rendered fixture behavior |
 | --- | --- |
-| Composer/editor context menu | Right-click selected text. Formatting appears and opens its submenu. |
+| Composer/editor context menu | Right-click selected text. Formatting appears and opens its submenu. Shift+right-click leaves the native edit menu to the browser or WebView. |
 | Touch Formatting | Selecting text in a touch viewport exposes the Formatting control. Tapping it opens the same choices. |
 | Bold | Menu and Ctrl+B wrap the selection in `**`. |
 | Italic | Menu and Ctrl+I wrap it in `*`. |
@@ -3473,6 +3473,19 @@ spoiler rendering, reply and chat-list text, and selection formatting on a
 the corresponding plain-text projections. The browser service workers publish
 generic notification copy. Android's native message notification reads the
 Go-projected body.
+
+The projection tests cover CRLF and require matching fence handling in Go and
+JavaScript when other whitespace follows a fence. The opened body preserves
+literal pipes in indented and nested code, HTML text and URL destinations. The
+rendered fixture checks that the neighboring spoiler remains concealed. Compact
+projections still mask conservatively where the plain-text scan identifies a
+pair. [CommonMark fence rules](https://spec.commonmark.org/0.31.2/#fenced-code-blocks)
+
+After those corrections, the four rendered Chromium cases passed with 40
+and 400 retained messages. Local feedback peaked at 72 ms, and held send
+and edit confirmation took 1,226–1,235 ms. A Shift+right-click event reached
+the browser without cancellation. Native edit menu display and Android
+long-press still require platform checks.
 
 Standalone Classic, Holonet and Zoom must refresh their packaged
 `link-text.mjs` from `internal/ui/skins/shared/link-text.mjs` and consume its

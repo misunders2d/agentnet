@@ -53,7 +53,7 @@ func MaskSpoilers(text string) string {
 				}
 			}
 			if fence != 0 {
-				if ch == fence && q-p >= fenceSize && strings.TrimSpace(text[q:end]) == "" {
+				if ch == fence && q-p >= fenceSize && strings.TrimRight(strings.TrimSuffix(text[q:end], "\r"), " \t") == "" {
 					fence = 0
 				}
 				i = end + 1

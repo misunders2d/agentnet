@@ -30,7 +30,8 @@ export function spoilerRanges(text) {
       let q = p;
       if (p - i < 4 && (ch === "`" || ch === "~")) while (q < end && text[q] === ch) q++;
       if (fence) {
-        if (ch === fence && q - p >= fenceSize && !text.slice(q, end).trim()) fence = "";
+        const closeEnd = text[end - 1] === "\r" ? end - 1 : end;
+        if (ch === fence && q - p >= fenceSize && !/[^ \t]/.test(text.slice(q, closeEnd))) fence = "";
         i = end + 1;
         continue;
       }

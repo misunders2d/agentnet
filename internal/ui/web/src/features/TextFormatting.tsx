@@ -101,7 +101,7 @@ export function useTextFormatting(
 
   function context(event: MouseEvent, disabled: boolean) {
     const element = field.current;
-    if (disabled || !element || event.target !== element || !fieldSelection(element)) return;
+    if (disabled || event.shiftKey || !element || event.target !== element || !fieldSelection(element)) return;
     event.preventDefault();
     event.stopPropagation();
     const { left, top } = element.getBoundingClientRect();
