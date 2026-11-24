@@ -286,7 +286,7 @@ export function discardEditDraft(store: ReturnType<typeof useApp>, m: AnyMsg, ct
   store.discardFailedEdit(controlRef(m, ctx));
 }
 
-export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () => void }) {
+export function EditBox({ m, ctx, wide, onDone }: { m: AnyMsg; ctx: Ctx; wide: boolean; onDone: () => void }) {
   const store = useApp();
   // Shown as @Name; a mention left untouched keeps its exact reference when saved, an edited one becomes text.
   const attempted = m._change?.action === "edit" && m._change.status === "failed" ? m._change.control.text : undefined;
@@ -305,14 +305,8 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
     if (!el) return;
     let width: number;
     const fit = () => {
-      // Measure at the starting width, before the minimum rows or scrollbar affect the result.
-      el.removeAttribute("data-edit-expanded");
+      // Measure the full field width without a scrollbar taking space from the text.
       el.style.overflowY = "hidden";
-      el.style.height = "0px";
-      const style = getComputedStyle(el);
-      const threeLines = 3 * parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      el.toggleAttribute("data-edit-expanded", el.scrollHeight > Math.ceil(threeLines));
-
       el.style.height = "";
       const borders = el.offsetHeight - el.clientHeight;
       el.style.height = el.scrollHeight + borders + "px";
@@ -338,12 +332,13 @@ export function EditBox({ m, ctx, onDone }: { m: AnyMsg; ctx: Ctx; onDone: () =>
   };
   return (
     <div className="flex flex-col gap-2">
-      <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={5} aria-label="New text"
+      <textarea ref={area} value={text} onChange={(e) => change(e.target.value)} rows={3} aria-label="New text"
         onKeyDown={(e) => {
           if (e.key === "Escape") { e.preventDefault(); cancel(); }
           if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || !e.shiftKey && !e.altKey)) { e.preventDefault(); void save(); }
         }}
-        className="max-h-[45dvh] w-full resize-none overflow-y-auto rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none" />
+        className={"w-full resize-none overflow-y-auto rounded-xl bg-surface px-3 py-2 text-ink outline-none stroke focus-visible:outline-none " +
+          (wide ? "max-h-[min(240px,45dvh)]" : "max-h-[min(140px,45dvh)]")} />
       {isRequest(m) && <p className="text-[13px] text-text-2">The agent keeps what it already got; nothing runs again.</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>

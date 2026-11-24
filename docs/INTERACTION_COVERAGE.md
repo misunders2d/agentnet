@@ -3523,6 +3523,45 @@ visible. That fixture adjustment and the navigation and notification-landing
 tests passed three consecutive runs. Physical phone, native webviews and
 integrated skin qualification remain open.
 
+## MEL-811 — Full-width sent-message edits
+
+At base `aa58315f`, a short own reply with a quote opened a 384 px bubble
+and a 354 px field in a 768 px desktop message column. The width depended on
+how much the text wrapped. The edit now fills the column from the first frame
+on desktop and phone. It starts at three rows, grows with the text, and
+scrolls at 240 px on desktop or 140 px on phone, with a 45% viewport-height
+cap in short windows.
+
+Slack opens a row-width inline editor from message actions, with Cancel and
+Save Changes below. AgentNet follows that placement, uses its own composer
+height limits, and keeps the bubble as the editor owner. The existing Store
+handles pending edits, recovery, and confirmation.
+[Slack's Edit message demo](https://slack.com/help/articles/202395258-Edit-or-delete-messages).
+
+Telegram Desktop at `5ff61571` saves the compose draft, loads a separate
+edit draft into the bottom input, and shows an edit header.
+[Telegram edit flow](https://github.com/telegramdesktop/tdesktop/blob/5ff61571/Telegram/SourceFiles/history/history_widget.cpp#L10237-L10276).
+[Telegram edit header](https://github.com/telegramdesktop/tdesktop/blob/5ff61571/Telegram/SourceFiles/history/history_widget.cpp#L11111-L11126).
+
+| Control or state | Rendered acceptance in `TestLocalChangesRendered` |
+|---|---|
+| Edit from desktop menu / phone long-press | Short quoted reply uses the full 768 px desktop or 366 px phone column. Quote stays visible. |
+| Short, wrapped, multiline, and tall edits | Starts at three rows, grows without overflow, scrolls at the cap, and shrinks when text is shortened. A 280 px viewport caps the field at 126 px. |
+| Shift+Enter, Escape, Enter, Cancel and Save | Shift+Enter inserts a newline without a write. Escape restores the original text without a write. Enter shows the pending edit immediately. Save retries a retained draft. Cancel discards the failed attempt. |
+| Pending, refused, confirmed and newer synced edits | Unrelated typing and navigation work during a held write. A refusal restores the stored text and keeps the attempted draft. A newer synced edit stays visible after refusal. Confirmation clears the pending state. |
+
+Linux Chromium 155 ran all 12 source-fixture cases at 1440×900 and 390×900,
+with 100 and 1,000 messages each, in Comic and with Office and Pulp overlay
+source from gallery revision `47774ca4`. The upper bound to a first
+presentation opportunity was 41 ms across open, reopen, Escape, Shift+Enter,
+Enter and Save retry. The simulated host's confirmation took 408–517 ms from
+Save with a controlled 400 ms hold. These are fixture observations. The
+Comic package hash, contract mount and existing rendered message controls
+passed separately. Gallery packaging for the
+overlays and native WebView and phone behavior remain unverified. Classic,
+Zoom and Holonet have their own resizable three-row editors and require
+separate implementation and verification in the skins repository.
+
 ## Composer emoji button and Twemoji (November 20, 2026)
 
 Owner requests: a separate emoji button (owner chose Telegram's placement:

@@ -148,7 +148,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
-  const editWidth = !editing ? "" : wide ? " w-1/2 has-[[data-edit-expanded]]:w-full" : " w-full";
+  const editWidth = editing ? " w-full" : "";
   const body = (
     <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + editWidth + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
@@ -163,7 +163,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
       {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
-      {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
+      {editing ? <EditBox m={m} ctx={ctx} wide={wide} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">{m._change?.status === "pending" ? "Deleting message…" : "Message deleted"}{time}</p>
           : approved ? <>
             {proposal && !proposal.deleted && onJump && <button type="button" className="block min-h-11 text-left text-[13px] underline" onClick={() => onJump(proposal.id)}>View proposal</button>}
