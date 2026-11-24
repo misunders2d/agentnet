@@ -56,6 +56,8 @@ export interface FileProgress { have: number; total: number; done: boolean; fetc
 export type FoldersView = T.FoldersView;
 export type FolderEntry = T.FolderView;
 
+export type NotificationSound = T.NotificationSound & { source: "system" | "chime" | "custom" };
+
 const q = (path: string, params: Record<string, string>) =>
   path + "?" + Object.entries(params).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
 
@@ -175,6 +177,9 @@ export function api(host: Host) {
     remindCancel: (id: string, expected?: { revision: number; writer?: string }) => post<ReminderResult>("/api/remind/cancel", { id, expected }),
     notifyResolve: (chan: string) => get<{ conv?: string }>(q("/api/notify/resolve", { chan })), // a browser notification's channel
     notify: (what:"enable" | "disable" | "mute" | "allow" | "seen" | "preview", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[]; preview?: "" | "full" | "sender" | "hidden" } = {}) => post<{ note: string }>("/api/notify/" + what, body),
+    notificationSound: () => get<NotificationSound>("/api/notify/sound"),
+    changeNotificationSound: (preview: boolean, body: T.NotificationSoundChange) =>
+      post<NotificationSound>(preview ? "/api/notify/sound-preview" : "/api/notify/sound", body),
 
     // Teams and storage
     teams: () => get<T.TeamsView>("/api/teams"),

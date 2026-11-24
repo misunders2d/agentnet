@@ -12,7 +12,7 @@ import (
 // Inspect the exact payload sent by balloon without displaying anything.
 // Sound remains the Shell's choice; this does not prove audible acceptance.
 func TestBalloonUsesSystemSoundAndQuietTime(t *testing.T) {
-	nid := balloonData(41, 7, "AgentNet test", "A new message")
+	nid := balloonData(41, 7, "AgentNet test", "A new message", false)
 	if nid.InfoFlags&niifNoSound != 0 {
 		t.Fatal("notification unconditionally silences the system sound")
 	}
@@ -21,6 +21,29 @@ func TestBalloonUsesSystemSoundAndQuietTime(t *testing.T) {
 	}
 	if nid.Wnd != 41 || nid.ID != 7 || nid.Flags != nifInfo || windows.UTF16ToString(nid.InfoTitle[:]) != "AgentNet test" || windows.UTF16ToString(nid.Info[:]) != "A new message" {
 		t.Fatalf("notification routing or content changed: %+v", nid)
+	}
+}
+
+func TestBalloonWithAgentNetSoundRetainsQuietTime(t *testing.T) {
+	nid := balloonData(41, 7, "AgentNet test", "A new message", true)
+	if nid.InfoFlags != niifInfo|niifQuietTime|niifNoSound || nid.Flags != nifInfo {
+		t.Fatalf("expected a silent native balloon with quiet-time behavior: %#x/%#x", nid.InfoFlags, nid.Flags)
+	}
+}
+
+func TestWindowsQuietModeInputs(t *testing.T) {
+	for state := uint32(0); state <= 8; state++ {
+		if shellAllowsSound(state) != (state == 5 || state == 7) {
+			t.Fatalf("unexpected Shell quiet-state result: %d", state)
+		}
+	}
+	for _, name := range []string{"", "Microsoft.QuietHoursProfile.PriorityOnly", "Microsoft.QuietHoursProfile.AlarmsOnly", "Microsoft.QuietHoursProfile.Future"} {
+		if unrestrictedProfileName(name) {
+			t.Fatalf("quiet or unknown profile would allow sound: %q", name)
+		}
+	}
+	if !unrestrictedProfileName("Microsoft.QuietHoursProfile.Unrestricted") {
+		t.Fatal("unrestricted profile would suppress sound")
 	}
 }
 

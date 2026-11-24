@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/notify"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
@@ -102,6 +103,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/guest/decide", s.changeHuman("decide"))
 	mux.HandleFunc("POST /api/dm/guest/end", s.changeHuman("end"))
 	mux.HandleFunc("POST /api/notify/{what}", s.notify)
+	mux.HandleFunc("GET /api/notify/sound", s.notificationSound)
+	mux.HandleFunc("POST /api/notify/sound", s.notificationSound)
+	mux.HandleFunc("POST /api/notify/sound-preview", s.notificationSound)
 	mux.HandleFunc("POST /api/upload", s.upload)
 	mux.HandleFunc("GET /api/media/capabilities", s.mediaCapabilities)
 	mux.HandleFunc("POST /api/media/video", s.prepareVideo)
@@ -209,6 +213,9 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			limit := int64(maxBody)
 			if r.URL.Path == "/api/person/picture" {
 				limit = 90 << 10
+			}
+			if r.URL.Path == "/api/notify/sound" || r.URL.Path == "/api/notify/sound-preview" {
+				limit = (notify.MaxSoundFile+2)/3*4 + maxBody // base64 WAV and settings JSON
 			}
 			switch {
 			case r.URL.Path == "/api/media/video" && mt == "application/octet-stream":
@@ -417,6 +424,29 @@ func (s *Server) notify(w http.ResponseWriter, r *http.Request) {
 		err = NotFound("no such alert control")
 	}
 	writeResult(w, map[string]string{"note": note}, err)
+}
+
+func (s *Server) notificationSound(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(NotificationSounds)
+	if !ok {
+		writeErr(w, NotFound("Windows notification sound is unavailable here"))
+		return
+	}
+	if r.Method == http.MethodGet {
+		v, err := p.NotificationSound()
+		writeResult(w, v, err)
+		return
+	}
+	if _, err := p.NotificationSound(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	var v client.NotificationSoundChange
+	if !readJSON(w, r, &v) {
+		return
+	}
+	result, err := p.ChangeNotificationSound(v, r.URL.Path == "/api/notify/sound-preview")
+	writeResult(w, result, err)
 }
 
 // upload keeps the bytes of one file the page will send, privately, and

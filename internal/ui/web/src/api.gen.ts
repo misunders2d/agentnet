@@ -820,9 +820,27 @@ export interface NativeRequest {
   expires: number;
 }
 
+export interface NotificationSound {
+  source: string;
+  volume: number;
+  file_name?: string;
+  revision: number;
+  respect_dnd: boolean;
+}
+
+export interface NotificationSoundChange {
+  source: string;
+  volume: number | null;
+  file_name?: string;
+  file?: string;
+  revision: number;
+  respect_dnd: boolean;
+}
+
 export interface NotifyView {
   preview?: string;
   preview_default?: string;
+  sound?: boolean;
   available: boolean;
   native: boolean;
   enabled: boolean;

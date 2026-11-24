@@ -60,6 +60,7 @@ const (
 	wmApp           = 0x8000
 	msgRequest      = wmApp     // queued Show and Close requests are waiting
 	msgIcon         = wmApp + 1 // the icon's callback message
+	msgSound        = wmApp + 2 // queued audio after the balloon request
 	requestTimeout  = 10 * time.Second
 	errNoNotifyArea = "Shell_NotifyIconW failed (no notification area: is a desktop session running?)"
 )
@@ -113,6 +114,8 @@ type msg struct {
 type request struct {
 	title, body string
 	onClick     func()
+	audio       notificationSound
+	preview     bool
 	close       bool
 	done        chan error
 }
@@ -128,6 +131,9 @@ var (
 	iconID   uint16 // owner thread only: the current notification's icon, 0 for none
 	lastID   uint16 // owner thread only: the last click identity given out (0 once used up)
 	anyID    bool   // owner thread only: an identity was given out (lastID is valid)
+	player   soundPlayer
+	pending  notificationSound // owner thread only: coalesce audio like the replaced balloon
+	queued   bool              // owner thread only: a msgSound has been posted
 )
 
 // Show displays a balloon with the system's notification sound settings,
@@ -141,6 +147,14 @@ func Show(title, body string) error { return ShowAction(title, body, nil, nil) }
 // is for desktops that keep a command with a notification).
 func ShowAction(title, body string, argv []string, onClick func()) error {
 	return send(request{title: title, body: body, onClick: onClick})
+}
+
+func ShowWithSound(title, body string, argv []string, onClick func(), wave []byte, respectDND bool) error {
+	return send(request{title: title, body: body, onClick: onClick, audio: notificationSound{wave: wave, respectDND: respectDND}})
+}
+
+func PreviewSound(wave []byte) error {
+	return send(request{preview: true, audio: notificationSound{wave: wave}})
 }
 
 // Close removes the notification-area icon (and any balloon, and its click
@@ -197,6 +211,7 @@ func owner() {
 	if startErr != nil {
 		return
 	}
+	defer player.close()
 	var m msg
 	for {
 		r, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
@@ -237,6 +252,13 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 	case msgIcon:
 		clicks.callback(lparam)
 		return 0
+	case msgSound:
+		audio := pending
+		pending, queued = notificationSound{}, false
+		if audio.allowed(player.windowsAllowsSound) {
+			_ = player.play(audio.wave) // the balloon does not depend on audio availability
+		}
+		return 0
 	}
 	ret, _, _ := procDefWindowProc.Call(hwnd, message, wparam, lparam)
 	return ret
@@ -246,13 +268,25 @@ func wndProc(hwnd, message, wparam, lparam uintptr) uintptr {
 // previous one's icon with one of its own (removing its balloon and its
 // action), so the callback identifies the notification.
 func handle(wnd uintptr, r request) error {
+	if r.preview {
+		return player.play(r.audio.wave)
+	}
 	clicks.set(0, nil)
 	if iconID != 0 {
 		shellNotify(nimDelete, &notifyIconData{Wnd: wnd, ID: uint32(iconID)})
 	}
 	if r.close {
 		iconID = 0
+		pending = notificationSound{}
+		player.close()
 		return nil
+	}
+	// Windows may suppress or refuse the banner. AgentNet-owned audio is a
+	// separate action, queued once outside the shell's icon retry.
+	pending = r.audio
+	if !queued && len(pending.wave) != 0 {
+		posted, _, _ := procPostMessage.Call(wnd, msgSound, 0, 0)
+		queued = posted != 0
 	}
 	// A new identity for this notification (ids advance even when it fails
 	// to show); once they are used up, it shows without a click action on
@@ -270,7 +304,7 @@ func handle(wnd uintptr, r request) error {
 	ok := false
 	for attempt := 0; attempt < 2 && !ok; attempt++ { // a second try re-adds a lost icon (e.g. Explorer restarted)
 		shellNotify(nimDelete, &notifyIconData{Wnd: wnd, ID: uint32(id)})
-		ok = addIcon(wnd, id) && balloon(wnd, id, r.title, r.body)
+		ok = addIcon(wnd, id) && balloon(wnd, id, r.title, r.body, len(r.audio.wave) != 0)
 	}
 	if !ok {
 		shellNotify(nimDelete, &notifyIconData{Wnd: wnd, ID: uint32(id)})
@@ -301,14 +335,16 @@ func addIcon(wnd uintptr, id uint16) bool {
 
 // balloon shows a balloon on icon id that respects quiet time (the
 // previous notification's icon, and so its balloon, is gone already).
-func balloon(wnd uintptr, id uint16, title, body string) bool {
-	nid := balloonData(wnd, id, title, body)
+func balloon(wnd uintptr, id uint16, title, body string, silent bool) bool {
+	nid := balloonData(wnd, id, title, body, silent)
 	return shellNotify(nimModify, &nid)
 }
 
-func balloonData(wnd uintptr, id uint16, title, body string) notifyIconData {
-	// Leave sound to Windows and the user's notification/volume settings.
+func balloonData(wnd uintptr, id uint16, title, body string, silent bool) notifyIconData {
 	nid := notifyIconData{Wnd: wnd, ID: uint32(id), Flags: nifInfo, InfoFlags: niifInfo | niifQuietTime}
+	if silent {
+		nid.InfoFlags |= niifNoSound
+	}
 	copyUTF16(nid.InfoTitle[:], title)
 	copyUTF16(nid.Info[:], body)
 	return nid

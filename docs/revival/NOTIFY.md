@@ -305,9 +305,14 @@ Built: `internal/client/alerts.go`; client schema step 18.
 - **Order and limits, plainly:** removal is committed before the OS call,
   so a crash in between loses that alert (never repeats it); the OS may
   drop, delay or hide it (Focus, permissions, no notification server).
-  Windows alerts use the person's configured notification sound while
-  respecting Windows quiet time; Windows sound and Focus settings remain
-  authoritative. On Linux a new alert replaces this daemon's previous one;
+  Windows retains the system sound by default. In Notifications, select
+  AgentNet Chime or a local PCM WAV and set AgentNet volume. Preview plays
+  the current settings without saving or showing a banner. The notifier uses
+  this program's audio session and requests a silent native balloon when an
+  AgentNet sound is selected. Windows still controls balloon presentation.
+  Respect Windows Do Not Disturb starts off. When enabled, AgentNet's automatic
+  sound is silent during a Windows quiet mode or if Windows can't report it.
+  On Linux a new alert replaces this daemon's previous one;
   Windows and macOS stack as they do. A pending alert survives a daemon restart and is shown
   once after it. Nothing claims exactly-once display.
 - **Click:** on Linux, with `agentnet daemon --ui`, the click runs

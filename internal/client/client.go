@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,6 +121,8 @@ type Agent struct {
 	nativeNotifyPreviewDefault NotificationPreview
 	nativePreviewHost          atomic.Value                   // NotificationPreview; UI reads without racing Run callback publication
 	openPage                   func(fragment string) []string // RunOptions.OpenPage (the AgentNet app's window)
+
+	sound desktopSound
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
@@ -301,8 +304,9 @@ func openAgent(home string, id *identity.Identity, st *store) (*Agent, error) {
 		case wake <- struct{}{}:
 		default:
 		}
-	}, notify: desktopNotify,
+	},
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1), networkWake: make(chan struct{}, 1)}
+	a.notify = a.desktopNotify
 	st.onChange = a.changes.bumpStored
 	st.onJobReady = func() { a.wakeWorkerNow(); a.notifyOwnWork() }
 	var hubURL, cert string
@@ -528,11 +532,15 @@ type Outgoing struct {
 const maxFollowUp = 4 << 10
 
 // desktopNotify shows a notification unless AGENTNET_NOTIFY=off (for
-// servers and tests). onClick, if set, runs when the person clicks it
-// (Linux only for now).
-func desktopNotify(title, body string, argv []string, onClick func()) error {
+// servers and tests). Click support is provided by the native notifier.
+func (a *Agent) desktopNotify(title, body string, argv []string, onClick func()) error {
 	if os.Getenv("AGENTNET_NOTIFY") == "off" {
 		return errors.New("turned off by AGENTNET_NOTIFY=off")
+	}
+	if runtime.GOOS == "windows" {
+		if s := a.sound.live.Load(); s != nil && len(s.wave) != 0 {
+			return notify.ShowWithSound(title, body, argv, onClick, s.wave, s.RespectDND)
+		}
 	}
 	return notify.ShowAction(title, body, argv, onClick)
 }

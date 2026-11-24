@@ -7,6 +7,7 @@ import type { AndroidNotificationStatus } from "../host";
 import { useApp } from "../context";
 import { useStore } from "../store";
 import { Card, GroupLabel, Hint, PageHead, Skeleton, Toggle } from "./Settings.parts";
+import { WindowsNotificationSound } from "./Settings.sound";
 
 const permission = () => (typeof Notification === "undefined" ? "unsupported" : Notification.permission);
 
@@ -42,7 +43,7 @@ export function NotificationSummary({ n }: { n: T.NotifyView | undefined }) {
 export function NotificationsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
-  const head = <PageHead title="Notifications" titleRef={titleRef} lead={<>When someone writes, or an agent you brought in answers, this device can notify you. Your operating system controls sound, vibration and lock-screen visibility.</>} />;
+  const head = <PageHead title="Notifications" titleRef={titleRef} lead={<>When someone writes, or an agent you brought in answers, this device can notify you. {o?.notify?.sound ? "Windows controls banners and lock-screen visibility." : "Your operating system controls sound, vibration and lock-screen visibility."}</>} />;
   if (!o) return <>{head}<Skeleton /></>;
   const n = o.notify;
   if (!n) return <>{head}<Card className="p-4"><p>Notifications aren’t available in this AgentNet.</p></Card><AndroidConnection /><Typing /></>;
@@ -189,6 +190,7 @@ function NotifyBody({ n }: { n: T.NotifyView }) {
         {intent?.phase === "checking" && <button type="button" className="mt-2 underline" onClick={() => void store.refetch()}>Check notification status</button>}
       </Card>
       <NotificationPreviewControl n={shown} busy={busy || !!intent} onChange={value => void preview(value)} />
+      {n.sound && <WindowsNotificationSound />}
       <Hint className="px-1">Chats notify you unless muted. Use Mute in the chat’s menu to keep it quiet.</Hint>
     </div>
   );

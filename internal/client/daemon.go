@@ -105,6 +105,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	a.nativeNotify, a.nativeNotifyContent = opts.Notify, opts.NotifyContent
 	a.nativeNotifyPreviewDefault = opts.NotifyPreviewDefault
 	a.publishNativePreviewHost(opts)
+	a.loadNotificationSound()
 	if !opts.HumanOnly {
 		stopWorker, err := a.startWorker(ctx)
 		if err != nil {

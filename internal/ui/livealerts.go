@@ -18,7 +18,7 @@ func (l *Live) notifyView() (*NotifyView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &NotifyView{Available: true, Native: true, Enabled: p.Enabled, Mutes: p.Mutes, Allowed: []string{}}
+	v := &NotifyView{Available: true, Native: true, Sound: l.a.HasNotificationSound(), Enabled: p.Enabled, Mutes: p.Mutes, Allowed: []string{}}
 	if fallback := l.a.NativeNotificationPreviewDefault(); fallback != "" {
 		v.Preview, v.PreviewDefault = string(p.Preview), string(fallback)
 	}
@@ -112,6 +112,24 @@ func (l *Live) NotifyPreview(preview string) (string, error) {
 		p.Preview = client.NotificationPreview(preview)
 		return nil
 	})
+}
+
+func (l *Live) NotificationSound() (client.NotificationSound, error) {
+	if !l.a.HasNotificationSound() {
+		return client.NotificationSound{}, NotFound("Windows notification sound is unavailable here")
+	}
+	return l.a.NotificationSound(), nil
+}
+
+func (l *Live) ChangeNotificationSound(change client.NotificationSoundChange, preview bool) (client.NotificationSound, error) {
+	if !l.a.HasNotificationSound() {
+		return client.NotificationSound{}, NotFound("Windows notification sound is unavailable here")
+	}
+	v, err := l.a.ChangeNotificationSound(change, preview)
+	if err != nil {
+		return client.NotificationSound{}, Refuse(err.Error())
+	}
+	return v, nil
 }
 
 // NotifyMute implements Alerts.

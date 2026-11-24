@@ -349,13 +349,22 @@ operation grants conversation or task access.
 | `POST /api/notify/allow` | D B | Let one person's turns alert, or stop them. | `{person: <person id>, allowed}` | `{note}` |
 | `POST /api/notify/seen` | D B | Report the messages this page actually presented. | `{conv, ids:[id]}` | `{note}` |
 | `POST /api/notify/preview` | D | Optional local native notification content preference. Changes neither alert consent nor mute/sender scopes. Unsupported providers refuse it. | `{preview:""\|"full"\|"sender"\|"hidden"}`; empty means host default | `{note}` |
-| `GET /api/notify/resolve` | B | Turn a browser notification's channel into a conversation (`host.onOpen` kind `"channel"`). D has only `POST /api/notify/{what}`: GET gives 405, and POST gives 404 "no such alert control". | `?chan=` | `{conv}` (`""` when unknown) |
+| `GET /api/notify/sound` | D (Windows) | Read device-local sound settings when `overview.notify.sound` is true. | — | `{source, volume, respect_dnd, revision, file_name?}` |
+| `POST /api/notify/sound` | D (Windows) | Save notification sound settings on this device. A stale revision is refused. | `{source, volume, respect_dnd, revision, file_name?, file?}` | Current saved settings |
+| `POST /api/notify/sound-preview` | D (Windows) | Start playback of the submitted settings without saving them or showing a balloon. | Same as sound save | Current saved settings |
+| `GET /api/notify/resolve` | B | Turn a browser notification's channel into a conversation (`host.onOpen` kind `"channel"`). D returns 405 for GET and 404 for POST on this route. | `?chan=` | `{conv}` (`""` when unknown) |
 | `GET /api/typing` | D B | Who is typing in a scope, and this device's preferences. | `?conv=&peer=&thread=` | `{scope, preferences:{send, show}, supported, current, entries:[{person?, address, label, expires}]}` |
 | `POST /api/typing` | D B | Report that this person is typing. It carries no content. | `{scope:{conv?, peer?, thread?}, active}` | `{submitted, skipped, throttled}` |
 | `POST /api/typing/preferences` | D B | This device's own choices: share my typing, show others'. | `{send, show}` | `{send, show}` |
 | `POST /api/remind` | DB | Set or move a personal reminder on a stored received or own-sent message. | `{id, due: unix seconds, expected?: {revision, writer?}}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
 | `POST /api/remind/done` | DB | Mark a reminder done across current linked own-human devices. | `{id, expected?: {revision, writer?}}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
 | `POST /api/remind/cancel` | DB | Cancel a reminder across current linked own-human devices. | `{id, expected?: {revision, writer?}}` | `{note, seq?, message?, reminder?: ReminderView or null}` |
+
+Windows sound `source` is `system`, `chime`, or `custom`. Volume is an integer
+from 0 to 100. `respect_dnd` starts off and applies to automatic AgentNet sound.
+Send `file_name` and base64 `file` together to replace the
+locally saved custom WAV. The host accepts 16-bit PCM at 8–48 kHz, mono or
+stereo, up to five seconds and 1 MiB. The host returns the file name only.
 
 The optional view/result `seq` is captured before loading the local snapshot,
 using the overview's revision sequence. A reminder result reads back only its

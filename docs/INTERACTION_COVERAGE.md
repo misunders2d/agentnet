@@ -3586,3 +3586,68 @@ main, not diagnosed here: `TestComicReviewHistoryRendered`,
 `TestComicPanelLayoutRendered`, `TestComicDraftDestinationsRendered`,
 `TestComicOutboxRendered`, `TestAndroidComicRendered` (waits for "Message
 saved on this phone…").
+
+## MEL-814 — Windows notification sound (November 24, 2026)
+
+Telegram Desktop `0e79d7a47c3e1876576e62d760d53e1f3f14c2dc` separates preview,
+track gain, and saved sound selection in `RingtonesBox`, looks up cached
+notification tracks for delivery, and submits a silent native toast beside
+its own audio. AgentNet uses its existing notifier owner thread, one prepared
+WAV per selected setting, a separate preview action and a silent native
+balloon when it owns the sound. Existing installations start with Windows
+default. [Ringtone settings and preview](https://github.com/telegramdesktop/tdesktop/blob/0e79d7a47c3e1876576e62d760d53e1f3f14c2dc/Telegram/SourceFiles/boxes/ringtones_box.cpp#L145-L190),
+[cached tracks](https://github.com/telegramdesktop/tdesktop/blob/0e79d7a47c3e1876576e62d760d53e1f3f14c2dc/Telegram/SourceFiles/window/notifications_manager.cpp#L1117-L1142),
+[native notification template](https://github.com/telegramdesktop/tdesktop/blob/0e79d7a47c3e1876576e62d760d53e1f3f14c2dc/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp#L90-L105).
+
+The Go sidecar already owns the balloon. It uses `PlaySoundW` with its
+process audio session, names that session `AgentNet` through Core Audio,
+and leaves the Windows mixer level independent of in-app PCM gain. A single
+queued window message starts playback after the notification request. File
+validation, canonicalization and gain calculation happen on settings changes
+or daemon startup. AgentNet reuses its window thread and keeps one pending
+sound. It starts no extra process, worker or polling loop.
+[PlaySound](https://learn.microsoft.com/en-us/previous-versions/dd743680(v=vs.85)),
+[process-specific session](https://learn.microsoft.com/en-us/windows/win32/coreaudio/notification-sounds-for-legacy-audio-applications),
+[session label](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nf-audiopolicy-iaudiosessioncontrol-setdisplayname),
+[balloon flags](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-notifyicondataw).
+
+Sergey chose the Telegram DND approach with sound suppressed on unknown state
+when opted in. AgentNet reads the selected, effective and active automatic-rule
+profiles through the same private read-only COM interface. The documented
+Shell query covers quiet time, presentation and related quiet states. Windows
+can change the private contract in an OS update. A failed or unrecognized state
+check suppresses the AgentNet sound. Default-off notifications and direct
+preview skip DND detection. Windows Focus sessions affect these sounds when
+they activate Do Not Disturb. The balloon always stays under Windows control.
+[Telegram's profile check](https://github.com/telegramdesktop/tdesktop/blob/0e79d7a47c3e1876576e62d760d53e1f3f14c2dc/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp#L278-L347),
+[Rafael Rivera's MIT-licensed interface definitions](https://github.com/telegramdesktop/tdesktop/blob/0e79d7a47c3e1876576e62d760d53e1f3f14c2dc/Telegram/SourceFiles/platform/win/windows_quiethours.idl),
+[Shell states](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ne-shellapi-query_user_notification_state),
+[Focus and Windows versions](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/applifecycle/focus-session).
+
+| Interaction or state | `TestNotificationChangesRendered` coverage |
+|---|---|
+| Cold and warm Notifications, message privacy | Held concurrent refresh, common controls on base and candidate. |
+| Windows default, AgentNet Chime, Custom WAV | Source updates the local form immediately. The picker shows the actual name and refuses a wrong extension. |
+| Volume, both DND choices | Pointer and keyboard volume, DND default off, two-way switch and saved readback. |
+| Preview | Chime and the exact selected custom bytes, using the draft volume, with pending and completion feedback. No save is sent. |
+| Save, failure, retry | Held write, duplicate click, concurrent sync, explicit failure with editable draft, save retry and reopen. An unrelated field and view control stay usable. |
+
+Chromium 155 passed the four Windows-capability cases at 1440 and 390 px with
+640 and 6,400 retained messages, plus six existing daemon, browser and
+simulated Android cases. Common control feedback was 24.4–59.5 ms at
+`aa58315f` and 29.4–75.6 ms on the candidate. Sound-specific feedback was
+23.2–43.9 ms. Save confirmation arrived after 1209.6–1242.7 ms with a
+deliberately held response. Screenshots at both widths were inspected.
+Run `TestNotificationChangesRendered` with the existing Playwright fixture
+or run its Node script directly. Set `AGENTNET_NOTIFICATION_BASE=aa58315f`
+for the common-control baseline, using the same fixture and viewport sizes.
+
+Runtime gate still open. Ruslan's reference computer is Windows 11 Home 26H2
+build 26300.10075. Verify by ear there or on an authorized comparable Windows
+11 desktop. Check built-in and custom playback, volume at several settings,
+the AgentNet mixer label and independent Windows mixer adjustment, native
+banner with exactly one sound, and the same custom sound with DND off, on,
+and an automatic DND rule across both AgentNet toggle positions. Exercise
+restoration after restarting the app. The rendered fixture runs Chromium on
+Linux with synthetic sound and storage responses. It does not exercise WinMM,
+Windows mixer presentation, the Windows picker, or the private COM contract.
