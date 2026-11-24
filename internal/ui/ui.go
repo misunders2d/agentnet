@@ -805,6 +805,7 @@ type Reminders interface {
 type NotifyView struct {
 	Preview        string   `json:"preview,omitempty"`         // local native message preview preference; empty means host default
 	PreviewDefault string   `json:"preview_default,omitempty"` // absent when this host cannot choose preview content
+	Sound          bool     `json:"sound,omitempty"`           // local Windows sound controls
 	Available      bool     `json:"available"`
 	Native         bool     `json:"native"` // this computer shows the alert itself: no browser permission is asked
 	Enabled        bool     `json:"enabled"`
@@ -828,6 +829,12 @@ type Alerts interface {
 // NotificationPreviews is optional: browser push and older hosts stay generic.
 type NotificationPreviews interface {
 	NotifyPreview(preview string) (string, error)
+}
+
+// NotificationSounds is available only on the local Windows notifier host.
+type NotificationSounds interface {
+	NotificationSound() (client.NotificationSound, error)
+	ChangeNotificationSound(client.NotificationSoundChange, bool) (client.NotificationSound, error)
 }
 
 // Participants is implemented by providers where agents can be invited

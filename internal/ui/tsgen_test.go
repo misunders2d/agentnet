@@ -40,6 +40,7 @@ var tsRoots = []any{
 	protocol.GoogleAccess{}, protocol.GoogleAccessChange{},
 	drivecontract.RelayStorageStatus{},
 	client.StorageCacheSelection{}, client.StorageCacheResult{}, client.StorageSendRetried{},
+	client.NotificationSound{}, client.NotificationSoundChange{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
