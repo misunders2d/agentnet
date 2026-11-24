@@ -71,8 +71,32 @@ export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): To
   const tokens = lex(shield());
   if (seen.size === ranges.length) return tokens;
   // GFM can consume a marker as literal code, HTML or a link destination.
-  // Keep those ranges in the original source so its indentation and URLs survive.
-  return seen.size ? lex(shield(true)) : markdownTokens(text, "literal");
+  // Restore those ranges only if the reparse keeps the same visible prose.
+  // Otherwise a malformed destination can spill a spoiler into a paragraph.
+  const restored = seen.size ? lex(shield(true)) : markdownTokens(text, "literal");
+  return sameProse(tokens, restored) ? restored : tokens;
+}
+
+function sameProse(before: Token[], after: Token[]): boolean {
+  return before.length === after.length && before.every((token, i) => {
+    const a = token as Tokens.Generic, b = after[i] as Tokens.Generic;
+    if (a.type !== b.type) return false;
+    switch (a.type) {
+      case "code": case "codespan": case "html": case "def": return true;
+      case "link":
+        if (a.autolink !== b.autolink) return false;
+        if (a.autolink) return true; // the whole address is a literal link
+        break;
+      case "list": return sameProse(a.items, b.items);
+      case "table": {
+        const aRows = [a.header, ...a.rows], bRows = [b.header, ...b.rows];
+        return aRows.length === bRows.length && aRows.every((row, j) =>
+          row.length === bRows[j].length && row.every((cell: Tokens.TableCell, k: number) => sameProse(cell.tokens, bRows[j][k].tokens)));
+      }
+    }
+    if (a.tokens && b.tokens) return sameProse(a.tokens, b.tokens);
+    return (a.text ?? a.raw) === (b.text ?? b.raw);
+  });
 }
 
 // Marked keeps certain constructs (such as HTML and link destinations) as a

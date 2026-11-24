@@ -43,6 +43,16 @@ assert.deepEqual(links.tokens.filter(token => token.type === "link").map(token =
 assert.equal(links.tokens.at(-1).type, "spoiler");
 const [html] = markdownTokens("<div>Here ||example||</div>", "reveal");
 assert.equal(html.text, "<div>Here ||example||</div>");
+for (const malformed of [
+  "[a](http://e.test/||secret words||)",
+  "<https://e.test/||secret words||> ||real||",
+  "[a](https://e.test/a||b||c) <https://e.test/x||secret words||> ||real||",
+  "    literal ||\nplain secret words||",
+]) {
+  const tokens = markdownTokens(malformed, "reveal");
+  assert(!JSON.stringify(tokens).includes("secret words"), "a malformed literal cannot expose the spoiler");
+  if (malformed.endsWith("||real||")) assert.equal(tokens[0].tokens.at(-1).type, "spoiler");
+}
 const entire = text => ({from: 0, to: text.length, direction: "forward"});
 const apply = (text, style, range = entire(text), spans = [], url) => formatText(text, spans, range, style, url);
 assert.equal(apply("**outer *inner*** and a_b_c", "clear").value, "outer inner and a_b_c");

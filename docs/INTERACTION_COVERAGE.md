@@ -3487,6 +3487,12 @@ and edit confirmation took 1,226–1,235 ms. A Shift+right-click event reached
 the browser without cancellation. Native edit menu display and Android
 long-press still require platform checks.
 
+The parser now retains the masked result when restoring a literal changes
+surrounding prose or Markdown structure. The regression covers malformed
+destinations, mixed valid and malformed links, and a range crossing an
+indented code block. The same four rendered cases passed on a shared host
+with 275 ms peak local feedback and 1,234–1,276 ms held confirmation.
+
 Standalone Classic, Holonet and Zoom must refresh their packaged
 `link-text.mjs` from `internal/ui/skins/shared/link-text.mjs` and consume its
 `maskSpoilers`, `replaceSpoilers`, `formats`, `fieldSelection` and
