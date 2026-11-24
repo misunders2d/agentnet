@@ -14,6 +14,7 @@ import { Store } from "./store";
 import { setSavedReadOnly } from "./saved-storage";
 import { applySavedTheme } from "./features/Settings";
 import { clearPictures } from "./features/Message.files";
+import { Toasts } from "./features/Status";
 
 let live = 0; // mounted roots
 const mounted = new WeakMap<Element, { root: Root; store: Store; stopTheme: () => void; parts: HTMLElement[]; stopBack: (() => void) | undefined }>();
@@ -27,7 +28,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
   root.classList.add("an-root");
   root.lang = navigator.language || "en";
   const app = document.createElement("div");
-  app.className = "an-app"; // the frame's box: as tall as root (styles.css)
+  app.className = "an-app relative"; // the frame's box: as tall as root (styles.css)
   const portals = document.createElement("div");
   portals.className = "an-portals";
   root.append(app, portals);
@@ -73,14 +74,22 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
     if (state.tab !== "chats") { store.showTab("chats"); return true; }
     return false;
   });
-  const dismissPanel = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || event.defaultPrevented || !store.isActive() || !root.isConnected || !store.get().panel) return;
-    const popup = [...portals.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')]
-      .some(el => el.getClientRects().length && !el.hasAttribute('data-ending-style') && !el.closest('[inert]'));
-    if (!popup) { event.preventDefault(); store.setPanel(false); }
+  const dismissOnEscape = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented || !store.isActive() || !root.isConnected) return;
+    const path = event.composedPath();
+    if (!path.includes(root) && !(live === 1 && event.target === root.ownerDocument.body)) return;
+    const foreground = root.querySelectorAll<HTMLElement>('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[data-message-selection]');
+    if ([...foreground].some(el => el.getClientRects().length && !el.hasAttribute('data-ending-style') && !el.closest('[inert]'))) return;
+    if (store.get().panel) { event.preventDefault(); store.setPanel(false); return; }
+    if (event.repeat || event.isComposing || path.some(el => el instanceof HTMLElement &&
+      (el.isContentEditable || el.matches('input, textarea, select, [role="textbox"]')))) return;
+    const focused = path[0] instanceof Element ? path[0].closest('[data-status-popup]') : null;
+    const dismiss = focused?.querySelector<HTMLButtonElement>('button[data-status-dismiss]') ??
+      [...app.querySelectorAll<HTMLButtonElement>('button[data-status-dismiss]')].at(-1);
+    if (dismiss) { event.preventDefault(); dismiss.click(); }
   };
-  window.addEventListener("keydown", dismissPanel);
-  const stopNavigation = () => { stopBack?.(); window.removeEventListener("keydown", dismissPanel); };
+  window.addEventListener("keydown", dismissOnEscape);
+  const stopNavigation = () => { stopBack?.(); window.removeEventListener("keydown", dismissOnEscape); };
   live++;
   const r = createRoot(app);
   mounted.set(root, { root: r, store, stopTheme, parts: [app, portals], stopBack: stopNavigation });
@@ -90,6 +99,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
         <StoreContext.Provider value={store}>
           <HostControlsClaim host={host} root={root} />
           <App />
+          <Toasts />
         </StoreContext.Provider>
       </OwnedContext.Provider>
     </CSPProvider>,

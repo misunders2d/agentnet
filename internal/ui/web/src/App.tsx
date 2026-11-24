@@ -15,7 +15,7 @@ import { OksView, useNeedsYou } from "./features/Approvals";
 import { AgentsView, warmAgentData } from "./features/AgentsView";
 import { Settings, SettingsPane } from "./features/Settings";
 import { WorkspaceCoin } from "./features/WorkspaceSwitcher";
-import { Toasts, ConnectionBanner } from "./features/Status";
+import { ConnectionBanner } from "./features/Status";
 import { PersonAvatar } from "./ui/Avatar";
 import { NativeRecovery } from "./features/NativeRecovery";
 import { Outbox } from "./features/Outbox";
@@ -70,7 +70,6 @@ export function App() {
           <Card key={cardKey} o={card.shown} leaving={card.leaving}
             className={card.leaving ? "an-push-out an-card-edge" : arrived ? "" : "an-push-in an-card-edge"} />
         )}
-        <Toasts />
       </div>
     );
   }
@@ -194,7 +193,6 @@ function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; o
         </div>
         {!settings && !workspace && <RoomPanel />}
       </main>
-      <Toasts />
     </div>
   );
 }

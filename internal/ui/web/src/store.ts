@@ -2665,8 +2665,16 @@ export class Store {
   toast(text: string, tone?: Toast["tone"]) {
     const id = ++this.toastSeq;
     this.set({ toasts: [...this.state.toasts, { id, text, tone }] });
-    setTimeout(() => this.set({ toasts: this.state.toasts.filter((t) => t.id !== id) }), tone === "error" ? 7000 : 3500);
+    setTimeout(() => this.dismissToast(id), tone === "error" ? 7000 : 3500);
   }
+
+  dismissToast(id: number) {
+    const toasts = this.state.toasts.filter(t => t.id !== id);
+    if (toasts.length !== this.state.toasts.length) this.set({ toasts });
+  }
+
+  // Hide this notice for the current write burst. Its requests still settle normally.
+  dismissWorking() { this.set({ working: false }); }
 
   // Nothing a person asks for may look ignored. Most actions show their own
   // change at once; any write still unanswered after a moment also says so, as
@@ -2688,7 +2696,7 @@ export class Store {
     return work.finally(() => {
       if (--this.writes > 0) return;
       clearTimeout(this.writeTimer);
-      if (this.alive && this.state.working) this.set({ working: false });
+      this.dismissWorking();
     });
   }
 

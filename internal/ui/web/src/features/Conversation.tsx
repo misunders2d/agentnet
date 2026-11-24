@@ -141,7 +141,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
 
 function SelectBar({ count, onCancel, onBringIn, onMove, onContribute }: { count: number; onCancel: () => void; onBringIn: () => void; onMove?: () => void; onContribute?: () => void }) {
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-t-[1.5px] border-outline bg-surface px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]">
+    <div data-message-selection className="flex shrink-0 flex-wrap items-center gap-2 border-t-[1.5px] border-outline bg-surface px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]">
       <button type="button" onClick={onCancel} aria-label="Stop selecting" className="grid size-11 place-items-center rounded-full hover:bg-sunken"><IconX size={22} /></button>
       <p className="min-w-0 flex-1 text-[15px] font-semibold" aria-live="polite">{count === 0 ? "Tap messages to select" : count === 1 ? "1 message selected" : count + " messages selected"}</p>
       {onMove && <Button disabled={!count} onClick={onMove}>Move to topic</Button>}

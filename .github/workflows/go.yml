@@ -176,7 +176,7 @@ jobs:
         if: ${{ !inputs.test_run && (!inputs.test_packages || contains(inputs.test_packages, './...') || contains(inputs.test_packages, 'internal/ui')) }}
         shell: bash
         env:
-          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestPictureChangesRendered|TestPersonRenameRendered|TestWorkspaceNameRendered|TestGoogleAccessRendered|TestDeviceDecisionsRendered|TestDeviceRemovalRendered|TestGroupChangesRendered|TestAgentDismissalsRendered|TestTeamSelectionRendered|TestNewChatRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestReviewUnreadRetainsPresentationRendered|TestAndroidSendPendingRendered)$' }}
+          AGENTNET_RENDERED_RUN: ${{ inputs.test_run || '^(TestPictureChangesRendered|TestPersonRenameRendered|TestWorkspaceNameRendered|TestGoogleAccessRendered|TestDeviceDecisionsRendered|TestDeviceRemovalRendered|TestGroupChangesRendered|TestAgentDismissalsRendered|TestTeamSelectionRendered|TestNewChatRendered|TestReminderChangesRendered|TestResponsiveEditorDraftsRendered|TestSheetImmediateRendered|TestMessagePopupsImmediateRendered|TestTimelineNavigationRendered|TestReviewUnreadRetainsPresentationRendered|TestAndroidSendPendingRendered|TestComicStatusPopupsRendered)$' }}
           AGENTNET_RENDERED_COUNT: ${{ inputs.test_count || '1' }}
         run: |
           tooling="$RUNNER_TEMP/agentnet-interaction-regressions"
