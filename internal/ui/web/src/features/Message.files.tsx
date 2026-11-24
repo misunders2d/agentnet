@@ -3,7 +3,7 @@
 // with name, size and Download. Files come checked and decrypted from
 // host.file; a download is a link the browser saves where it saves things,
 // so nothing here claims where the file went. HTML and SVG never render.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload, IconMovie, IconPlayerPlayFilled, IconLoader2 } from "@tabler/icons-react";
 import { errorText, type Api, type FileProgress } from "../api";
 import { useStore } from "../store";
@@ -59,17 +59,40 @@ function standing(m: AnyMsg, f: FileItem): "open" | "request" | "requested" | "g
 export function MessageFiles({ m }: { m: AnyMsg }) {
   const files = filesOf(m);
   if (!files.length) return null;
-  const isPicture = (f: FileItem) => standing(m, f) === "open" && pictureName.test(f.name);
-  // A shared preview row keeps tall screenshots compact. Each original keeps
-  // its own viewer, filename and actions, in the attachment's existing order.
-  const grouped = files.filter(isPicture).length > 1;
+  const items = files.map(f => {
+    const open = standing(m, f) === "open";
+    return { f, open, picture: open && pictureName.test(f.name) };
+  });
+  const picturesInGroup = items.filter(item => item.picture).length;
+  const grouped = picturesInGroup > 1;
+  const pictureTrio = picturesInGroup === 3 && items.length === 3;
+  const breaks = grouped ? new Set<number>() : undefined;
+  if (breaks) {
+    // Files keep their place and take a whole row. Split longer picture runs
+    // into rows of two or three without leaving an orphan after three.
+    let start = 0;
+    for (let end = 0; end <= items.length; end++) {
+      if (items[end]?.picture) continue;
+      while (end - start > 3) {
+        start += end - start === 4 ? 2 : 3;
+        breaks.add(start);
+      }
+      start = end + 1;
+    }
+  }
   return (
-    <div data-image-group={grouped ? "" : undefined} className={grouped ? "mt-1.5 grid w-[480px] max-w-full grid-cols-2 gap-2" : "mt-1.5 flex flex-col gap-1.5"}>
-      {files.map((f) => <div key={pictureKey(m, f)} className={"min-w-0 space-y-1 " + (grouped && !isPicture(f) ? "col-span-2" : "")}>
-        {isPicture(f) ? <Picture m={m} f={f} grouped={grouped} />
-          : standing(m, f) === "open" && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} />}
-        {standing(m, f) === "open" && !isThreadMsg(m) && !(grouped && isPicture(f)) && <SaveToDrive m={m} index={f.index} />}
-      </div>)}
+    <div data-image-group={grouped ? "" : undefined} className={grouped ? "mt-1.5 flex w-[480px] max-w-full flex-wrap gap-2" : "mt-1.5 flex flex-col gap-1.5"}>
+      {items.map(({ f, open, picture }, i) => {
+        return <Fragment key={pictureKey(m, f)}>
+          {/* Keep picture keys and viewer state on the same level between rows. */}
+          {breaks?.has(i) && <div aria-hidden="true" className="-my-1 basis-full" />}
+          {picture ? <Picture m={m} f={f} grouped={grouped} firstOfTrio={pictureTrio && i === 0} /> :
+            <div className={"min-w-0 space-y-1 " + (grouped ? "basis-full" : "")}>
+              {open && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} />}
+              {open && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
+            </div>}
+        </Fragment>;
+      })}
     </div>
   );
 }
@@ -108,7 +131,7 @@ function save(url: string, name: string, into: HTMLElement) {
 // Picture uses it. clearPictures frees them all (unmount). warmPictures
 // fetches the newest pictures of a conversation about to open.
 const PICTURES_KEPT = 48;
-type Pic = { url: string; picture: boolean };
+type Pic = { url: string; picture: boolean; ratio?: number };
 const pictures = new Map<string, Pic>();
 const fetchingPics = new Map<string, Promise<Pic>>();
 const inUse = new Map<string, number>(); // mounted Pictures per key
@@ -203,7 +226,7 @@ export function warmPictures(api: Api, messages: AnyMsg[] | null | undefined, n 
   for (const [m, f] of want) fetchPicture(api, m, f).catch(() => {});
 }
 
-function Picture({ m, f, grouped = false }: { m: AnyMsg; f: FileItem; grouped?: boolean }) {
+function Picture({ m, f, grouped = false, firstOfTrio = false }: { m: AnyMsg; f: FileItem; grouped?: boolean; firstOfTrio?: boolean }) {
   const store = useApp();
   const hasPerson = useStore(store, s => s.overview?.person?.state === "self");
   const portal = usePortal();
@@ -212,6 +235,7 @@ function Picture({ m, f, grouped = false }: { m: AnyMsg; f: FileItem; grouped?: 
   const known = pictures.get(key);
   const [url, setUrl] = useState(known?.picture ? known.url : "");
   const [shown, setShown] = useState(!!url); // a picture seen before shows at once; a new one fades in
+  const [ratio, setRatio] = useState(known?.ratio ?? 1);
   const [failed, setFailed] = useState(!!known && !known.picture);
   const [big, setBig] = useState(false);
   useEffect(() => {
@@ -233,27 +257,40 @@ function Picture({ m, f, grouped = false }: { m: AnyMsg; f: FileItem; grouped?: 
     io.observe(el);
     return () => { alive = false; io.disconnect(); };
   }, [key]);
-  if (failed) return <><FileChip m={m} f={f} />
-    {grouped && <span className="block truncate text-[12px] text-muted" title={f.name}>{f.name}</span>}
-    {grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}</>;
+  if (failed) return <div className={"min-w-0 space-y-1 " + (grouped ? "basis-full" : "")}>
+    <FileChip m={m} f={f} wrapName={grouped} />
+    {!isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
+  </div>;
+  // A wide lead in a three-picture group gets a row above the remaining two.
+  const wideLead = firstOfTrio && ratio > 1.2 && ratio <= 2;
   // Keep a placeholder while loading; decoded images retain their whole
   // aspect ratio, bounded by the conversation and viewport.
   return (
-    <>
+    <div className="min-w-0 space-y-1" style={grouped ? { flex: wideLead ? "0 0 100%" : `${ratio} 1 0px`, minWidth: 44, maxWidth: wideLead ? "100%" : ratio * 200 } : undefined}>
       <button ref={box} type="button" onClick={() => url && setBig(true)} aria-label={"Open picture " + f.name} title={"Open full image: " + f.name}
-        className={"relative flex max-w-full items-center justify-center overflow-hidden rounded-xl border border-outline/30 bg-sunken " + (grouped ? "aspect-square w-full" : "")}
-        style={grouped ? undefined : url ? { width: "fit-content" } : { width: "min(360px, 100%)", aspectRatio: "4 / 3" }}>
-        {url && <img src={url} alt={f.name} onLoad={() => setShown(true)} onError={() => setFailed(true)} loading="lazy" decoding="async"
+        className={"relative flex max-w-full items-center justify-center overflow-hidden rounded-xl border border-outline/30 bg-sunken " + (grouped ? "min-h-11 w-full" : "")}
+        style={grouped ? { aspectRatio: ratio, maxHeight: wideLead ? 240 : 200 } : url ? { width: "fit-content" } : { width: "min(360px, 100%)", aspectRatio: "4 / 3" }}>
+        {url && <img src={url} alt={f.name} onLoad={({ currentTarget: image }) => {
+          // The existing lazy image supplies dimensions. Keep them when a
+          // single preview joins a group after another file becomes openable.
+          // Bound extreme shapes while keeping the whole preview visible.
+          const next = Math.min(3, Math.max(.4, image.naturalWidth / image.naturalHeight));
+          const cached = pictures.get(key);
+          if (cached?.url === url) cached.ratio = next;
+          setRatio(next);
+          setShown(true);
+        }} onError={() => setFailed(true)} loading="lazy" decoding="async"
           className={"block h-auto w-auto max-w-full object-contain transition-opacity duration-200 motion-reduce:transition-none " + (grouped ? "max-h-full" : "max-h-[min(60dvh,480px)]") + " " + (shown ? "opacity-100" : "opacity-0")} />}
         {!shown && <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
       </button>
       {grouped && <span className="block truncate text-[12px] text-muted" title={f.name}>{f.name}</span>}
+      {!grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
       {big && <ImageViewer src={url} name={f.name} onClose={() => setBig(false)}
         openInApp={store.api.host.platform === "daemon" ? () => store.api.openImage(m.id, f.index, m.dir) : undefined}
         actions={<><Button icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>
           {hasPerson && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}
           {grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}</>} />}
-    </>
+    </div>
   );
 }
 
@@ -511,7 +548,7 @@ function VideoFile({ m, f }: { m: AnyMsg; f: FileItem }) {
   );
 }
 
-function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
+function FileChip({ m, f, wrapName = false }: { m: AnyMsg; f: FileItem; wrapName?: boolean }) {
   const store = useApp();
   const hasPerson = useStore(store, s => s.overview?.person?.state === "self");
   const portal = usePortal();
@@ -550,7 +587,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
     <div className="flex min-w-0 items-center gap-2.5 rounded-xl border border-outline/25 bg-surface/80 py-1.5 pl-2.5 pr-1 text-ink">
       <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-sunken text-text-2" aria-hidden="true"><Icon size={20} stroke={1.7} /></span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[14px] font-semibold" title={f.name}>{f.name}</span>
+        <span className={"block text-[14px] font-semibold " + (wrapName ? "[overflow-wrap:anywhere]" : "truncate")} title={f.name}>{f.name}</span>
         <span className="block text-[12px] text-muted tnum">
           {bytes(f.size)}
           {st === "requested" && " · asked " + from + " for it"}
