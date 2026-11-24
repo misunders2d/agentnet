@@ -17,6 +17,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/sqlitedb"
 )
 
 // answerRT answers matching Hub requests itself (a status and a body), as a
@@ -233,6 +234,70 @@ func TestReceivedRetractionRetriesAfterStorageFailure(t *testing.T) {
 				t.Fatalf("deletion was not applied: %+v", msg)
 			}
 		})
+	}
+}
+
+func TestConversationRetractionRetriesWhenRedactionCannotBeStored(t *testing.T) {
+	w, carol, conv, _, guest, _ := roomDM(t)
+	ctx := tctx(t)
+	const original = "ordinary text for the storage fixture"
+	sent, err := carol.SendConv(ctx, conv, ConvOutgoing{Body: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob holds the conversation turn", func() bool {
+		_, ok := findLID(t, w.bob, conv, sent.LID)
+		return ok
+	})
+	recipient, err := w.bob.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := envelope.Seal(envelope.Inner{
+		V: envelope.Version3, ID: protocol.NewID(), From: carol.Address, To: w.bob.Address, TS: time.Now().Unix(),
+		Kind: envelope.KindMessage, Sub: envelope.SubRetraction, Body: `{}`, Conv: conv, LID: protocol.NewID(),
+		Ref: &envelope.Ref{ID: sent.LID, Fingerprint: carol.Self().Fingerprint()}, Human: captured(t, carol, guest.PID, guest.PID),
+	}, carol.id.Sign, recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cap only this fixture database. Force a typed SQLite capacity result
+	// inside the redaction transaction, with room left for other writes.
+	db := w.bob.store.db
+	if _, err := db.Exec(`CREATE TABLE write_pressure(body BLOB);
+		CREATE TRIGGER fail_fixture_redaction BEFORE UPDATE OF body ON inbox
+		WHEN OLD.body = 'ordinary text for the storage fixture'
+		BEGIN INSERT INTO write_pressure VALUES(zeroblob(2097152)); END`); err != nil {
+		t.Fatal(err)
+	}
+	var pages int
+	if err := db.QueryRow("PRAGMA page_count").Scan(&pages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA max_page_count = %d", pages+16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.storeReceived(ctx, env); !sqlitedb.Full(err) {
+		t.Fatalf("expected relay to retain the deletion, got %v", err)
+	}
+	if seen, err := w.bob.store.seen(env.ID); err != nil || seen {
+		t.Fatalf("failed write left a disposition: seen=%v err=%v", seen, err)
+	}
+	if m, ok := findLID(t, w.bob, conv, sent.LID); !ok || m.Body != original || m.Deleted {
+		t.Fatal("failed write changed the original")
+	}
+	if _, err := db.Exec("DROP TRIGGER fail_fixture_redaction"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.storeReceived(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := w.bob.store.disposition(env.ID); err != nil || state != protocol.StateDelivered {
+		t.Fatalf("committed deletion receipt: %q %v", state, err)
+	}
+	var body string
+	if err := db.QueryRow("SELECT body FROM inbox WHERE conv = ? AND lid = ? AND verified_by = ?", conv, sent.LID, carol.Self().Fingerprint()).Scan(&body); err != nil || body != "" {
+		t.Fatalf("redelivery did not redact the stored body: body=%q err=%v", body, err)
 	}
 }
 
