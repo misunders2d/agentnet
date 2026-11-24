@@ -468,6 +468,46 @@ func TestOwnProposalClaimRequiresCurrentHumanKey(t *testing.T) {
 	holds(true)
 }
 
+func TestMatchingPeerKeyLeavesPendingOfferAlone(t *testing.T) {
+	s := securityStore(t)
+	key, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := key.Public("peer/desk")
+	if err := s.pin(pub); err != nil {
+		t.Fatal(err)
+	}
+	observe := func(key identity.Public) {
+		t.Helper()
+		if err := s.setPending(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(want *identity.Public) {
+		t.Helper()
+		pinned, pending, found, err := s.peer(pub.Address)
+		if err != nil || !found || !sameKeys(pinned, pub) {
+			t.Fatalf("trusted peer changed: found=%v err=%v", found, err)
+		}
+		if want == nil && pending != nil || want != nil && (pending == nil || !sameKeys(*pending, *want)) {
+			t.Fatal("pending offer changed")
+		}
+	}
+	observe(pub)
+	check(nil)
+
+	other, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := other.Public(pub.Address)
+	observe(offer)
+	check(&offer)
+	observe(pub)
+	check(&offer)
+}
+
 func TestProposalRefusesChangedHostKey(t *testing.T) {
 	s := securityStore(t)
 	local, err := identity.Generate()
