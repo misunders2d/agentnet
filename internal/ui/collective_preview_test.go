@@ -20,7 +20,7 @@ func TestLiveCollectivePreview(t *testing.T) {
 	for i := range refs {
 		refs[i] = fmt.Sprintf("p.%032x", i)
 	}
-	body := "[@Amazon_team](agentnet:collective/v1/" + strings.Join(refs, ",") + ") Check inventory\nRetain the signed body."
+	body := "[@Amazon_team](agentnet:collective/v1/" + strings.Join(refs, ",") + ") Check inventory ||confidential\nsecond line||\nRetain the signed body."
 	for _, conv := range []string{dm, group} {
 		sent, err := alice.SendConv(context.Background(), conv, client.ConvOutgoing{Body: body})
 		if err != nil {
@@ -42,7 +42,7 @@ func TestLiveCollectivePreview(t *testing.T) {
 			}
 			t.Fatal("conversation missing")
 		}
-		check("@Amazon_team Check inventory")
+		check("@Amazon_team Check inventory [Hidden text]")
 		view, err := live.DM(conv)
 		if err != nil {
 			t.Fatal(err)
@@ -63,7 +63,7 @@ func TestLiveCollectivePreview(t *testing.T) {
 		if _, err = live.EditMessage(ControlAction{Conv: conv, ID: id, Dir: "out", Text: edited}); err != nil {
 			t.Fatal(err)
 		}
-		check("@Команда Check inventory")
+		check("@Команда Check inventory [Hidden text]")
 		view, err = live.DM(conv)
 		if err != nil {
 			t.Fatal(err)
@@ -98,7 +98,7 @@ func TestLiveCollectivePreview(t *testing.T) {
 	for _, thread := range o.Threads {
 		if thread.ID == direct.ID {
 			found = true
-			if thread.Last != "@Direct_team Check inventory" {
+			if thread.Last != "@Direct_team Check inventory [Hidden text]" {
 				t.Fatalf("native direct overview preview %q", thread.Last)
 			}
 		}

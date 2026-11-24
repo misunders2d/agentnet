@@ -1,3 +1,4 @@
+import { maskSpoilers } from "../linkText";
 import { useEffect, useRef, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
@@ -127,7 +128,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
   const previous = slot?.attempt;
   const same = !!previous && !!snapshot && previous.payload.body===snapshot.body && previous.draft.text===snapshot.draft.text && previous.payload.topic===(snapshot.draft.topic || "") && previous.payload.reply_to===snapshot.draft.replyTo && localScheduleTime(new Date(previous.payload.due))===due && JSON.stringify(previous.payload.audience)===JSON.stringify(audience) && previous.files.length===(snapshot.draft.files || []).length && previous.files.every((f,i)=>f.file===snapshot.draft.files?.[i].file);
   const localTimezone = timezone();
-  const matches = (row:T.ScheduledSend) => !query.trim() || (chatTitle(row)+" "+row.body+" "+(row.files || []).map(f=>f.name).join(" ")).toLowerCase().includes(query.trim().toLowerCase());
+  const matches = (row:T.ScheduledSend) => !query.trim() || (chatTitle(row)+" "+maskSpoilers(row.body)+" "+(row.files || []).map(f=>f.name).join(" ")).toLowerCase().includes(query.trim().toLowerCase());
   // Moving a keyed DOM row can still drop native input focus. Keep its place
   // while an editor is open; new pending rows append until the edit closes.
   const positions = new Map(selected ? editOrder.map((id,i)=>[id,i]) : []);
@@ -149,7 +150,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     <div className="flex min-w-0 items-start gap-3">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold">{chatTitle(row)}</p>
-        <p className="mt-1 truncate text-sm">{row.body.slice(0,180) || (row.files?.length ? row.files.length+" attachment"+(row.files.length===1?"":"s") : "Message")}</p>
+        <p className="mt-1 truncate text-sm">{maskSpoilers(row.body).slice(0,180) || (row.files?.length ? row.files.length+" attachment"+(row.files.length===1?"":"s") : "Message")}</p>
         <p className="mt-1 flex flex-wrap gap-x-2 text-[13px] text-text-2"><time className="whitespace-nowrap" dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time><span className="whitespace-nowrap" role={act?"status":undefined}>{act?.text || states[row.state] || "Unavailable"}</span>{!!row.files?.length&&<span className="whitespace-nowrap">{row.files.length+" file"+(row.files.length===1?"":"s")}</span>}</p>
       </div>
       <Button size="sm" variant="ghost" disabled={busy||!!act} aria-expanded={expanded} onClick={()=>{if(expanded){retainedBody.discard();setSelected(null);}else edit(current);}}>{expanded?"Close details":mutable(row)?"Edit schedule":"View schedule"}</Button>
@@ -157,7 +158,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     {expanded&&<div className="mt-3 rounded-xl bg-surface p-3 stroke">
     <p className="font-semibold"><time dateTime={row.due}>{new Date(row.due).toLocaleString([], {dateStyle:"medium",timeStyle:"short"})}</time></p>
     <p className="mt-1 text-sm text-text-2">{states[row.state] || "Unavailable"}{row.topic && " · "+(selectedDM?.topics?.find(t=>t.id===row.topic)?.title || "Topic")}</p>
-    <p className="mt-2 whitespace-pre-wrap break-words text-sm">{row.body}</p>
+    <p className="mt-2 whitespace-pre-wrap break-words text-sm">{maskSpoilers(row.body)}</p>
     {row.files?.map((f,i)=><p key={i} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}
     {row.state==="needs_review"&&<p className="mt-2 text-sm text-text-2">The chat, audience or attachments need review before sending.</p>}
     {row.state==="dispatching"&&<p className="mt-2 text-sm text-text-2">Preparing to send. Delivery is confirmed separately.</p>}
@@ -194,7 +195,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     {notice && <p role="status" className="my-3 rounded-xl bg-sunken p-3 text-sm">{notice}</p>}
     {pane==="create" && !blocked && !reviewOnly && <div className="space-y-4 pt-2">
       {reason && <p role="alert" className="text-sm text-danger">{reason}</p>}
-      <div className="rounded-xl bg-surface p-3 stroke"><p className="whitespace-pre-wrap break-words text-sm">{snapshot?.body || "Attachment message"}</p>{snapshot?.draft.files?.map(f=><p key={f.key} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}</div>
+      <div className="rounded-xl bg-surface p-3 stroke"><p className="whitespace-pre-wrap break-words text-sm">{maskSpoilers(snapshot?.body || "") || "Attachment message"}</p>{snapshot?.draft.files?.map(f=><p key={f.key} className="mt-1 break-all text-sm text-text-2">{f.name}</p>)}</div>
       <fieldset className="min-w-0"><legend className="text-sm font-semibold">When to send</legend>
         <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="min-w-0 text-sm">Send date<input aria-label="Send date" type="date" value={due.split("T")[0]} onChange={e=>setDue(e.target.value+"T"+(due.split("T")[1] || ""))} className={input} disabled={busy}/></label>
@@ -208,7 +209,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
     </div>}
     {slot && <div aria-label="Unconfirmed schedule save" className="mt-4 rounded-xl bg-sunken p-3 text-sm">
       <p className="font-semibold">{slot.status==="saving"?"Saving schedule…":slot.status==="refused"?"Save refused":"Unconfirmed save"}</p>
-      {slot.attempt && <><p className="whitespace-pre-wrap break-words">{slot.attempt.payload.body}</p><p>{new Date(slot.attempt.payload.due).toLocaleString()} · {slot.attempt.payload.timezone}</p></>}
+      {slot.attempt && <><p className="whitespace-pre-wrap break-words">{maskSpoilers(slot.attempt.payload.body)}</p><p>{new Date(slot.attempt.payload.due).toLocaleString()} · {slot.attempt.payload.timezone}</p></>}
       {slot.files.map((f,i)=><p key={i} className="break-all">{f.name} · {f.size} bytes</p>)}
       <p>{slot.note}</p>
       {!slot.durable&&<p role="status">This unconfirmed save won’t be remembered if the page reloads. Keep AgentNet open until you resolve it.</p>}
@@ -217,7 +218,7 @@ export function ScheduleDialogs({pane,onPane,conv,dm,capture,reason,page=false,r
         <Button size="sm" variant="ghost" disabled={busy||slot.status==="saving"} onClick={()=>void lookup(slot)}>Check saved state</Button>
         <Button size="sm" variant="ghost" disabled={busy||slot.status==="saving"} onClick={()=>setForgetting(true)}>Forget…</Button>
       </div>
-      {found?.id===slot.id&&!slot.attempt&&<div className="mt-3 rounded-xl bg-surface p-3"><p className="whitespace-pre-wrap break-words">{found.body}</p><p>{new Date(found.due).toLocaleString()} · {found.timezone} · {states[found.state] || "Unavailable"}</p>{found.files?.map((f,i)=><p key={i}>{f.name} · {f.size} bytes</p>)}<p>Compare this saved state with your draft. Attachment names and sizes do not prove identical contents.</p><Button size="sm" disabled={busy} onClick={()=>{store.forgetScheduleSave(conv,slot.id);setFound(null);onPane("list");setNotice("Saved-state review finished. Your draft is kept; compare it before saving another schedule.");}}>Keep draft and finish review</Button></div>}
+      {found?.id===slot.id&&!slot.attempt&&<div className="mt-3 rounded-xl bg-surface p-3"><p className="whitespace-pre-wrap break-words">{maskSpoilers(found.body)}</p><p>{new Date(found.due).toLocaleString()} · {found.timezone} · {states[found.state] || "Unavailable"}</p>{found.files?.map((f,i)=><p key={i}>{f.name} · {f.size} bytes</p>)}<p>Compare this saved state with your draft. Attachment names and sizes do not prove identical contents.</p><Button size="sm" disabled={busy} onClick={()=>{store.forgetScheduleSave(conv,slot.id);setFound(null);onPane("list");setNotice("Saved-state review finished. Your draft is kept; compare it before saving another schedule.");}}>Keep draft and finish review</Button></div>}
       {forgetting&&<div className="mt-3"><p>It may already be scheduled. Check Scheduled messages before saving again.</p><Button size="sm" variant="danger" disabled={busy||slot.status==="saving"} onClick={()=>{store.forgetScheduleSave(conv,slot.id);setForgetting(false);setFound(null);}}>Forget unconfirmed save</Button></div>}
     </div>}
     {pane==="list" && <div className="space-y-3 pt-3">

@@ -64,6 +64,8 @@ npm ci --ignore-scripts --no-audit --no-fund >/dev/null
 if [ -n "${AGENTNET_INTERACTION_TAGS:-}" ]; then
 	node "$here/../testdata/interaction_inventory.cjs" --tag "$work/src"
 fi
+# The browser engine uses the same bounded, dependency-free spoiler projection.
+[ -n "$overlay" ] || cp src/spoilers.mjs "$here/../static/spoilers.mjs"
 # Reuse the pinned lexer for raw-link labels in the plain-text skin packages
 # (Classic and Zoom, in agentnet-skins). Only when building Comic in place:
 # an overlay build writes nothing here.

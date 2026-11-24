@@ -5,9 +5,9 @@ import { parseCollective } from '../collective-mentions.mjs';
 // Exact portable AgentNet destinations use the host's guarded navigation.
 // Mentions ([@Name](agentnet:person/ID)) are handed to
 // the caller, who knows who is in the conversation.
-import { Lexer, type Token, type Tokens } from "marked";
-import { createContext, Fragment, memo, useContext, useMemo, type ReactNode } from "react";
-import { shortLinkLabel } from "../linkText";
+import { type Token, type Tokens } from "marked";
+import { createContext, Fragment, memo, useContext, useMemo, useState, type ReactNode } from "react";
+import { hasSpoilerPlaceholder, hiddenText, markdownInlineTokens, markdownText, markdownTokens, shortLinkLabel, spoilerFallback } from "../linkText";
 
 export type MentionKind = "person" | "guest" | "agent" | "collective";
 export type RenderMention = (kind: MentionKind, id: string, name: string) => ReactNode;
@@ -23,17 +23,30 @@ function SourceLink({id, conv, children}: {id: string; conv?: string; children: 
   return open ? <button type="button" className="font-medium underline underline-offset-2" onClick={() => open(id, conv)}>{children}</button> : children;
 }
 
-const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
-// The lexer leaves character references as typed; read the common ones.
-const decode = (s: string) => s.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,6});/gi, (all, ref: string) => {
-  if (ref[0] !== "#") return entities[ref.toLowerCase()] ?? all;
-  const n = ref[1] === "x" || ref[1] === "X" ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10);
-  return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : all;
-});
+const decode = (text: string) => markdownText(spoilerFallback(text));
+
+function Spoiler({ text, mention }: { text: string; mention?: RenderMention }) {
+  const [open, setOpen] = useState(false);
+  const content = useMemo(() => open ? markdownInlineTokens(text) : [], [open, text]);
+  const toggle = () => setOpen(value => !value);
+  return <span role="button" tabIndex={0} aria-pressed={open}
+    className={"cursor-pointer rounded-sm px-0.5 focus-visible:outline-2 focus-visible:outline-agent-ink " +
+      (open ? "whitespace-pre-wrap bg-ink/[.05]" : "select-none bg-ink/15 font-medium")}
+    onClick={event => {
+      const link = (event.target as Element).closest("a[href],button");
+      if (open && link && event.currentTarget.contains(link)) return;
+      event.preventDefault(); event.stopPropagation(); toggle();
+    }}
+    onKeyDown={event => {
+      if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault(); event.stopPropagation(); toggle();
+      }
+    }}>{open ? inline(content, mention) : hiddenText}</span>;
+}
 
 /** Markdown renders text; tail (a message's time) sits at the end of its last line when that line is text. */
-export const Markdown = memo(function Markdown({ text, mention, tail, className = "" }: { text: string; mention?: RenderMention; tail?: ReactNode; className?: string }) {
-  const tokens = useMemo(() => new Lexer({ gfm: true, breaks: true }).lex(text).filter((t) => t.type !== "space" && t.type !== "def"), [text]);
+export const Markdown = memo(function Markdown({ text, mention, tail, className = "", spoilers = "mask" }: { text: string; mention?: RenderMention; tail?: ReactNode; className?: string; spoilers?: "mask" | "reveal" | "literal" }) {
+  const tokens = useMemo(() => markdownTokens(text, spoilers).filter((t) => t.type !== "space" && t.type !== "def"), [text, spoilers]);
   const end = tokens[tokens.length - 1];
   const inlineEnd = !!end && ["paragraph", "text", "heading", "html"].includes(end.type);
   return (
@@ -57,14 +70,14 @@ function block(t: Tokens.Generic, mention?: RenderMention, tail?: ReactNode): Re
     case "hr": return <hr className="border-0 border-t-[1.5px] border-current opacity-20" />;
     case "code": return (
       <pre className="max-h-80 overflow-auto rounded-xl bg-ink/[.06] px-3 py-2 font-mono text-[13px] leading-relaxed [overflow-wrap:normal]">
-        <code>{(t as Tokens.Code).text}</code>
+        <code>{spoilerFallback((t as Tokens.Code).text)}</code>
       </pre>
     );
     case "blockquote": return <blockquote className="border-l-[3px] border-current/30 pl-3 text-text-2 [&>*+*]:mt-1.5">{blocks(t.tokens || [], mention)}</blockquote>;
     case "list": return list(t as Tokens.List, mention);
     case "table": return table(t as Tokens.Table, mention);
-    case "html": return <p className="flow-root">{t.text}{tail}</p>;
-    default: return t.tokens ? <p>{inline(t.tokens, mention)}</p> : <p>{t.raw}</p>;
+    case "html": return <p className="flow-root">{spoilerFallback(t.text)}{tail}</p>;
+    default: return t.tokens ? <p>{inline(t.tokens, mention)}</p> : <p>{spoilerFallback(t.raw)}</p>;
   }
 }
 
@@ -107,40 +120,43 @@ function inline(tokens: Token[], mention?: RenderMention): ReactNode[] {
 function span(t: Tokens.Generic, mention?: RenderMention): ReactNode {
   switch (t.type) {
     case "text": return t.tokens ? inline(t.tokens, mention) : decode(t.text);
-    case "escape": return t.text;
+    case "escape": return spoilerFallback(t.text);
+    case "underline": return <u>{inline(t.tokens || [], mention)}</u>;
+    case "spoiler": return <Spoiler key={t.text} text={t.text} mention={mention} />;
     case "strong": return <strong className="font-bold">{inline(t.tokens || [], mention)}</strong>;
     case "em": return <em>{inline(t.tokens || [], mention)}</em>;
     case "del": return <del className="opacity-70">{inline(t.tokens || [], mention)}</del>;
-    case "codespan": return <code className="rounded-md bg-ink/[.07] px-1 py-px font-mono text-[0.9em]">{t.text}</code>;
+    case "codespan": return <code className="rounded-md bg-ink/[.07] px-1 py-px font-mono text-[0.9em]">{spoilerFallback(t.text)}</code>;
     case "br": return <br />;
-    case "html": return t.text;
+    case "html": return spoilerFallback(t.text);
     case "checkbox": return <span aria-hidden="true">{t.checked ? "☑ " : "☐ "}</span>;
     case "link": {
       const l = t as Tokens.Link;
+      if (hasSpoilerPlaceholder(l.href) || hasSpoilerPlaceholder(l.title || "")) return inline(l.tokens, mention);
       const collective=parseCollective(l.href);
-      if(collective && l.text.startsWith('@'))return mention?mention('collective',l.href,l.text.slice(1)):<strong>{l.text}</strong>;
+      if(collective && !hasSpoilerPlaceholder(l.text) && l.text.startsWith('@'))return mention?mention('collective',l.href,l.text.slice(1)):<strong>{l.text}</strong>;
       const ref = mentionHref.exec(l.href);
-      if (ref && mention && l.text.startsWith("@")) return mention(ref[1] as MentionKind, ref[2], l.text.slice(1));
+      if (ref && mention && !hasSpoilerPlaceholder(l.text) && l.text.startsWith("@")) return mention(ref[1] as MentionKind, ref[2], l.text.slice(1));
       const source = sourceHref.exec(l.href);
       if (source) return <SourceLink id={source[1]} conv={source[2]}>{inline(l.tokens, mention)}</SourceLink>;
       const portable = portableHref.test(l.href);
       if (!portable && !safeHref.test(l.href)) return inline(l.tokens, mention);
-      const label = shortLinkLabel(l.text, l.href);
+      const label = hasSpoilerPlaceholder(l.text) ? l.text : shortLinkLabel(l.text, l.href);
       const shortened = label !== l.text;
       return (
         <a href={l.href} target={portable ? undefined : "_blank"} rel="noopener noreferrer" title={shortened ? l.href : l.title || undefined} aria-label={shortened ? l.href : undefined}
           className="font-medium underline decoration-current/40 decoration-[1.5px] underline-offset-2 hover:decoration-current">
-          {shortened ? label : l.autolink ? l.text : inline(l.tokens, mention)}
+          {shortened ? label : l.autolink ? spoilerFallback(l.text) : inline(l.tokens, mention)}
         </a>
       );
     }
     case "image": {
       const img = t as Tokens.Image;
-      const label = img.text || img.href;
-      return safeHref.test(img.href)
+      const label = spoilerFallback(img.text || img.href);
+      return safeHref.test(img.href) && !hasSpoilerPlaceholder(img.href)
         ? <a href={img.href} target="_blank" rel="noopener noreferrer" className="underline decoration-current/40 underline-offset-2">{label}</a>
         : label;
     }
-    default: return t.raw;
+    default: return spoilerFallback(t.raw);
   }
 }

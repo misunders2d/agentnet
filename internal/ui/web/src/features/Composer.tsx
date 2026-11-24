@@ -33,6 +33,7 @@ import { AgentModelReport } from "./AgentModelReport";
 import { composerReplyFollowup, currentComposerFollowup, currentDirectComposerFollowup, replyFollowupAgent, type ComposerFollowup } from "./Composer.followup";
 import type { Ctx } from "./Message.model";
 import { ScheduleDialogs, type SchedulePane } from "./Composer.schedule";
+import { useTextFormatting } from "./TextFormatting";
 import { scheduleReason } from "./Composer.schedule-model";
 import { mediaKind, prepareMedia } from "./Composer.media";
 
@@ -104,6 +105,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // After a choice made around the text, the cursor goes back to it on a
   // desktop, and on a phone only when the person was typing (Composer.focus.ts).
   const { watch, focusField } = useFieldFocus(field);
+
+  const formatting = useTextFormatting(field, conv, text, spans, (value, refs) => {
+    setMentionRange(null);
+    setCaret(null);
+    write({ ...latest(), text: encode(value, refs) });
+    typing.typed(!!value.trim());
+  }, store.host.platform === "browser");
 
   // ---- who is here and who this goes to
   const {view: teams} = useTeams(!!dm && caret !== null && !!trigger(text, caret));
@@ -736,6 +744,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // ---- keys
   function keys(e: KeyboardEvent<HTMLTextAreaElement>) {
     plainPaste.current = (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.code === "KeyV" || e.key.toLowerCase() === "v");
+    if (!sending && formatting.key(e)) return;
     if (dm && !closed && !sending && e.code === "Digit2" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
       e.preventDefault();
       openMentions();
@@ -868,12 +877,12 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           onMouseDown={(e) => e.preventDefault()} onClick={openMentions} className={sideButton}>
           <IconAt size={22} stroke={2.2} aria-hidden="true" className="text-ink" />
         </button>}
-        <Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} value={text} placeholder={placeholder} aria-label={placeholder}
+        {formatting.controls(<Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} value={text} placeholder={placeholder} aria-label={placeholder}
           enterKeyHint={wide ? "send" : "enter"} autoComplete="off" spellCheck
           aria-autocomplete="list" aria-controls={open && offered.length ? listId : undefined}
           aria-activedescendant={open && offered.length ? optionId(listId, Math.min(active, offered.length - 1)) : undefined}
           onChange={(e) => { setMentionRange(null); edit(e.target.value, (e.nativeEvent as InputEvent).isComposing ? undefined : e.target.selectionStart); setCaret(e.target.selectionStart); setDismissed(-1); typing.typed(!!e.target.value.trim()); }}
-          onSelect={(e) => setCaret(e.currentTarget.selectionStart === e.currentTarget.selectionEnd ? e.currentTarget.selectionStart : null)}
+          onSelect={(e) => { formatting.select(e.currentTarget); setCaret(e.currentTarget.selectionStart === e.currentTarget.selectionEnd ? e.currentTarget.selectionStart : null); }}
           onBlur={() => { setCaret(null); setMentionRange(null); typing.stop(); }}
           onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
           onKeyDown={keys} onPaste={paste} onFocus={() => setEmojiWarm(true)}
@@ -881,7 +890,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
             onMouseDown={(e) => e.preventDefault()} onPointerEnter={() => setEmojiWarm(true)} onClick={() => setEmojiWarm(true)}
             className="absolute right-[3px] bottom-[1.5px] grid size-10 place-items-center rounded-full hover:bg-sunken focus-visible:outline-2 focus-visible:outline-agent-ink disabled:opacity-40 data-[popup-open]:bg-sunken lg:bottom-[3px]">
             <IconMoodSmile size={22} stroke={2} aria-hidden="true" className="text-text-2" />
-          </Popover.Trigger>} />
+          </Popover.Trigger>} />, { disabled: sending, className: "flex-1" })}
         <SendButton ready={ready} busy={sending} label={sendLabel} />
       </div>
 

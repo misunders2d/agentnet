@@ -56,7 +56,7 @@ func TestLivePreviewTargetsExactTopicRow(t *testing.T) {
 		if _, err := alice.SendConv(context.Background(), conv, client.ConvOutgoing{Body: "Main flow stays separate"}); err != nil {
 			t.Fatal(err)
 		}
-		sent, err := alice.SendConv(context.Background(), conv, client.ConvOutgoing{Body: "Preview inside a topic", Topic: "new"})
+		sent, err := alice.SendConv(context.Background(), conv, client.ConvOutgoing{Body: "Preview inside a topic ||searchsecret\nprivate following line||", Topic: "new"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,15 @@ func TestLivePreviewTargetsExactTopicRow(t *testing.T) {
 			}
 			t.Fatal("preview absent")
 		}
-		check("Preview inside a topic")
+		check("Preview inside a topic [Hidden text]")
+		hidden, err := alice.Topics(client.TopicQuery{Conv: conv, Query: "searchsecret"})
+		if err != nil || hidden.Matched != 0 {
+			t.Fatalf("topic search exposed spoiler: matches=%d, err=%v", hidden.Matched, err)
+		}
+		visible, err := alice.Topics(client.TopicQuery{Conv: conv, Query: "inside"})
+		if err != nil || visible.Matched != 1 {
+			t.Fatalf("topic search lost visible text: matches=%d, err=%v", visible.Matched, err)
+		}
 		if _, err = live.EditMessage(ControlAction{Conv: conv, ID: target.ID, Dir: "out", Text: "Edited topic preview"}); err != nil {
 			t.Fatal(err)
 		}

@@ -13,7 +13,7 @@ var previewMention = regexp.MustCompile(`\[@([^\[\]\r\n]{1,80})\]\((agentnet:[^\
 // BodyPreview makes complete canonical mention labels readable before bounding
 // a message's first line. Literal names must use their existing plain clipping.
 func BodyPreview(body string) string {
-	line, _, _ := strings.Cut(body, "\n")
+	line, _, _ := strings.Cut(MaskSpoilers(body), "\n")
 	line = previewMention.ReplaceAllStringFunc(line, func(anchor string) string {
 		parts := previewMention.FindStringSubmatch(anchor)
 		units := 0

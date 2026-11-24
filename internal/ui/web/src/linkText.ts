@@ -1,4 +1,7 @@
-import { Lexer, type Token, type Tokens } from "marked";
+import { Lexer, type Token, type Tokens, type TokenizerThis, type MarkedOptions } from "marked";
+import { hiddenText, maskSpoilers, spoilerRanges } from "./spoilers.mjs";
+export { fieldSelection, formats, formatText } from "./features/TextFormatting.model";
+export { hiddenText, maskSpoilers, spoilerRanges, replaceSpoilers } from "./spoilers.mjs";
 export { localRunningDetail } from "./runningDetail";
 export { requestResultText } from "./requestResult";
 
@@ -8,12 +11,116 @@ export const markdownText = (s: string): string => s.replace(/&(#x[0-9a-f]{1,6}|
   const n = /^#x/i.test(ref) ? parseInt(ref.slice(2),16) : parseInt(ref.slice(1),10);
   return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : all;
 });
-export const markdownTokens = (text: string): Token[] => new Lexer({gfm:true,breaks:true}).lex(text);
+type SpoilerMode = "mask" | "reveal" | "literal";
+type Extensions = NonNullable<MarkedOptions["extensions"]>;
+
+function underline(this: TokenizerThis, source: string): Tokens.Generic | undefined {
+  const pair = /^\^\^(?!\^)([^\s^][^\n^]*?)\^\^(?!\^)/.exec(source);
+  if (pair && !/\s$/.test(pair[1])) return {type: "underline", raw: pair[0], text: pair[1], tokens: this.lexer.inlineTokens(pair[1])};
+}
+
+const markdownOptions = { gfm: true, breaks: true };
+const underlineExtensions: Extensions = {
+  renderers: {}, childTokens: {}, inline: [underline], startInline: [source => source.indexOf("^^")],
+};
+
+export function markdownInlineTokens(text: string): Token[] {
+  return new Lexer(text.includes("^^") ? { ...markdownOptions, extensions: underlineExtensions } : markdownOptions).inlineTokens(text);
+}
+
+export function markdownTokens(text: string, spoilers: SpoilerMode = "mask"): Token[] {
+  if (!text.includes("||") || spoilers === "literal") {
+    return new Lexer(text.includes("^^") ? { ...markdownOptions, extensions: underlineExtensions } : markdownOptions).lex(text);
+  }
+  if (spoilers === "mask") return markdownTokens(maskSpoilers(text), "literal");
+  const ranges = spoilerRanges(text);
+  if (!ranges.length) return markdownTokens(text, "literal");
+
+  // Shield spans before block lexing. GFM otherwise splits on blank lines,
+  // table pipes and quote markers before an inline tokenizer can see the pair.
+  const occupied = new Set(Array.from(text.matchAll(/\uE000AN(\d+):/g), match => match[1]));
+  let nonce = 0;
+  while (occupied.has(String(nonce))) nonce++;
+  const prefix = "\uE000AN" + nonce + ":";
+  const seen = new Set<number>();
+  const underlined = text.includes("^^");
+  const extensions: Extensions = {
+    renderers: {}, childTokens: {},
+    inline: [source => {
+      if (!source.startsWith(prefix)) return;
+      const match = /^(\d+)\uE001/.exec(source.slice(prefix.length));
+      if (!match) return;
+      const index = Number(match[1]);
+      const range = ranges[index];
+      if (!range) return;
+      seen.add(index);
+      return {type: "spoiler", raw: prefix + match[0], text: text.slice(range.start + 2, range.end - 2)};
+    }, ...(underlined ? underlineExtensions.inline! : [])],
+    startInline: [source => source.indexOf(prefix), ...(underlined ? underlineExtensions.startInline! : [])],
+  };
+  function shield(onlySeen = false) {
+    let source = "", at = 0;
+    for (const [index, range] of ranges.entries()) {
+      if (onlySeen && !seen.has(index)) continue;
+      source += text.slice(at, range.start) + prefix + index + "\uE001";
+      at = range.end;
+    }
+    return source + text.slice(at);
+  }
+  const lex = (source: string) => new Lexer({ ...markdownOptions, extensions }).lex(source);
+  const tokens = lex(shield());
+  if (seen.size === ranges.length) return tokens;
+  // GFM can consume a marker as literal code, HTML or a link destination.
+  // A reparse can move text between tokens, even within the same layout.
+  // Accept only expansion of each literal's own markers in place.
+  const marker = new RegExp(prefix + "(\\d+)\uE001", "g");
+  const expand = (value: string): string => value.replace(marker, (whole, index) => {
+    const range = ranges[Number(index)];
+    return range ? text.slice(range.start, range.end).replace(/\r\n?/g, "\n") : whole;
+  });
+  const restored = seen.size ? lex(shield(true)) : markdownTokens(text, "literal");
+  return sameProse(tokens, restored, expand) ? restored : tokens;
+}
+
+const unindent = (value: string) => value.replace(/^[ \t]+/gm, "");
+
+function sameProse(before: Token[], after: Token[], expand: (value: string) => string): boolean {
+  return before.length === after.length && before.every((token, i) => {
+    const a = token as Tokens.Generic, b = after[i] as Tokens.Generic;
+    if (a.type !== b.type) return false;
+    switch (a.type) {
+      case "code":
+        // The lexer strips list or fence indentation from the restored lines.
+        return unindent(expand(a.text)) === unindent(b.text);
+      case "codespan": case "html": return expand(a.text) === b.text;
+      case "def": return expand(a.raw) === b.raw;
+      case "link": case "image":
+        if (a.autolink !== b.autolink || a.title !== b.title || expand(a.href) !== b.href) return false;
+        if (a.href !== b.href && /\s/.test(b.href)) return false;
+        if (a.autolink) return expand(a.text) === b.text;
+        break;
+      case "list": return sameProse(a.items, b.items, expand);
+      case "table": {
+        const aRows = [a.header, ...a.rows], bRows = [b.header, ...b.rows];
+        return aRows.length === bRows.length && aRows.every((row, j) =>
+          row.length === bRows[j].length && row.every((cell: Tokens.TableCell, k: number) => sameProse(cell.tokens, bRows[j][k].tokens, expand)));
+      }
+    }
+    if (a.tokens && b.tokens) return sameProse(a.tokens, b.tokens, expand);
+    return (a.text ?? a.raw) === (b.text ?? b.raw);
+  });
+}
+
+// Marked keeps certain constructs (such as HTML and link destinations) as a
+// single token. If they swallowed a placeholder, keep its replacement inert.
+const unresolvedSpoiler = /\uE000AN\d+:\d+\uE001/g;
+export const spoilerFallback = (text: string) => text.includes("\uE000AN") ? text.replace(unresolvedSpoiler, hiddenText) : text;
+export const hasSpoilerPlaceholder = (text: string) => spoilerFallback(text) !== text;
 
 // Only previews use this projection. Literal code/escapes and raw HTML remain
 // text; the message's signed body, copy target and user-chosen title stay intact.
 export function previewText(text: string): string {
-  if (!/[\\`*_~[\]<>!&#\n]|^\s*(?:[-+>]\s|\d+[.)]\s)/.test(text)) return text;
+  if (!text.includes("^^") && !text.includes("||") && !/[\\`*_~[\]<>!&#\n]|^\s*(?:[-+>]\s|\d+[.)]\s)/.test(text)) return text;
   const read = (tokens: Token[]): string => tokens.map(token => {
     const t = token as Tokens.Generic;
     if (t.type === "space" || t.type === "br") return "\n";

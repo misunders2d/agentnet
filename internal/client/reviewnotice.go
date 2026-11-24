@@ -220,13 +220,13 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 			a.Logf("review notice: %v", err)
 			return
 		}
-		it.Blocker, it.Excerpt = blockerOf(it.Kind, it.State), firstLine(it.Excerpt)
+		it.Blocker, it.Excerpt = blockerOf(it.Kind, it.State), firstLine(MaskSpoilers(it.Excerpt))
 		if it.State == stateNeedHuman {
 			agentText[it.ID] = detail
 			inChat[it.ID] = it.Conv && result != ""
 		}
 		if it.State == stateRunning {
-			it.Excerpt = detail
+			it.Excerpt = MaskSpoilers(detail)
 			if strings.HasPrefix(detail, "Seems stuck:") {
 				it.Blocker = BlockerStalled
 			}
@@ -246,7 +246,7 @@ func (a *Agent) sendReviewNoticeInPass(ctx context.Context) {
 		if items[i].Kind == envelope.KindTask && !items[i].Conv {
 			items[i].Proposal, _ = a.ProposalOf(items[i].ID)
 			if p := items[i].Proposal; p != nil {
-				p.Question, p.Proposal, p.Task = firstLine(p.Question), firstLine(p.Proposal), firstLine(p.Task)
+				p.Question, p.Proposal, p.Task = firstLine(MaskSpoilers(p.Question)), firstLine(MaskSpoilers(p.Proposal)), firstLine(MaskSpoilers(p.Task))
 			}
 		}
 	}
@@ -657,9 +657,9 @@ func (a *Agent) reportBodyFor(items []ReportItem, agentText map[string]string, f
 				if strings.HasPrefix(agentText[it.ID], nativeStatusPrefix) {
 					label = ""
 				}
-				it.Excerpt = "Request: " + it.Excerpt + "\n\n" + label + agentText[it.ID]
+				it.Excerpt = "Request: " + it.Excerpt + "\n\n" + label + MaskSpoilers(agentText[it.ID])
 			} else {
-				it.Excerpt = agentText[it.ID]
+				it.Excerpt = MaskSpoilers(agentText[it.ID])
 			}
 		}
 		r.Items = append(r.Items, it)

@@ -3721,3 +3721,127 @@ and an automatic DND rule across both AgentNet toggle positions. Exercise
 restoration after restarting the app. The rendered fixture runs Chromium on
 Linux with synthetic sound and storage responses. It does not exercise WinMM,
 Windows mixer presentation, the Windows picker, or the private COM contract.
+
+## MEL-815 message formatting
+
+Telegram Desktop `lib_ui` at `fc94d7cdba3f2b4d9a0eda028e2027dc1471283a`
+provides the reviewed counterpart. `input_field.h:40–46` lists the shortcuts,
+`input_field.cpp:2104–2127` lists the styles, and lines 6060–6160 add the
+selected-text Formatting submenu. Comic reuses that interaction with its Base
+UI menus, existing textarea selection and draft, and GFM message rendering.
+The stored syntax uses `*` for italic and keeps the existing GFM meaning of
+`__`. It adds `^^` for underline and `||` for hidden text. The touch path uses
+the browser's selection and context event with an adjacent Formatting button
+for browsers that open a native selection toolbar. [Chromium's touch context
+event notes](https://issues.chromium.org/issues/41487195) describe the browser
+behavior. Android WebView and physical devices require separate execution.
+Full browsers can reserve some shortcuts before the page sees them. Comic
+also accepts Ctrl+Alt+M, Ctrl+Alt+P and Ctrl+Alt+N for monospace, hidden text
+and clear formatting. [Chrome shortcut reference](https://support.google.com/chrome/answer/157179)
+and [Firefox shortcut reference](https://support.mozilla.org/en-US/kb/keyboard-shortcuts-perform-firefox-tasks-quickly).
+
+| Control | Rendered fixture behavior |
+| --- | --- |
+| Composer/editor context menu | Right-click selected text. Formatting appears and opens its submenu. Shift+right-click leaves the native edit menu to the browser or WebView. |
+| Touch Formatting | Selecting text in a touch viewport exposes the Formatting control. Tapping it opens the same choices. |
+| Bold | Menu and Ctrl+B wrap the selection in `**`. |
+| Italic | Menu and Ctrl+I wrap it in `*`. |
+| Underline | Menu and Ctrl+U wrap it in `^^`. |
+| Strikethrough | Menu and Ctrl+Shift+X wrap it in `~~`. |
+| Monospace | Menu and Ctrl+Shift+M use a Markdown code span. |
+| Quote | Menu and Ctrl+Shift+. quote the selected lines. |
+| Hidden text | Menu and Ctrl+Shift+P wrap it in `||`. |
+| Link | Menu and Ctrl+K open Add link. Apply writes the selected label and URL to the draft. Cancel retains the draft. |
+| Clear formatting | Menu and Ctrl+Shift+N remove the selected formatting. |
+| Reveal/conceal | Click or tap the body placeholder to reveal. Enter on the same control conceals it again. |
+| Send and edit | Pending bubble updates before a held write. The request carries exact formatted text. |
+
+`TestMessageFormattingRendered` runs production Comic with held Go fixture
+writes and 40 or 400 retained messages. It checks runtime old Markdown,
+spoiler rendering, reply and chat-list text, and selection formatting on a
+1440 px desktop and a 390 px Chromium touch viewport. `TestMaskSpoilers`,
+`TestSpoilerProjectionBrowser` and the native notification edit test cover
+the corresponding plain-text projections. The browser service workers publish
+generic notification copy. Android's native message notification reads the
+Go-projected body.
+
+The projection tests cover CRLF and require matching fence handling in Go and
+JavaScript when other whitespace follows a fence. The opened body preserves
+literal pipes in indented and nested code, HTML text and URL destinations. The
+rendered fixture checks that the neighboring spoiler remains concealed. Compact
+projections still mask conservatively where the plain-text scan identifies a
+pair. [CommonMark fence rules](https://spec.commonmark.org/0.31.2/#fenced-code-blocks)
+
+After those corrections, the four rendered Chromium cases passed with 40
+and 400 retained messages. Local feedback peaked at 72 ms, and held send
+and edit confirmation took 1,226–1,235 ms. A Shift+right-click event reached
+the browser without cancellation. Native edit menu display and Android
+long-press still require platform checks.
+
+The parser now retains the masked result when restoring a literal changes
+surrounding prose or Markdown structure. The regression covers malformed
+destinations, mixed valid and malformed links, and a range crossing an
+indented code block. The same four rendered cases passed on a shared host
+with 275 ms peak local feedback and 1,234–1,276 ms held confirmation.
+
+Literal restoration also checks that each token expands only its own markers.
+The regression covers a spoiler crossing from HTML into a code block, a
+destination with spaces and a tooltip. The prior bundle fails the cross-block
+case. The corrected bundle passed all four rendered cases with 127 ms peak
+local feedback and 1,233–1,310 ms held confirmation.
+
+Standalone Classic, Holonet and Zoom must refresh their packaged
+`link-text.mjs` from `internal/ui/skins/shared/link-text.mjs` and consume its
+`maskSpoilers`, `replaceSpoilers`, `formats`, `fieldSelection` and
+`formatText` helpers. Wire their composer and `editInPlace`, keep concealed
+contents out of the body DOM until reveal, and mask before any preview clipping,
+linkification, copy, or search matching. Direct quote, action dialog, schedule,
+history selection, and recovery renderers also need this projection where they
+take raw message text. Office and Pulp inherit Comic from the candidate pin.
+Run the collection's `AGENTNET_SOURCE=<candidate> npm test`, plus dedicated
+formatting, conceal/reveal and outside-body assertions for all five packages.
+Older builds and unupdated skins can display the raw delimiters and content.
+
+### Local rendered comparison
+
+Linux Chromium, 1440×900 desktop and 390×844 touch. Base Comic assets
+came from `git archive aa58315f internal/ui/static/skins/comic`. Base and
+candidate ran separately with the same Go fixture, request bodies, CPU
+affinity (11–13), 1.2 s held writes and a 350 ms delayed history read. Values
+measure trusted input to a frame with the expected local state. Writes were
+also timed through the HTTP response.
+
+| Retained messages and viewport | Type during sync, base / candidate | Pending send, base / candidate | Pending edit, base / candidate | Candidate formatting and reveal maximum |
+| --- | ---: | ---: | ---: | ---: |
+| 40, desktop | 106 / 38 ms | 112 / 74 ms | 65 / 47 ms | 102 ms |
+| 40, touch | 58 / 43 ms | 106 / 74 ms | — | 97 ms |
+| 400, desktop | 84 / 42 ms | 115 / 74 ms | 58 / 57 ms | 143 ms |
+| 400, touch | 68 / 31 ms | 107 / 75 ms | — | 84 ms |
+
+Held send and edit confirmations took 1,236–1,302 ms across both runs.
+Base had no formatting controls. The candidate exercised all nine styles
+through the desktop and touch menus, every primary shortcut and the three
+browser alternatives, link cancel and invalid URL, reply masking, and exact
+formatted edit retry after refusal. The delayed read returned a new row and
+the current draft stayed intact. These samples measure the fixture conditions
+and establish no platform-wide speed comparison.
+
+The first render exposed missed selection events in the skin shadow root
+and a root popup that treated its submenu as a sibling. The context handler
+now reads the textarea directly, the touchscreen observes native selection
+events, and Base UI has a registered trigger for menu ancestry. Comparison
+reruns also corrected the base edit locator and checked sync response data
+independently of which history rows were visible. The existing mention and
+plain-paste shortcut fixture now supplies the new formatter callback.
+The composer still resets its plain-paste flag for each key before running
+a formatting shortcut.
+
+Run the focused tests with the installed Go toolchain and Playwright path.
+
+```sh
+bash internal/ui/web/build.sh
+mise x go@1.26.8 -- go vet ./...
+mise x go@1.26.8 -- go test ./internal/client ./internal/ui ./internal/ui/static -run 'TestMaskSpoilers|TestBodyPreview|TestNativeNotificationEditedDeletedAndBoundedPreview|TestSpoilerProjectionBrowser|TestLiveCollectivePreview|TestLiveConversationEditedPreviews|TestLivePreviewTargetsExactTopicRow|TestRelayPageLoadsOnlyServedFiles|TestDaemonPageInBundle' -count=1
+AGENTNET_FORMATTING_BASE="$base_comic_dir" taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
+taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
+```

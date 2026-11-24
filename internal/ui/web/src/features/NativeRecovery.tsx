@@ -1,3 +1,4 @@
+import { maskSpoilers } from "../linkText";
 import { useEffect, useState } from "react";
 import { useApp } from "../context";
 import { useStore } from "../store";
@@ -74,7 +75,7 @@ export function NativeRecovery() {
         let d;try{d=legacyDraft(record);}catch{}
         return <section key={record.key} className="mb-3 rounded-2xl border border-hairline bg-surface p-4">
           <p className="font-semibold">{d?.request?"Unconfirmed send from the earlier preview":"Draft from the earlier preview"}</p>
-          <p className="my-2 whitespace-pre-wrap break-words">{d?.body || "This saved record could not be read. The original remains on this phone."}</p>
+          <p className="my-2 whitespace-pre-wrap break-words">{maskSpoilers(d?.body || "") || "This saved record could not be read. The original remains on this phone."}</p>
           {d?.request && <p className="mb-2 text-[13px] text-muted">Retry uses the same message ID and recipient. A message already in the outbox is not sent again.</p>}
           {d && !ro && <Button size="sm" variant="outline" disabled={!!busy} onClick={()=>void run(record.key,()=>restore(record))}>{busy===record.key?"Restoring…":d.request?"Retry saved send":"Restore draft"}</Button>}
           {errors[record.key] && <p role="alert" className="mt-2 text-danger [overflow-wrap:anywhere]">{errors[record.key]}</p>}
@@ -82,13 +83,13 @@ export function NativeRecovery() {
       })}
       {pending.map(entry=><section key={entry.id} className="mb-3 rounded-2xl border border-hairline bg-surface p-4">
         <p className="font-semibold">Send not yet confirmed</p>
-        <p className="my-2 whitespace-pre-wrap break-words">{String(entry.request.body || "Message with attachments")}</p>
+        <p className="my-2 whitespace-pre-wrap break-words">{maskSpoilers(String(entry.request.body || "Message with attachments"))}</p>
         <p className="mb-2 text-[13px] text-muted">Retry keeps the same recipient and message ID. It does not repeat work already accepted.</p>
         <div className="flex flex-wrap gap-2">{!ro && <Button size="sm" variant="outline" disabled={!!busy} onClick={()=>void run(entry.id,async()=>{
           try {const state=await submit(entry);acknowledge(savedStorage(),workspace,entry.id);store.toast(savedSendReceipt(state),"ok");}
           catch(e){recordFailure(savedStorage(),workspace,entry.id,errorText(e));throw e;}
         })}>{busy===entry.id?"Retrying…":"Retry saved send"}</Button>}
-        <Button size="sm" variant="ghost" onClick={()=>void copyText(String(entry.request.body||""), store.host.android).then(ok=>store.toast(ok?"Copied":"Couldn’t copy here",ok?"ok":"error"))}>Copy text</Button></div>
+        <Button size="sm" variant="ghost" onClick={()=>void copyText(maskSpoilers(String(entry.request.body||"")), store.host.android).then(ok=>store.toast(ok?"Copied":"Couldn’t copy here",ok?"ok":"error"))}>Copy text</Button></div>
         {(errors[entry.id]||entry.error) && <details className="mt-2 min-w-0 text-[13px] text-muted">
           <summary className="min-h-11 cursor-pointer py-3">Why sending wasn’t confirmed</summary>
           <p role="alert" className="[overflow-wrap:anywhere]">{errors[entry.id]||entry.error}</p>

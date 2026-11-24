@@ -35,7 +35,7 @@ assert.equal(model.firstLine(literal,120,true),literal,'literal clipping stays i
 // Real direct thread/overview share the existing controls authority, including
 // wrong author/key/ref/peer negatives; original signed text is never replaced.
 const directID='5'.repeat(32),author='aaaaaaaa-bbbbbbbb-cccccccc-dddddddd',original='Original direct body';
-const editedBody='[@Edited_team](agentnet:collective/v1/'+Array.from({length:1000},(_,i)=>'p.'+i.toString(16).padStart(32,'0')).join(',')+') Check inventory';
+const editedBody='[@Edited_team](agentnet:collective/v1/'+Array.from({length:1000},(_,i)=>'p.'+i.toString(16).padStart(32,'0')).join(',')+') Check inventory ||private first\nprivate second||';
 const control=(from,fp,ref,sub,payload)=>({id:wire.newID(),v:3,control:true,from,fp,kind:'message',sub,ref,body:JSON.stringify(payload),at:2});
 const add=async c=>e.store.write([{s:'inbox',k:c.id,v:c}]);
 await e.store.write([{s:'inbox',k:directID,v:{id:directID,v:1,from:'peer/desk',fp:author,kind:'message',body:original,at:1}}]);
@@ -43,11 +43,13 @@ await add(control('peer/desk',author,{id:directID,fingerprint:author},wire.SubRe
 const exact=async()=>{
   const thread=await e.thread(directID),m=thread.messages.find(m=>m.id===directID);
   assert.equal(m.body,original);assert.equal(m.edited,true);assert.equal(m.text,editedBody);
-  assert.equal(thread.topic.last,'@Edited_team Check inventory','actual resolved thread topic');
+  assert.equal(thread.topic.last,'@Edited_team Check inventory [Hidden text]','actual resolved thread topic');
   const overview=await e.overview();assert.equal(overview.threads.find(t=>t.id===directID).last,thread.topic.last,'actual Engine overview shares resolved display');
   assert.equal(model.chatList(overview,{})[0].last,thread.topic.last,'actual direct Engine overview to Comic');
 };
 await exact();
+assert.equal((await e.topicList(new URLSearchParams({q:"private second"}))).matched,0,"Engine topic query excludes exact hidden text");
+assert.equal((await e.topicList(new URLSearchParams({q:"inventory"}))).matched,1,"Engine topic query still finds visible text");
 for(const c of [
   control('peer/desk',e.fp,{id:directID,fingerprint:author},wire.SubRevision,{rev:99,text:'wrong author'}),
   control('peer/desk','99999999-99999999-99999999-99999999',{id:directID,fingerprint:author},wire.SubRevision,{rev:99,text:'changed key'}),
@@ -88,8 +90,8 @@ assert.equal((await e.overview()).dms.find(d=>d.id===conv).last,'📎 '+wire.saf
 const raw=readFileSync(0,'utf8');
 if(raw.trim()){
   const native=JSON.parse(raw),items=model.chatList(native.overview,{});
-  for(const id of native.conversations){const item=items.find(i=>i.open.id===id);assert.ok(item,'native overview conversation reaches chat list');assert.equal(item.last,'@Команда Check inventory','actual edited native DM/group chat-list text');}
-  if(native.direct)assert.equal(items.find(i=>i.open.id===native.direct)?.last,'@Direct_team Check inventory','actual edited native direct overview to Comic');
+  for(const id of native.conversations){const item=items.find(i=>i.open.id===id);assert.ok(item,'native overview conversation reaches chat list');assert.equal(item.last,'@Команда Check inventory [Hidden text]','actual edited native DM/group chat-list text');}
+  if(native.direct)assert.equal(items.find(i=>i.open.id===native.direct)?.last,'@Direct_team Check inventory [Hidden text]','actual edited native direct overview to Comic');
 }
 e.stop();
 console.log('PASS shared Go/Engine vectors, 1000/4096 refs and bounds, Unicode/ordinary/malformed controls, literal title, actual Comic chat-list/native overview output');
