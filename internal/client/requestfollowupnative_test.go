@@ -1098,6 +1098,38 @@ func TestBackToBackRemoteAsksQueueOnceWhenNativeCannotSteer(t *testing.T) {
 	}
 }
 
+func TestBackToBackRemoteAsksRunNormallyWithoutTheOriginalAttempt(t *testing.T) {
+	for _, c := range []struct {
+		name, state string
+		attempt     int
+	}{
+		{"original stopped", stateCancelled, 1},
+		{"original resumed", stateAnswered, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stub := installAgentStub(t)
+			w, parent, second := remoteQueuedFollowupFixture(t, "agentstub")
+			a := w.bob
+			// The ordinary claim below observes the final state after Stop or
+			// after a helper wait resumed and finished a new attempt.
+			if _, err := a.store.db.Exec(`UPDATE inbox SET state=?,attempts=? WHERE id=?`, c.state, c.attempt, parent.ID); err != nil {
+				t.Fatal(err)
+			}
+			next, found, _, _, err := a.store.claimAgentPage("agentstub", a.Address, a.Self().Fingerprint(), 0, agentPage)
+			if err != nil || !found || next.ID != second {
+				t.Fatalf("ordinary follow-up was not claimed: %s %v %v", next.ID, found, err)
+			}
+			a.runJob(tctx(t), next, &Responder{Harness: "agentstub", Dir: stub.dir, Timeout: 5 * time.Second}, nil)
+			if state := jobState(t, a, second); state != stateAnswered {
+				t.Fatalf("follow-up ended in %q", state)
+			}
+			if prompt := stub.last(); !strings.Contains(prompt, "Use English instead") || strings.Contains(prompt, "## Explicit queued follow-up") || stub.runs() != 1 {
+				t.Fatal("the ordinary request inherited a handover or ran more than once", stub.runs())
+			}
+		})
+	}
+}
+
 func TestRapidRemoteAskUsesVerifiedLinkedRequesterAndScope(t *testing.T) {
 	w, carol, packet, _ := groupTurnsFixture(t)
 	conv := packet.State.Conv

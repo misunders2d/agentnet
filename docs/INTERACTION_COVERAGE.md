@@ -31,6 +31,12 @@ the other member and topic retain independent scheduling. These fixtures run
 on a local Hub with disposable identities. Installed harnesses, real models
 and the reported host were outside the fixture.
 
+If the original stops or finishes a different attempt after a helper wait,
+the next ordinary request runs once without inheriting that attempt's
+context. The same claim-time checks authorize it. The regression exercises
+both cases through the worker and confirms its fresh prompt. Both failed
+on the first candidate by ending in Needs human.
+
 `TestRapidRemoteAskFeedbackRendered` exercises the existing Comic composer
 at 1280 and 390 pixels with 100 and 1,000 retained rows. The fixture holds each
 send reply for 1,250 ms and pushes incoming updates every 250 ms. The two

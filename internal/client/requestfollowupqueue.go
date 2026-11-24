@@ -3,7 +3,6 @@ package client
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -87,13 +86,14 @@ func queuedFollowupReadyIn(q dbq, id string) (bool, error) {
 	return ready, err
 }
 
-// The explicit carrier stays part of signed history. Only execution reads
-// the host's derived queue binding, referring to the exact selected request.
+// The explicit carrier stays part of signed history. The host's derived
+// binding supplies context only while its exact attempt can be used.
 func executionFollowup(q dbq, id string) (*envelope.FollowupRef, error) {
 	var raw, lid, key sql.NullString
 	var attempt, actual int64
 	err := q.QueryRow(`SELECT c.request_followup,p.lid,p.verified_by,coalesce(c.queued_followup_attempt,0),coalesce(p.attempts,0)
-		FROM inbox c LEFT JOIN inbox p ON p.id=c.queued_followup_parent AND p.replica=0 WHERE c.id=?`, id).Scan(&raw, &lid, &key, &attempt, &actual)
+		FROM inbox c LEFT JOIN inbox p ON p.id=c.queued_followup_parent AND p.replica=0
+		AND p.state IN ('running','answered','needs_human','resolved') WHERE c.id=?`, id).Scan(&raw, &lid, &key, &attempt, &actual)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +102,10 @@ func executionFollowup(q dbq, id string) (*envelope.FollowupRef, error) {
 		err = json.Unmarshal([]byte(raw.String), &ref)
 		return &ref, err
 	}
-	if attempt <= 0 {
+	if attempt <= 0 || actual != attempt || !lid.Valid || !key.Valid {
+		// This was an ordinary request before binding. Its own claim still
+		// controls execution, without steering or inherited context.
 		return nil, nil
-	}
-	if actual != attempt || !lid.Valid || !key.Valid {
-		return nil, errors.New("the queued follow-up's exact original attempt is no longer available")
 	}
 	return &envelope.FollowupRef{Ref: envelope.Ref{ID: lid.String, Fingerprint: key.String}, Attempt: attempt}, nil
 }
