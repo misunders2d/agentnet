@@ -566,6 +566,13 @@ func (s *store) setPending(p identity.Public) error {
 		return err
 	}
 	defer tx.Rollback()
+	pinned, found, err := pinnedKey(tx, p.Address)
+	if err != nil {
+		return err
+	}
+	if found && sameKeys(pinned, p) {
+		return nil
+	}
 	data, _ := json.Marshal(p)
 	if _, err := tx.Exec(`UPDATE peers SET pending = ? WHERE address = ?`, string(data), p.Address); err != nil {
 		return err
