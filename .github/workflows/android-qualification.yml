@@ -99,7 +99,8 @@ jobs:
           arch: x86_64
           cores: 2
           ram-size: 2048M
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          # Use the supported software backend and GLES for headless WebView media.
+          emulator-options: -no-window -gpu software -feature -Vulkan -noaudio -no-boot-anim -no-snapshot
           script: bash mobile/android/scripts/qualify-emulator.sh
       - name: retain host failure diagnostics
         if: failure()
