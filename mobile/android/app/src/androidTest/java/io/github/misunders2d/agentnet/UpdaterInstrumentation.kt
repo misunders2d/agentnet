@@ -837,9 +837,15 @@ class UpdaterInstrumentation : Instrumentation() {
             phase("latency-report-before")
             val runEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
             var report: JSONObject? = null
+            var lastProgress = ""
+            val reportExpression = if (latencySuite == "video") "window.latencyReport || window.latencyProgress?.active || null" else "window.latencyReport"
             while (report == null && System.nanoTime() < runEnd) {
-                val raw = javascript(web, "window.latencyReport")
-                if (raw != "null") report = JSONObject(raw)
+                val raw = javascript(web, reportExpression)
+                if (raw.startsWith('"')) {
+                    val progress = org.json.JSONArray("[$raw]").getString(0)
+                    if (progress != lastProgress) phase("latency-progress-$progress")
+                    lastProgress = progress
+                } else if (raw != "null") report = JSONObject(raw)
                 if (report == null) Thread.sleep(100)
             }
             if (report == null) result.putString("stream", "LATENCY_STATE_JSON=${failureState()}\n")

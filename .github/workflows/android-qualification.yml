@@ -101,6 +101,12 @@ jobs:
           ram-size: 2048M
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           script: bash mobile/android/scripts/qualify-emulator.sh
+      - name: retain host failure diagnostics
+        if: failure()
+        run: |
+          adb devices -l
+          free -m
+          sudo dmesg | grep -Ei 'oom.kill|killed process|qemu.*segfault' | tail -20 || true
       - name: retain Android qualification and interaction evidence
         if: always()
         uses: actions/upload-artifact@v4
