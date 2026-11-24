@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
@@ -26,6 +27,7 @@ type imageViewerFixture struct {
 	*imageOpenFixture
 	images [][]byte
 	video  []byte
+	mp4    []byte
 }
 
 // Empty ancillary providers keep fixture startup free of expected 404s, so
@@ -83,6 +85,11 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 	// MEL-750: a sent video whose copy this device kept.
 	dm.Messages = append(dm.Messages, DMMessage{ID: "sent-video-message", LID: "sent-video-message", Dir: "out", From: "alice/desk", Kind: "message", Body: "Sent clip", At: f.now(), State: "delivered",
 		Attachments: []FileView{{Index: 0, Name: "sent.webm", Size: int64(len(f.video)), Openable: true}}})
+	if len(f.mp4) > 0 {
+		dm.Messages[0].Attachments = append(dm.Messages[0].Attachments, FileView{Index: 16, Name: "received.mp4", Size: int64(len(f.mp4)), Openable: true, Fetch: "wait"})
+		sent := &dm.Messages[len(dm.Messages)-1]
+		sent.Attachments = append(sent.Attachments, FileView{Index: 1, Name: "sent.mp4", Size: int64(len(f.mp4)), Openable: true})
+	}
 	dm.Messages = append(dm.Messages, DMMessage{ID: "topic-video-message", LID: "topic-video-message", Dir: "in", From: "bob/desk", Kind: "message", Body: "Another topic", At: f.now(), State: "received", Topic: topic})
 	return dm, err
 }
@@ -90,6 +97,9 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index int) (io.ReadCloser, string, error) {
 	if dir == "out" && id == "sent-video-message" && index == 0 {
 		return io.NopCloser(bytes.NewReader(f.video)), "sent.webm", nil
+	}
+	if dir == "out" && id == "sent-video-message" && index == 1 && len(f.mp4) > 0 {
+		return io.NopCloser(bytes.NewReader(f.mp4)), "sent.mp4", nil
 	}
 	if dir != "in" || id != "picture-message" {
 		return nil, "", ErrNotFound
@@ -109,6 +119,10 @@ func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index i
 		return io.NopCloser(bytes.NewReader(make([]byte, 16*1024*1024+1))), "oversized-return.webm", nil
 	case 15:
 		return nil, "", ErrRefused
+	case 16:
+		if len(f.mp4) > 0 {
+			return io.NopCloser(bytes.NewReader(f.mp4)), "received.mp4", nil
+		}
 	}
 	return nil, "", ErrNotFound
 }
@@ -120,7 +134,7 @@ func TestImageViewerRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_SCREENSHOTS") == "" { // the check writes its evidence there
 		t.Setenv("AGENTNET_SCREENSHOTS", t.TempDir())
 	}
-	f, url := startImageViewer(t)
+	f, url := startImageViewer(t, nil)
 	t.Log(browserCheck(t, "testdata/image_viewer_check.cjs", url))
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -137,13 +151,35 @@ func TestVideoPosterRendered(t *testing.T) {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright (Chromium, Firefox and WebKit)")
 	}
 	privateScreenshots(t)
-	_, url := startImageViewer(t)
+	_, url := startImageViewer(t, nil)
 	t.Log(browserCheck(t, "testdata/video_poster_rendered.cjs", url))
 }
 
-func startImageViewer(t *testing.T) (*imageViewerFixture, string) {
+func TestAndroidDeferredVideoRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright")
+	}
+	sample := filepath.Join(t.TempDir(), "sample.mp4")
+	encode := exec.CommandContext(t.Context(), "ffmpeg", "-nostdin", "-v", "error", "-cpucount", "2", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10", "-t", "3", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-movflags", "+faststart", sample)
+	if out, err := encode.CombinedOutput(); err != nil {
+		t.Fatalf("local MP4 fixture: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A valid free box crosses the auto-download threshold without a long encode.
+	mp4 := make([]byte, 12<<20)
+	copy(mp4, b)
+	binary.BigEndian.PutUint32(mp4[len(b):], uint32(len(mp4)-len(b)))
+	copy(mp4[len(b)+4:], "free")
+	_, url := startImageViewer(t, mp4)
+	t.Log(browserCheck(t, "testdata/android_deferred_video_check.cjs", url))
+}
+
+func startImageViewer(t *testing.T, mp4 []byte) (*imageViewerFixture, string) {
 	t.Helper()
-	f := &imageViewerFixture{imageOpenFixture: &imageOpenFixture{pictureFixture: newPictureFixture()}}
+	f := &imageViewerFixture{imageOpenFixture: &imageOpenFixture{pictureFixture: newPictureFixture()}, mp4: mp4}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	sample := os.Getenv("AGENTNET_VIDEO_SAMPLE")
@@ -177,7 +213,7 @@ func startImageViewer(t *testing.T) (*imageViewerFixture, string) {
 	s := New(f, ts.Listener.Addr().String(), testToken)
 	set := NewWorkspaceProviders()
 	memberships := []client.Workspace{{ID: "default", Name: "Video fixture", State: "enrolled"}, {ID: strings.Repeat("d", 32), Name: "Second fixture", State: "enrolled"}}
-	other := &imageViewerFixture{imageOpenFixture: &imageOpenFixture{pictureFixture: newPictureFixture()}, images: f.images, video: f.video}
+	other := &imageViewerFixture{imageOpenFixture: &imageOpenFixture{pictureFixture: newPictureFixture()}, images: f.images, video: f.video, mp4: f.mp4}
 	for i, provider := range []Provider{f, other} {
 		if _, err := set.Bind(memberships[i], provider); err != nil {
 			t.Fatal(err)
