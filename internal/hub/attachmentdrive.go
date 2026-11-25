@@ -811,8 +811,23 @@ func (h *Hub) copyAttachmentDrive(ctx context.Context, id string) (int64, error)
 		}
 		// The provider copy is proven before committing its mapping. Neither a
 		// lost response nor a crash here can cause another Drive object.
-		if _, err = h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state='remote' WHERE blob_id=?`, id); err != nil {
+		// The mapping commits only while the file is still stored: an account
+		// deletion during the upload must not leave a Drive copy nobody tracks
+		// (the mapping row cascades away with an erased file).
+		committed, err := h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state='remote' WHERE blob_id=?
+ AND EXISTS(SELECT 1 FROM blobs WHERE id=? AND state=?)`, id, id, protocol.BlobStored)
+		var n int64
+		if err == nil {
+			n, err = committed.RowsAffected()
+		}
+		if err != nil {
 			return 0, err
+		}
+		if n == 0 {
+			if err = d.client.DeleteCiphertext(ctx, fileID, h.realmID, id, b.SHA256, b.Size); err != nil {
+				h.cfg.Logf("removing the Drive copy of erased file %s: %v", id, err)
+			}
+			return 0, errors.New("attachment no longer stored")
 		}
 	} else {
 		// A restart may land after the remote commit but before local removal.

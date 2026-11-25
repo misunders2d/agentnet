@@ -35,7 +35,7 @@ func TestPersonDeleteErasesOwnAccount(t *testing.T) {
 	}
 	code, body := owner.call(t, h, "POST", "/v1/person/delete", protocol.DeletePersonRequest{Person: person.Person})
 	var response protocol.DeletePersonResponse
-	if code != 200 || json.Unmarshal(body, &response) != nil || !slices.Equal(response.Deleted, []string{owner.addr, phone.addr}) {
+	if code != 200 || json.Unmarshal(body, &response) != nil || !slices.Equal(response.Deleted, slices.Sorted(slices.Values([]string{owner.addr, phone.addr}))) {
 		t.Fatalf("delete: %d %s", code, body)
 	}
 	for _, d := range []member{owner, phone} {
@@ -103,6 +103,50 @@ func TestUpgradeBackupsAgeOut(t *testing.T) {
 	for name, want := range map[string]bool{"hub.db.v3.bak": false, "hub.db.v4.bak": true, "hub.db": true} {
 		if _, err := os.Stat(filepath.Join(dir, name)); (err == nil) != want {
 			t.Fatalf("%s present=%v, want %v", name, err == nil, want)
+		}
+	}
+}
+
+// An account deleted while one of its files is uploading to Drive leaves no
+// Drive copy behind: the upload commits only while the file is still stored
+// and removes its own copy otherwise (the mapping row cascades away).
+func TestPersonDeleteDuringDriveUploadLeavesNoCopy(t *testing.T) {
+	p := newRelayDriveProvider(t)
+	h, a, b, _ := attachmentDriveHub(t, p, true)
+	h.attachmentDrive.close() // drive the copy by hand
+	id := a.upload(t, h, b.addr, []byte("a file whose owner deletes the account mid-upload"))
+	p.mu.Lock()
+	p.blockPath = "/files"
+	p.blocked = make(chan struct{}, 1)
+	p.release = make(chan struct{})
+	blocked, release := p.blocked, p.release
+	p.mu.Unlock()
+	copied := make(chan error, 1)
+	go func() { _, err := h.copyAttachmentDrive(t.Context(), id); copied <- err }()
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not reach the provider")
+	}
+	if _, err := h.store.db.Exec(`UPDATE blobs SET state=? WHERE id=?`, blobDeleted, id); err != nil {
+		t.Fatal(err)
+	}
+	h.eraseDeletedFiles(t.Context())
+	p.mu.Lock()
+	p.blockPath = ""
+	p.mu.Unlock()
+	close(release)
+	if err := <-copied; err == nil {
+		t.Fatal("an upload of an erased file committed")
+	}
+	if _, err := h.store.blob(id); err == nil {
+		t.Fatal("the erased file's row is still there")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for fid := range p.files {
+		if fid != "fixture-folder" {
+			t.Fatalf("Drive copy %s of an erased file remains", fid)
 		}
 	}
 }
