@@ -1124,6 +1124,22 @@ All were read on November 25.
   Go/browser parser vectors instead. Sharing selected Go rules later remains
   an option.
 
+**Account deletion implementation (not owner decisions):**
+- `POST /v1/person/delete` is signed by a current human device of the
+  person itself; nobody deletes someone else's account. It revokes every
+  device of the person (agent hosts included) with reason `deleted`,
+  expires their custody, empties the stored ciphertext of every message to
+  or from them, and marks their files `deleted` (never served again).
+  The relay erases those files in the background, the Drive copy first, and
+  retries after a failure or restart.
+- An upload to Drive that finishes after the deletion commits nothing and
+  deletes its own Drive copy. Known limit: if that delete fails, the copy
+  stays on Drive untracked and only the log names it.
+- In-app deletion erases the relay only. The device keeps its local copy
+  until the app or workspace is removed; the page says so. Whether deletion
+  should also wipe the device is an open question for the owner.
+- Google sign-in with the same email after deletion is not verified.
+
 **Implementation note (not an owner decision):** the first build gates only
 the app's first-run page, which Play reviews. The browser landing page and
 Comic's add-workspace sheet are not gated yet.
