@@ -1,5 +1,22 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-612 terms of use on the first-run page — covered, November 25, 2026
+
+The first-run page (`internal/ui/static/setup.mjs`) shows "I agree to the
+Terms of use and the Privacy policy" on the welcome, invitation and
+device-link cards. Google sign-in, Join and Add this computer wait for it.
+Pressing one of them before accepting shows "Agree to the Terms of use to
+continue." and moves focus to the checkbox; ticking it clears the message.
+Nothing reaches `/api/setup/google` or `/api/setup/join` before acceptance;
+the fixture counts the calls. Counterpart: Telegram and Signal show their
+terms on first run, before registration, and Signal links to its terms there.
+
+`TestSetupTermsRendered` (`testdata/setup_terms_rendered.cjs`) uses Chromium
+at 1280 px light and 390 px dark. Each measurement runs from input to
+visible feedback: refusal 36-61 ms, accept clears 32-43 ms, action after
+accepting 53-63 ms. `TestGoogleRendered` now ticks the checkbox before it
+signs in. Not run: WebKitGTK, and the Android WebView on a device.
+
 ## MEL-777 remote follow-up before a running status arrives
 
 Two ordinary tagged asks from the same requester reach a disposable group

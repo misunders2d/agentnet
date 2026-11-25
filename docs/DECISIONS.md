@@ -1047,3 +1047,41 @@ Read-only reviews and the November 2 Option A debate are design input. The
 Option A feature branch is implemented for review; it is not merged, released
 or deployed. The earlier statement that continuity was deferred is superseded
 by the owner’s “Merge into one” correction and this scoped build.
+
+## November 25, 2026 — Google Play: terms, report, block, account deletion (MEL-612)
+
+Google Play requires these before any test track is reviewed, and private,
+invite-only chat gets no exemption. Policies: user-generated content
+([9876937](https://support.google.com/googleplay/android-developer/answer/9876937),
+[12923286](https://support.google.com/googleplay/android-developer/answer/12923286)),
+account deletion
+([13327111](https://support.google.com/googleplay/android-developer/answer/13327111)),
+and data safety
+([10787469](https://support.google.com/googleplay/android-developer/answer/10787469)).
+All were read on November 25.
+
+**Owner decisions (November 25):**
+- **Terms of use.** The person accepts [TERMS.md](../TERMS.md) and the
+  privacy policy on the first-run page. Google sign-in, Join and Add this
+  computer wait for the checkbox. The browser landing page and Comic's
+  add-workspace sheet are not gated; the Play requirement covers the app's
+  first run.
+- **Report** a message or person. The report goes inside AgentNet to that
+  workspace's admins, with the messages the reporter chooses, and the admins
+  act on it. Encryption means admins see only what is included.
+- **Block** covers direct messages only. A blocked person cannot reach you
+  directly, and shared groups are unchanged. The block follows the person
+  across their own devices.
+- **Delete account** really erases the person from the relay: name, email,
+  picture, stored files and undelivered messages. Only the bare device keys
+  and a deleted marker stay, so the identity cannot come back. Rules:
+  - The last admin must hand admin over first.
+  - The person's agent identities are erased too.
+  - Relay backups age out within 30 days, and the deletion page says so.
+  - Copies already delivered stay on the recipients' devices.
+  - This is an explicit exception to "preserve original signed
+    identities", limited to a person deleting their own account.
+- **Data safety** declares name, email (Google sign-in only), photos (the
+  profile picture), user IDs, device IDs and message routing metadata.
+  Message content and files are not declared, because they are end-to-end
+  encrypted.

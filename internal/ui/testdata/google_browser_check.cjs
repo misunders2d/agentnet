@@ -56,7 +56,7 @@ const shots = process.env.AGENTNET_SCREENSHOTS;
 
       await page.goto(setup+'/?t='+token+'#google-signin='+encodeURIComponent('https://workspace.example'));
       await page.getByLabel('Workspace address',{exact:true}).waitFor();assert.equal(await page.getByLabel('Workspace address').inputValue(),'https://workspace.example');
-      await capture('setup');await page.getByRole('button',{name:'Sign in with Google',exact:true}).click();await page.getByText('Fixture sign-in declined. Try again.',{exact:true}).waitFor();
+      await capture('setup');await page.getByRole('button',{name:'Sign in with Google',exact:true}).click();await page.getByText('Agree to the Terms of use to continue.',{exact:true}).waitFor();await page.getByRole('checkbox',{name:/I agree to the Terms of use/}).check();await page.getByRole('button',{name:'Sign in with Google',exact:true}).click();await page.getByText('Fixture sign-in declined. Try again.',{exact:true}).waitFor();
       assert.equal(await page.getByRole('button',{name:'Sign in with Google',exact:true}).isEnabled(),true);
       await page.getByLabel('Workspace address').fill('https://cancel.example');await page.getByRole('button',{name:'Sign in with Google',exact:true}).click();
       await page.getByRole('button',{name:'Cancel sign-in',exact:true}).click();await page.getByText('Google sign-in was cancelled. Try again.',{exact:true}).waitFor();
