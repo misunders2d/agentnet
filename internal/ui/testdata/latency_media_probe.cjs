@@ -4,7 +4,7 @@ const MP4=Object.freeze({size:10580,sha256:'5034aee15c42574db5b6900cd7a2767d6d43
 const hash=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 function fixtureMP4(){
  const text=fs.readFileSync(path.join(__dirname,'latency_fixture.mjs'),'utf8');
- const encoded=text.match(/const mp4=new File\(\[Uint8Array.from\(atob\('([A-Za-z0-9+/=]+)'/);
+ const encoded=text.match(/const fixtureMP4=\(\)=>new File\(\[Uint8Array.from\(atob\('([A-Za-z0-9+/=]+)'/);
  if(!encoded)throw Error('Independent media probe: exact embedded MP4 missing');
  const bytes=Buffer.from(encoded[1],'base64');
  if(bytes.length!==MP4.size||hash(bytes)!==MP4.sha256)throw Error('Independent media probe: exact MP4 identity changed');
