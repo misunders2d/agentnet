@@ -1066,6 +1066,9 @@ type DirMember struct {
 	// Suspended: the relay serves the device nothing until it updates
 	// AgentNet (its last reported version is behind the relay's release).
 	Suspended bool `json:"suspended,omitempty"`
+	// Admin: the relay lists the device as a workspace admin, a hint for
+	// where Report sends (display and addressing only, never authority).
+	Admin bool `json:"admin,omitempty"`
 }
 
 // ReviewItem is a received item waiting for the person. Notice marks a

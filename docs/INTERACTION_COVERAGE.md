@@ -1,5 +1,40 @@
 # Next-release interaction coverage and responsiveness
 
+## MEL-612 Report a message or person — covered, November 25, 2026
+
+**Entry points.** "Report…" sits in a received message's More actions menu
+and phone sheet. It isn't offered on your own messages or on message
+excerpts. "Report <name>…" sits in a direct chat's More menu.
+
+**What happens.**
+- The sheet lists the workspace admins the report goes to: one row per
+  person, never the reporter or the reported person. The list comes from the
+  relay's new `admin` member hint.
+- The person can leave the message out and add a reason.
+- Send report closes the sheet at once and shows "Sending report to …". On
+  success it shows "Report sent to …".
+- Each report is an ordinary message from the reporter, sent in their
+  existing chat with that admin or a new one.
+- On failure the sheet reopens with the reason and "Try again". The retry
+  reuses the same send IDs, so admins never get a second report.
+- With no other admin, the sheet says so and Send report is disabled.
+
+**Counterpart: not inspected.** The design follows Google Play's
+requirement and the owner's decision that admins receive reports.
+
+**Evidence.** `TestReportRendered` (`testdata/report_rendered.cjs`) uses the
+real Store, `ReportSheet` and `Toasts` with a fixture host, in Chromium at
+1280 px light and 390 px dark with touch. Measured from click to DOM:
+
+| Action | Time |
+|---|---|
+| Pending notice | 55-62 ms |
+| Unrelated control while sends are held | 32-42 ms |
+| Failure shown | 44-46 ms |
+
+**Not covered.** The fixture page has no skin styling. The real menu items,
+Comic styling and a real relay are not covered by this test.
+
 ## MEL-612 terms of use on the first-run page — covered, November 25, 2026
 
 The first-run page (`internal/ui/static/setup.mjs`) shows "I agree to the

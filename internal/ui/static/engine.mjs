@@ -10505,7 +10505,7 @@ export class Engine {
       threads, topics, topic_list: true, schedules: true, remind:true, reminders:(await this.reminders()).map(({state,fact,...r})=>r), review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
-          .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
+          .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000), ...(m.admin === true ? { admin: true } : {}) })) },
       notify,
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here

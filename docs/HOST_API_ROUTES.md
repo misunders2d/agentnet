@@ -662,6 +662,9 @@ decision does not close the request; only the host's signed status does.
   (optional) means the relay serves that device nothing until it updates
   AgentNet. Show an invited agent's device as offline or behind from these;
   otherwise use its `state_text`.
+  `admin` (optional) means the relay lists that device as a workspace
+  admin. It is a hint for where Report sends the reporter's own message,
+  and it grants nothing. Older relays leave it out.
 - Delivery of a sent copy (`state` of an outgoing message, `copies[].state`):
   - `queued`
   - `waiting`: kept here because that device cannot read it yet, or

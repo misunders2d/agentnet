@@ -417,7 +417,7 @@ func directoryOf(v client.MemberView, self string) Directory {
 		if m.Address == self {
 			continue
 		}
-		e := DirMember{Address: m.Address, Joined: time.Unix(m.Joined, 0)}
+		e := DirMember{Address: m.Address, Joined: time.Unix(m.Joined, 0), Admin: m.Admin}
 		if v.Current {
 			e.Presence, e.Suspended = m.Presence, m.Suspended
 		}

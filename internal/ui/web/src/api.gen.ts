@@ -400,6 +400,7 @@ export interface DirMember {
   presence: string;
   joined: string;
   suspended?: boolean;
+  admin?: boolean;
 }
 
 export interface Directory {
