@@ -183,3 +183,26 @@ func TestInstalledSkinCannotTakeBuiltInName(t *testing.T) {
 		t.Fatalf("a package named like a built-in skin was listed: %v", list)
 	}
 }
+
+// MEL-821: an Office package installed next to the program before Office
+// was built in is skipped; the catalog's Office is the built-in one.
+func TestInstalledOfficeYieldsToBuiltIn(t *testing.T) {
+	builtin := catalogOf(t, "")
+	home := t.TempDir()
+	dir := filepath.Join(home, "office")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{
+		"skin.json": `{"api":1,"id":"office","name":"Office","entry":"entry.mjs","files":["entry.mjs"]}`,
+		"entry.mjs": `export function mount(root) { root.textContent = "installed office"; }`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := catalogOf(t, home)
+	if len(list) != 2 || list[1]["id"] != "office" || list[1]["digest"] != builtin[1]["digest"] {
+		t.Fatalf("an installed Office replaced or joined the built-in one: %v", list)
+	}
+}

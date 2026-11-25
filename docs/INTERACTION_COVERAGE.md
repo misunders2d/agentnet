@@ -21,9 +21,10 @@ MEL-822's darker Office list column (`--an-sidebar` #F4F5F7 light, #15181B
 dark; muted text 5.9:1 and 7.2:1) and MEL-823's gutters live in the in-core
 Office theme: Comic now reads `--an-timeline-max` (800px) and
 `--an-bubble-max` (70%) with fallbacks, Office sets 1040px and
-`min(70%, 38rem)`. Left/right space beside the messages at 1280×720 went
+`min(70%, 34rem)`. Left/right space beside the messages at 1280×720 went
 from 102/62 px to 56/16 px, at 1366×768 from 145/105 to 56/16 (the 40 px
-avatar column stays);
+avatar column stays); the longest rendered line is 79 characters (86 with a
+38rem cap, about 70 in Comic);
 1024 and phone unchanged; at 1920 the column stops at 1040 px.
 
 `TestOfficeDefaultRendered` (`office_default_rendered.cjs`, Chromium, every

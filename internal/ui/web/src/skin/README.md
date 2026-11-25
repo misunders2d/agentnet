@@ -100,7 +100,7 @@ out keeps Comic's look:
   grows before it is centred with space on both sides.
 - `--an-bubble-max` (default `70%`, from `lg`): the widest a message is, as
   a share of that column. Keep a readable line (about 80 characters): Office
-  uses `min(70%, 38rem)` with a 1040px column, so a laptop's conversation has
+  uses `min(70%, 34rem)` with a 1040px column, so a laptop's conversation has
   no empty side gutters.
 
 The list column's width (`--an-list-width`) belongs to the person: they drag

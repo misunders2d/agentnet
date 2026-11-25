@@ -331,7 +331,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    assert.equal(first.kind,'question');assert.equal(first.pid,await pidOf(first.topic));
    if(process.env.AGENTNET_MODEL_REPORT){const runtime=page.locator('[data-part=agent-runtime]');await runtime.getByText(/Model and reasoning not reported/).waitFor();assert(!/gpt-6/.test(await runtime.innerText()),'active named agent never borrows default metadata');}
    if(width<1024){await settle(page);await page.getByRole('button',{name:'Back to chats',exact:true}).click();await settle(page);}
-   await nav.getByRole('button',{name:/^Chats/}).click();await page.getByRole('button',{name:'New',exact:true}).click();
+   {const chats=nav.getByRole('button',{name:/^Chats/});if(!(await chats.getAttribute('aria-current')==='page'&&await chats.getAttribute('aria-expanded')==='true'))await chats.click();} /* MEL-824: clicking the open Chats hides its list */await page.getByRole('button',{name:'New',exact:true}).click();
    const newChat=page.getByRole('dialog',{name:'New chat',exact:true});await newChat.getByRole('button',{name:'Chat with Zenbook agent · Claude',exact:true}).click();
    sheet=page.getByRole('dialog',{name:'Chat with Zenbook agent · Claude',exact:true});await sheet.getByRole('textbox',{name:'Your message',exact:true}).fill('Question for Zenbook');
    await page.evaluate(()=>fixture.badRemote=true);await sheet.getByRole('button',{name:'Send question',exact:true}).click();await sheet.waitFor({state:'hidden'});await newChat.waitFor({state:'hidden'});

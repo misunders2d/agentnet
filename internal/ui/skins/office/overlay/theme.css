@@ -51,7 +51,7 @@
      instead of leaving empty gutters, with bubbles capped near 80 characters. */
   --an-sidebar: #F4F5F7;
   --an-timeline-max: 1040px;
-  --an-bubble-max: min(70%, 38rem);
+  --an-bubble-max: min(70%, 34rem);
   color-scheme: light;
 }
 .an-root[data-theme=dark] {
