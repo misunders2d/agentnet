@@ -158,6 +158,133 @@ Before the change the same script fails at "v2 prepared beside v1" (the old
 loader never opens the stored version). Not yet run: the real Android
 WebView and the WebKitGTK app; Office/Pulp gallery builds need no change.
 
+## MEL-612 Report a message or person — covered, November 25, 2026
+
+**Entry points.** "Report…" sits in a received message's More actions menu
+and phone sheet. It isn't offered on your own messages or on message
+excerpts. "Report <name>…" sits in a direct chat's More menu.
+
+**What happens.**
+- The sheet lists the workspace admins the report goes to: one row per
+  person, never the reporter or the reported person. The list comes from the
+  relay's new `admin` member hint.
+- The person can leave the message out and add a reason.
+- Send report closes the sheet at once and shows "Sending report to …". On
+  success it shows "Report sent to …".
+- Each report is an ordinary message from the reporter, sent in their
+  existing chat with that admin or a new one.
+- On failure the sheet reopens with the reason and "Try again". The retry
+  reuses the same send IDs, so admins never get a second report.
+- With no other admin, the sheet says so and Send report is disabled.
+
+**Counterpart: not inspected.** The design follows Google Play's
+requirement and the owner's decision that admins receive reports.
+
+**Evidence.** `TestReportRendered` (`testdata/report_rendered.cjs`) uses the
+real Store, `ReportSheet` and `Toasts` with a fixture host, in Chromium at
+1280 px light and 390 px dark with touch. Measured from click to DOM:
+
+| Action | Time |
+|---|---|
+| Pending notice | 55-62 ms |
+| Unrelated control while sends are held | 32-42 ms |
+| Failure shown | 44-46 ms |
+
+**Not covered.** The fixture page has no skin styling. The real menu items,
+Comic styling and a real relay are not covered by this test.
+
+## MEL-612 Delete account — covered, November 25, 2026
+
+**Entry point.** Settings → Profile → "Delete account…", on every engine.
+
+**What happens.**
+- The sheet says what the server erases and what stays, links
+  ACCOUNT_DELETION.md and enables "Delete my account" only after DELETE is
+  typed (any case).
+- Delete shows "Deleting your account…" at once. While the relay works the
+  sheet stays open and cannot resubmit.
+- On failure: "Your account was not deleted: …" with Try again. On success:
+  "Your account was deleted", the local-copies note, and the Profile button
+  becomes a disabled "Account deleted".
+
+**Counterpart: not inspected.** No Telegram or WhatsApp deletion flow was
+observed or read for this change. The typed confirmation is AgentNet's own
+choice; checking a counterpart remains open.
+
+**Evidence.** `TestDeleteAccountRendered`
+(`testdata/delete_account_rendered.cjs`) uses the real Store and
+`DeleteAccount` with a fixture host, in Chromium at 1280 px light and 390 px
+dark with touch. Click to DOM: sheet opens 117-200 ms, "Deleting…" 53-79 ms,
+failure 5-31 ms after release, deleted state 46-51 ms. Relay:
+`TestPersonDeleteErasesOwnAccount`, `TestPersonDeleteRefusesLastAdmin`,
+`TestPersonDeleteDuringDriveUploadLeavesNoCopy`,
+`TestPersonDeleteMidUploadKeepsDriveRunning`, `TestUpgradeBackupsAgeOut`.
+Go client against a test relay: `TestDeleteAccountRevokesOwnDevices`.
+
+**Not covered.** Comic styling (the fixture has no theme), the real Profile
+page, the desktop host handler (`liveaccountdelete.go`) and the browser
+engine's `/api/person/delete` route. What the app shows after its own device
+is revoked is not checked.
+
+## MEL-612 Block a person — covered, November 25, 2026
+
+**Entry points.** "Block <name>…" (or "Unblock <name>") sits in a direct
+chat's More menu, with a person and a host that can block. In a blocked
+person's chat, "You blocked <name>" with Unblock takes the composer's place.
+
+**What happens.**
+- Block asks once ("Block <name>?"). Groups you share don't change.
+- After Block, the chat shows the blocked bar at once. A stale overview
+  arriving before the host confirms cannot undo it. "Blocked <name>" shows on
+  success.
+- Unblock brings the composer back at once. On failure the blocked bar
+  returns with "Could not unblock <name>: …".
+
+**Counterpart: observed, not code-inspected.** Telegram and WhatsApp replace
+the composer with Unblock in a blocked contact's chat and drop what the
+contact sent while blocked. AgentNet does the same.
+
+**Evidence.** `TestBlockRendered` (`testdata/block_rendered.cjs`) uses the
+real Store, `BlockConfirm`, `BlockedBar` and `Toasts` with a fixture host, in
+Chromium at 1280 px light and 390 px dark with touch. Measured from click to
+DOM:
+
+| Action | Time |
+|---|---|
+| Blocked bar after Block (host held) | 33-35 ms |
+| Unrelated control while held | 22-46 ms |
+| Composer after Unblock (host held) | 34-36 ms |
+| Failure restored after release | 5-6 ms |
+
+Engines: `TestBlockDirectMessagesAcrossOwnDevices` and
+`TestBlockSyncAuthorityAndOrder` (Go client), `TestBrowserBlockSync`
+(browser engine, 21 checks) and `TestBrowserBlockSyncWireMatchesGo` (shared
+parser vectors).
+
+**Not covered.** The real header menu items, Comic styling and a real relay
+are not covered by the rendered test. Group behavior is unchanged by
+construction, not by a group journey test.
+
+## MEL-612 terms of use on the first-run page — covered, November 25, 2026
+
+The first-run page (`internal/ui/static/setup.mjs`) shows "I agree to the
+Terms of use and the Privacy policy" on the welcome, invitation and
+device-link cards. Google sign-in, Join and Add this computer wait for it.
+Pressing one of them before accepting shows "Agree to the Terms of use to
+continue." and moves focus to the checkbox; ticking it clears the message.
+Nothing reaches `/api/setup/google` or `/api/setup/join` before acceptance;
+the fixture counts the calls. Counterpart: not inspected. The design
+follows Google Play's own requirement (terms accepted before posting, and the
+step cannot be skipped), not an observed messenger flow.
+
+`TestSetupTermsRendered` (`testdata/setup_terms_rendered.cjs`) uses Chromium
+at 1280 px light and 390 px dark. Each measurement runs from input to
+visible feedback: refusal 36-61 ms, accept clears 32-43 ms, action after
+accepting 53-63 ms. `TestGoogleRendered` now ticks the checkbox before it
+signs in. Not run: WebKitGTK, and the Android WebView on a device. In code,
+Android opens https links outside the app on a tap (`WebPolicy.external`),
+but that was not checked on a phone.
+
 ## MEL-777 remote follow-up before a running status arrives
 
 Two ordinary tagged asks from the same requester reach a disposable group

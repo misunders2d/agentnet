@@ -1229,6 +1229,9 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	if handled, allowed, err := a.mayDeliverReminderSync(env); handled {
 		return allowed, err
 	}
+	if handled, allowed, err := a.mayDeliverBlockSync(env); handled {
+		return allowed, err
+	}
 	if handled, allowed, err := a.mayDeliverTopicStateSync(env); handled {
 		return allowed, err
 	}

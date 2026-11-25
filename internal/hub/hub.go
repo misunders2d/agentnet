@@ -198,6 +198,7 @@ func Open(cfg Config) (*Hub, error) {
 		unlock()
 		return nil, err
 	}
+	ageOutUpgradeBackups(cfg.DataDir, time.Now(), cfg.Logf)
 	h := &Hub{cfg: cfg, store: st, unlock: unlock, heartbeat: cfg.Heartbeat, syncDir: secfile.SyncDir, done: make(chan struct{})}
 	h.presence = presence{grace: cfg.SessionGrace, onEnd: func(agent, session string) {
 		senders, err := st.expireSession(agent, session)

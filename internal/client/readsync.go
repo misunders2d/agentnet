@@ -53,11 +53,18 @@ END;
 `
 
 func readSyncAuthority(q dbq, r protocol.ReadSync, from, fromFP, to, toFP string) error {
+	return ownSyncAuthority(q, r, from, fromFP, to, toFP, true)
+}
+
+// ownSyncAuthority is readSyncAuthority; humanRecipient false also admits the
+// person's own agent hosts as recipients (block marks, which they enforce).
+// The writer is always a current own human device.
+func ownSyncAuthority(q dbq, r protocol.ReadSync, from, fromFP, to, toFP string, humanRecipient bool) error {
 	me, ok, err := scanPersonIn(q, "state = ?", personSelf)
 	if err != nil {
 		return err
 	}
-	if !ok || r.Person != me.info.Person || from == to || !me.has(from, fromFP) || !me.has(to, toFP) || !me.roster.Human(fromFP) || !me.roster.Human(toFP) {
+	if !ok || r.Person != me.info.Person || from == to || !me.has(from, fromFP) || !me.has(to, toFP) || !me.roster.Human(fromFP) || humanRecipient && !me.roster.Human(toFP) {
 		return errors.New("read sync: only current own-human devices may share read state")
 	}
 	for _, endpoint := range []struct{ address, fp string }{{from, fromFP}, {to, toFP}} {

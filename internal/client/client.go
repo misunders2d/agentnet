@@ -827,7 +827,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (n.steer || n.proposal || conv != "" || sub == envelope.SubHistoryArchive || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapModelSyncV2 || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapReadSyncV2 || required == protocol.CapDirectTopicSync || required == protocol.CapTopicStateSync || required == protocol.CapTopicStateSyncV2 || required == protocol.CapReminderSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (n.steer || n.proposal || conv != "" || sub == envelope.SubHistoryArchive || required == protocol.CapHistoryArchive || required == protocol.CapModelSync || required == protocol.CapModelSyncV2 || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapReadSyncV2 || required == protocol.CapDirectTopicSync || required == protocol.CapTopicStateSync || required == protocol.CapTopicStateSyncV2 || required == protocol.CapReminderSync || required == protocol.CapReminderSyncV2 || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {
@@ -1337,6 +1337,14 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 			}
 			continue
 		}
+		if blocked, err := a.blockedSender(in, address, e.Public); err != nil {
+			return "", err
+		} else if blocked {
+			if err := a.holdBlocked(ctx, env, in, e.Public, "message"); err != nil {
+				return "", err
+			}
+			continue
+		}
 		if namedAgentFields(in) {
 			if err := a.checkDeviceAgent(in, e.Public); err != nil {
 				continue
@@ -1385,6 +1393,23 @@ func (a *Agent) RevokePerson(ctx context.Context, person string) ([]string, erro
 	var out protocol.RevokePersonResponse
 	err := a.hub.do(ctx, "POST", "/v1/admin/person/revoke", protocol.RevokePersonRequest{Person: person}, &out)
 	return out.Revoked, err
+}
+
+// DeleteAccount erases this installation's person from the relay (account
+// deletion; hub/persondelete.go). person must be this installation's own,
+// named again as confirmation. Afterwards every device of the person is
+// revoked; what is on this device stays until the app or workspace is removed.
+func (a *Agent) DeleteAccount(ctx context.Context, person string) ([]string, error) {
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || person == "" || person != me.info.Person {
+		return nil, errors.New("delete account: name your own person")
+	}
+	var out protocol.DeletePersonResponse
+	err = a.hub.do(ctx, "POST", "/v1/person/delete", protocol.DeletePersonRequest{Person: person}, &out)
+	return out.Deleted, err
 }
 
 // wakeWorkerNow is wakeWorker for a wake a person or a job waits on: a job

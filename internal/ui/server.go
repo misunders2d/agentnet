@@ -88,6 +88,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/person", s.person)
 	mux.HandleFunc("POST /api/person/label", s.renamePerson)
 	mux.HandleFunc("POST /api/person/picture", s.setPicture)
+	mux.HandleFunc("POST /api/person/block", s.block)
+	mux.HandleFunc("POST /api/person/delete", s.deleteAccount)
 	mux.HandleFunc("GET /api/picture/{hash}", s.getPicture)
 	mux.HandleFunc("POST /api/device/{what}", s.device)
 	mux.HandleFunc("GET /api/dm", s.dm)

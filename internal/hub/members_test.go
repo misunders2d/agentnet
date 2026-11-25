@@ -100,6 +100,12 @@ func TestMembersList(t *testing.T) {
 	if p := presenceOf(got); p[vit.addr] != protocol.PresenceOffline || got.Members[0].Joined != 1002 {
 		t.Fatalf("new member: %+v", got.Members[0])
 	}
+	// The admin hint tells a reporter where reports go; members are not admins.
+	for _, m := range got.Members {
+		if m.Admin != (m.Address == admin.addr) {
+			t.Fatalf("admin hint: %+v", m)
+		}
+	}
 
 	ad := testAd(vit)
 	h.presence.connect(vit.addr, ad)

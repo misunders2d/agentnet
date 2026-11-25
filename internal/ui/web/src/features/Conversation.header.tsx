@@ -5,8 +5,8 @@ import { hostNote, pendingGroupInvites } from "./RoomPanel.model";
 import { useEffect, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
-  IconChevronLeft, IconDotsVertical, IconUserPlus, IconUsers, IconBell, IconBellOff, IconTrash, IconHandStop,
-  IconAlarm, IconPencil, IconDoorExit, IconMessageCheck, IconMessagePause, IconBoltOff,
+  IconChevronLeft, IconDotsVertical, IconUserPlus, IconUsers, IconBell, IconBellOff, IconTrash, IconHandStop, IconFlag,
+  IconAlarm, IconPencil, IconDoorExit, IconMessageCheck, IconMessagePause, IconBoltOff, IconBan,
 } from "@tabler/icons-react";
 import type { Api, T } from "../api";
 import { useApp } from "../context";
@@ -17,6 +17,8 @@ import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
 import { RemindSheet, latestReceived } from "./Reminders";
+import { ReportSheet } from "./Report";
+import { BlockConfirm, useBlocked } from "./Block";
 import { groupRights, useGroupChange } from "./GroupAdmin";
 import { DeviceGrantConfirm, type GrantChange } from "./Trust";
 import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
@@ -115,6 +117,11 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
   const t = ctx.dm, th = ctx.thread;
   const [del, setDel] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
+  const [report, setReport] = useState<boolean | null>(null);
+  // A direct chat with another person: Report (and Block) apply to them.
+  const dmPeer = t && t.kind !== "group" && t.peer.address && t.peer.person !== overview?.person?.person ? t.peer : undefined;
+  const [block, setBlock] = useState(false);
+  const blocked = useBlocked(dmPeer?.person);
   const [grant, setGrant] = useState<GrantChange | null>(null);
   const [space, setSpace] = useState(false);
   const rights = groupRights(t, overview);
@@ -238,6 +245,10 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
                 : <Menu.Item className={item} onClick={() => setGrant("approve")}><IconMessageCheck size={20} />Answer their questions automatically…</Menu.Item>)}
               {grants && th?.task_grant && <Menu.Item className={item} onClick={() => setGrant("revoke_tasks")}><IconBoltOff size={20} />Stop running their tasks without asking…</Menu.Item>}
               {(t || th) && <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />}
+              {dmPeer && <Menu.Item className={item + " text-danger"} onClick={() => setReport(true)}><IconFlag size={20} />Report {personName(dmPeer)}…</Menu.Item>}
+              {dmPeer?.person && overview?.block && (blocked
+                ? <Menu.Item className={item} onClick={() => void store.setBlocked(dmPeer.person!, false, personName(dmPeer))}><IconBan size={20} />Unblock {personName(dmPeer)}</Menu.Item>
+                : <Menu.Item className={item + " text-danger"} onClick={() => setBlock(true)}><IconBan size={20} />Block {personName(dmPeer)}…</Menu.Item>)}
               {rights.member && <Menu.Item className={item + " text-danger"} onClick={() => change.pick("leave")}><IconDoorExit size={20} />Leave group…</Menu.Item>}
               {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />{th ? "Delete topic…" : "Delete conversation…"}</Menu.Item>}
             </Menu.Popup>
@@ -247,6 +258,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
 
       {change.sheet}
       {t?.peer.person && <ProjectSpaceSheet conv={t.id} open={space} onOpenChange={setSpace} />}
+      {dmPeer?.person && <BlockConfirm person={dmPeer.person} name={personName(dmPeer)} open={block} onOpenChange={setBlock} />}
+      {report !== null && dmPeer && <ReportSheet open={report} onOpenChange={setReport} subject={{ name: personName(dmPeer), address: dmPeer.address, person: dmPeer.person }} />}
       {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
       {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
       <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}

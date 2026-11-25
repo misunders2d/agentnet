@@ -231,6 +231,18 @@ type RevokePersonResponse struct {
 	Revoked []string `json:"revoked"`
 }
 
+// DeletePersonRequest erases the caller's own person from the relay (Google
+// Play account deletion; docs/DECISIONS.md, November 25, 2026). Person must
+// be the caller's own, named again as confirmation.
+type DeletePersonRequest struct {
+	Person string `json:"person"`
+}
+
+// DeletePersonResponse lists the devices deleted with the person.
+type DeletePersonResponse struct {
+	Deleted []string `json:"deleted"`
+}
+
 // Receipt reports what the Hub can prove about a message.
 const StreamReceipts = "receipts"
 const ReceiptBatch = 100
@@ -515,6 +527,10 @@ type Member struct {
 	// AgentNet to the latest release. Availability only, never authority:
 	// senders do not wait for it, and its copies never hold anyone else's.
 	Suspended bool `json:"suspended,omitempty"`
+	// Admin: the relay lists this device as a workspace admin. A hint for
+	// where a person's report goes (the reporter's own message to that
+	// person); it grants nothing and no send authority may use it.
+	Admin bool `json:"admin,omitempty"`
 }
 
 // PersonRef names one step of a person's roster chain.

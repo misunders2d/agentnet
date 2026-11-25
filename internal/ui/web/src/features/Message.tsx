@@ -27,6 +27,7 @@ import { AnswerSheet, AttentionReplyStatus } from "./Approvals.sheets";
 import { useStore } from "../store";
 import { Markdown, MessageLinks, type RenderMention } from "./Markdown";
 import { AssignMessage } from "./Message.assign";
+import { ReportSheet } from "./Report";
 import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions, ReactionTargets } from "./Message.reactions";
 import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, discardEditDraft, type Acts, type Can } from "./Message.actions";
@@ -85,6 +86,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
   const [editing, setEditing] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
   const [assign, setAssign] = useState<boolean | null>(null);
+  const [report, setReport] = useState<boolean | null>(null);
   const [outcomesOpen, setOutcomesOpen] = useState(false);
 
   const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
@@ -105,6 +107,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
     unread: attention ? () => { void store.markUnread(m.id); } : undefined,
     unreadFrom: attention ? () => { void store.markUnread(m.id, true); } : undefined,
     assign: !targets && live && ctx.overview?.person?.state === "self" ? () => setAssign(true) : undefined,
+    report: !targets && live && !who.mine && m.dir !== "out" ? () => setReport(true) : undefined,
     topic:!targets&&live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
     copy: () => {
@@ -240,6 +243,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
         {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
         {assign !== null && <AssignMessage open={assign} onOpenChange={setAssign} m={m} ctx={ctx} />}
+        {report !== null && <ReportSheet open={report} onOpenChange={setReport} subject={{
+          name: who.name, address: m.from, where: ctx.dm?.title || ctx.dm?.peer?.label,
+          person: (ctx.overview?.people || []).find(p => p.address === m.from || (p.devices || []).some(d => d.address === m.from))?.person,
+          message: shownText(m) }} />}
       </div>
       {targets && <details data-agent-outcomes open={outcomesOpen} className="mx-3 mt-1 rounded-xl bg-surface/60 px-3 sm:mx-4" onToggle={event => setOutcomesOpen(event.currentTarget.open)}>
         <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] font-semibold text-text-2">{targets.length} agent outcomes{targets.some(target => target._failed || phaseOf(target) === "decide") ? " · needs attention" : ""}</summary>

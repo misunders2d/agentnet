@@ -60,6 +60,34 @@ export async function scanInvitation(scanner) {
 let panel, state = { state: "none", device: "", device_words: "" };
 let held = ""; // an invitation that arrived while the computer's membership had ended
 let setupBusy = false;
+let agreed = false; // the terms of use were accepted on this page; joining needs it
+
+// The terms and privacy policy joining asks the person to accept (Google
+// Play user-generated content policy). Links open in the system browser.
+export const termsURL = "https://github.com/misunders2d/agentnet/blob/main/TERMS.md";
+export const privacyURL = "https://github.com/misunders2d/agentnet/blob/main/PRIVACY.md";
+const termsProblem = "Agree to the Terms of use to continue.";
+
+// termsBox is the acceptance checkbox; every card shares one answer.
+function termsBox() {
+  const box = el("input", { type: "checkbox", id: "setup-terms" });
+  box.checked = agreed;
+  box.addEventListener("change", () => {
+    agreed = box.checked;
+    if (agreed) for (const e of panel.querySelectorAll(".error")) if (e.textContent === termsProblem) e.textContent = "";
+  });
+  const link = (href, text) => el("a", { href, target: "_blank", rel: "noopener" }, text);
+  return el("label", { class: "join-terms" }, box,
+    el("span", {}, "I agree to the ", link(termsURL, "Terms of use"), " and the ", link(privacyURL, "Privacy policy"), "."));
+}
+
+// needTerms says, in error, why joining waits, and reports whether it does.
+function needTerms(error) {
+  if (agreed) return false;
+  error.textContent = termsProblem;
+  panel.querySelector("#setup-terms")?.focus();
+  return true;
+}
 
 // endedWords is what an ended membership says: a title and why.
 export const endedWords = {
@@ -103,7 +131,7 @@ function welcome(problem) {
     el("p", { class: "join-intro" }, "Chat with people and their agents."),
     state.state === "incomplete" && el("p", { class: "join-recovery" }, "Joining did not finish last time. Sign in with the same Google account to finish it, or reuse your invitation below."),
     "Open your workspace’s Get AgentNet link, or enter its address below.",
-    scan, googleForm(), el("details", { open: nativeScan }, el("summary", {}, "Use an invitation or device link"), form));
+    termsBox(), scan, googleForm(), el("details", { open: nativeScan }, el("summary", {}, "Use an invitation or device link"), form));
   panel.querySelector("#google-hub").focus();
 }
 
@@ -116,7 +144,7 @@ function googleForm(hub = "") {
   const form = el("form", { class: "join-form" }, el("label", { for: "google-hub" }, "Workspace address"), address,
     el("p", { class: "hint" }, "Use your invited Google email. Another device of yours must approve each later device."), error, button, cancel);
   form.addEventListener("submit", async ev => {
-    ev.preventDefault(); if (button.disabled || setupBusy) return; button.disabled = true; setupBusy = true; error.textContent = "";
+    ev.preventDefault(); if (button.disabled || setupBusy || needTerms(error)) return; button.disabled = true; setupBusy = true; error.textContent = "";
     try {
       await call("/api/setup/google", { hub: address.value.trim() });
       cancel.hidden = false;
@@ -179,12 +207,13 @@ function inviteCard(code, inv) {
   const form = el("form", { class: "join-form", novalidate: true },
     el("label", { for: "setup-name" }, "Your name"), name,
     el("p", { class: "hint", id: "setup-name-hint" }, "The name people see. You can change it later."),
-    error, go);
+    termsBox(), error, go);
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     if (go.disabled || setupBusy) return;
     const chosen = name.value.trim();
     if (!chosen) { error.textContent = "Write the name people will see."; return; }
+    if (needTerms(error)) return;
     go.disabled = true; setupBusy = true; error.textContent = "";
     go.textContent = "Joining…";
     try {
@@ -209,7 +238,7 @@ function linkCard(code, inv) {
   const go = el("button", { type: "button", class: "btn primary join-go" }, "Add this computer");
   const until = inv.expires ? new Date(inv.expires) : null;
   go.addEventListener("click", async () => {
-    if (go.disabled || setupBusy) return;
+    if (go.disabled || setupBusy || needTerms(error)) return;
     go.disabled = true; setupBusy = true; error.textContent = "";
     go.textContent = "Adding…";
     try {
@@ -224,7 +253,7 @@ function linkCard(code, inv) {
     serverLine(inv),
     el("p", {}, "This link comes from one of your devices. This computer becomes one more device of yours, with your chats, once you approve it there with one tap."),
     until && el("p", { class: "hint" }, "The link works until " + until.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + ". If it runs out, make a new one on your other device."),
-    error, go,
+    termsBox(), error, go,
     el("button", { type: "button", class: "text-btn", onclick: () => welcome("") }, "Use another invitation"));
   go.focus();
 }

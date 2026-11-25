@@ -1047,3 +1047,107 @@ Read-only reviews and the November 2 Option A debate are design input. The
 Option A feature branch is implemented for review; it is not merged, released
 or deployed. The earlier statement that continuity was deferred is superseded
 by the owner’s “Merge into one” correction and this scoped build.
+
+## November 25, 2026 — Google Play: terms, report, block, account deletion (MEL-612)
+
+Google Play requires these before any test track is reviewed, and private,
+invite-only chat gets no exemption. Policies: user-generated content
+([9876937](https://support.google.com/googleplay/android-developer/answer/9876937),
+[12923286](https://support.google.com/googleplay/android-developer/answer/12923286)),
+account deletion
+([13327111](https://support.google.com/googleplay/android-developer/answer/13327111)),
+and data safety
+([10787469](https://support.google.com/googleplay/android-developer/answer/10787469)).
+All were read on November 25.
+
+**Owner decisions (November 25):**
+- **Terms of use.** The person accepts [TERMS.md](../TERMS.md) and the
+  privacy policy on the first-run page. Google sign-in, Join and Add this
+  computer wait for the checkbox.
+- **Report** a message or person. The report goes inside AgentNet to that
+  workspace's admins, with the messages the reporter chooses, and the admins
+  act on it. Encryption means admins see only what is included.
+- **Block** covers direct messages only. A blocked person cannot reach you
+  directly, and shared groups are unchanged. The block follows the person
+  across their own devices.
+- **Delete account** really erases the person from the relay: name, email,
+  picture, stored files and undelivered messages. Only the bare device keys
+  and a deleted marker stay, so the identity cannot come back. Rules:
+  - The last admin must hand admin over first.
+  - The person's agent identities are erased too.
+  - Relay backups age out within 30 days, and the deletion page says so.
+  - Copies already delivered stay on the recipients' devices.
+  - Refinement (November 25, owner accepted the recommendation): the signed
+    identity chain stays. It holds the name, and the email for Google
+    sign-in, and groups verify past history against it. Erasing it would stop
+    later members from verifying groups that person created or changed.
+    Everything else is erased: picture, stored files, undelivered messages,
+    the Google sign-in mapping, notification data and unused invitations.
+    All devices are revoked and marked deleted. The deletion page discloses
+    the kept record as retained for security, which Google allows when
+    disclosed. A full erase with a "Deleted account" placeholder waits until
+    Google objects.
+  - The relay deletes its own schema-upgrade database copies
+    (`hub.db.vN.bak`) older than 30 days, so the page's 30-day backup
+    statement is true for relays on that release.
+- **Owner answers (November 25, evening):** TERMS.md softens the child
+  abuse line to "Workspace admins remove anyone who posts it, and it may be
+  reported to the authorities" (the developer cannot see encrypted chats or
+  other relays, so no promise to report). Deleting an account erases the
+  relay only; the device keeps its copy until the app or workspace is
+  removed. People who cannot open the app ask their workspace admin; the
+  page says so.
+- **Data safety** declares name, email (Google sign-in only), photos (the
+  profile picture), user IDs, device IDs and message routing metadata.
+  Message content and files are not declared, because they are end-to-end
+  encrypted.
+
+**Block implementation (not owner decisions):**
+- Marks travel like reminder marks: private, between current own human
+  devices only, newest revision wins. The reader capability `rem2` replaces
+  `rem1`'s slot (the advertisement list is full) and implies it.
+- Both engines hold a blocked person's direct messages, questions, tasks and
+  controls outside groups (reactions, edits) before any admission, with no
+  review notice, unread count or alert. Unblocking does not release them, as
+  Telegram and WhatsApp drop what a blocked contact sent while blocked
+  (observed product behavior; not code-inspected).
+- Known limit: the sender's copy still gets the true `quarantined` receipt,
+  shown to them as "Couldn't be verified there", which they could read as a
+  block. Messengers hide this; a later change can send a different receipt.
+  The Block dialog therefore does not promise that they aren't told.
+- Marks also reach the person's own agent hosts, which enforce them on
+  questions and tasks; only an own human device can set a block.
+- Device-thread (version 1) messages from a blocked person are held as well.
+- The gate covers every conversation that is not a group, so a blocked
+  person's guest or helper turns inside your direct chat with someone else
+  are held too.
+- Known limit: a device that admitted a message before the block reached it
+  keeps it and may copy it to your other devices as history.
+- The owner asked whether the engines should become one shared core with
+  three adapters. Codex and Agy (consulted November 25) both advised against
+  it for now: the browser keeps non-exportable WebCrypto keys and IndexedDB,
+  the Go client depends on SQLite, sockets and subprocesses, and a WASM build
+  risks the under-1100-ms gate. Block was built in both engines with shared
+  Go/browser parser vectors instead. Sharing selected Go rules later remains
+  an option.
+
+**Account deletion implementation (not owner decisions):**
+- `POST /v1/person/delete` is signed by a current human device of the
+  person itself; nobody deletes someone else's account. It revokes every
+  device of the person (agent hosts included) with reason `deleted`,
+  expires their custody, empties the stored ciphertext of every message to
+  or from them, and marks their files `deleted` (never served again).
+  The Drive worker erases those files, the Drive copy first, on every wake
+  (start, deletion, new upload), so a failure is retried then. Unused
+  invitations go too: the person's device links and any member invitations
+  their devices created.
+- An upload to Drive that finishes after the deletion commits nothing and
+  deletes its own Drive copy. Known limit: if that delete fails, the copy
+  stays on Drive untracked and only the log names it.
+- In-app deletion erases the relay only. The device keeps its local copy
+  until the app or workspace is removed; the page says so (owner choice).
+- Google sign-in with the same email after deletion is not verified.
+
+**Implementation note (not an owner decision):** the first build gates only
+the app's first-run page, which Play reviews. The browser landing page and
+Comic's add-workspace sheet are not gated yet.

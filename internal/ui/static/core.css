@@ -90,6 +90,9 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .join-form input:focus, .join-form textarea:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
 .join-form .hint { margin: 0; }
 .join-form .error { margin: 4px 0 0; }
+.join-terms, .join-form .join-terms { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 4px; font-size: 14px; font-weight: 400; line-height: 1.45; cursor: pointer; }
+.join-terms input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; accent-color: var(--accent, #147d73); }
+.join-terms a { color: var(--accent-text); }
 .join-go { justify-self: start; margin-top: 10px; padding: 10px 28px; }
 .join-note { font-size: 13.5px; color: var(--muted); }
 .join-more { font-size: 13.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }

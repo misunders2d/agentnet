@@ -169,6 +169,7 @@ export interface State {
   dismissPending: Record<string, PendingDismiss>;
   messageChanges: Record<string, MessageChange>;
   reminderChanges: Record<string, ReminderChange>;
+  blockPending: Record<string, boolean>; // person -> blocked, shown before the host confirms
   pictureChange?: { person: T.PersonView; seq: number; png: string; saved?: T.PersonView };
   personRename?: { request: { person: string; original: string; label: string }; saved?: T.PersonView; error?: string };
   personCreation?: { request: { address: string; fingerprint: string; label: string }; saved?: { person: T.PersonView; note: string }; error?: string };
@@ -328,7 +329,7 @@ export class Store {
       (conv, message, prior) => this.captureQueuedSendDraft(conv, message as NonNullable<T.DMThread["messages"]>[number], prior as PendingSendDraft | undefined),
       (id, conv) => this.releaseSendDraft(id, conv));
     this.state = {
-      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {},
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [], attentionReplies: {}, reactionPending: {}, dismissPending: {}, messageChanges: {}, reminderChanges: {}, blockPending: {},
       conn: "loading", version: "", newVersion: "", unsent: false, drafts: this.loadDrafts(), scheduleSaves:{}, toasts: [], working: false, messageLanding: null, loadError: "", groupContextPending: "", invite: null, topicBusy: {}, topicPreviews: {}, panel: false, section: "", agentNames: {}, readVisit: null, contentRevision: 0,
     };
     const saved=host.workspaces?.state?.(host.workspace.id)?.comicDrafts as {handle?:string;open:Open;dm:T.DMThread|null;thread:T.Thread|null;tab:State['tab'];draftWrites?:Map<string,string>}|undefined;
@@ -2725,6 +2726,24 @@ export class Store {
 
   // run performs one action and reports its failure in words; the change
   // stream then brings what it changed.
+  // Block or unblock a person's direct messages (MEL-612). The chat changes at
+  // once; a failure restores it and says so.
+  async setBlocked(person: string, blocked: boolean, name: string) {
+    const pending = (p: Record<string, boolean>) => this.set({ blockPending: p });
+    pending({ ...this.state.blockPending, [person]: blocked });
+    try {
+      await this.api.setBlocked(person, blocked);
+      await this.refetch();
+      if (this.alive) this.toast((blocked ? "Blocked " : "Unblocked ") + name, "ok");
+    } catch (e) {
+      if (this.alive) this.toast((blocked ? "Could not block " : "Could not unblock ") + name + ": " + errorText(e), "error");
+    } finally {
+      if (this.alive && this.state.blockPending[person] === blocked) {
+        const p = { ...this.state.blockPending }; delete p[person]; pending(p);
+      }
+    }
+  }
+
   async run<R>(fn: (a: Api) => Promise<R>, ok?: string): Promise<R | undefined> {
     try {
       const r = await fn(this.api);

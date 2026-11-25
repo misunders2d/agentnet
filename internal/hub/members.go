@@ -39,7 +39,7 @@ func (h *Hub) members() (protocol.Members, error) {
 	}
 	out := protocol.Members{DiscoveryGeneration: uint64(h.againGen.Load()), Members: make([]protocol.Member, 0, len(rows)), Truncated: truncated, Workspace: h.currentWorkspaceName()}
 	for _, r := range rows {
-		m := protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined, Person: r.person, Agent: r.agent}
+		m := protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined, Person: r.person, Agent: r.agent, Admin: r.admin}
 		if r.version != nil { // reported by its stream; none yet: not known, so not suspended (update.go)
 			m.Version = *r.version
 			_, m.Suspended = h.updateRequired(m.Version)

@@ -195,7 +195,7 @@ func (h *Hub) initAttachmentDrive() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 	go h.runAttachmentDrive(ctx)
-	d.signal()
+	d.signal() // also erases deleted accounts' files left by an earlier run
 	return nil
 }
 func (d *relayDrive) signal() {
@@ -581,6 +581,9 @@ func (h *Hub) runAttachmentDrive(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-d.wake:
+			// Deleted accounts' files are erased here, retried on every wake,
+			// so Close waits for it like any transfer.
+			h.eraseDeletedFiles(ctx)
 			if retry != nil {
 				continue // arrivals retain local custody without bypassing provider backoff
 			}
@@ -702,6 +705,13 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 			continue // fill a free slot when an arrival wakes a partially full batch
 		}
 		delete(inflight, r.id)
+		if errors.Is(r.err, errAttachmentGone) {
+			// An erased file is nobody's transfer failure. Its upload has now
+			// closed the file, which Windows would not let an erase remove
+			// while it was open, so erase again.
+			h.eraseDeletedFiles(ctx)
+			continue
+		}
 		if r.err == nil {
 			h.attachmentDrive.mu.Lock()
 			h.attachmentDrive.progress.Files++
@@ -739,8 +749,8 @@ func (h *Hub) nextAttachmentDrive(ctx context.Context, inflight map[string]bool,
 	if newest {
 		order = "DESC"
 	}
-	rows, err := h.store.db.QueryContext(ctx, `SELECT blob_id FROM relay_drive_blobs
- WHERE state='pending' OR (state='remote' AND local_present=1) ORDER BY rowid `+order+` LIMIT ?`, attachmentDriveTransfers+1)
+	rows, err := h.store.db.QueryContext(ctx, `SELECT d.blob_id FROM relay_drive_blobs d JOIN blobs b ON b.id=d.blob_id AND b.state=?
+ WHERE d.state='pending' OR (d.state='remote' AND d.local_present=1) ORDER BY d.rowid `+order+` LIMIT ?`, protocol.BlobStored, attachmentDriveTransfers+1)
 	if err != nil {
 		return "", err
 	}
@@ -771,11 +781,15 @@ func copyVerifiedCiphertext(dst io.Writer, src io.Reader, size int64, sha string
 	}
 	return nil
 }
+// errAttachmentGone: the file is no longer stored (its account was deleted),
+// so there is nothing to transfer.
+var errAttachmentGone = errors.New("attachment no longer stored")
+
 func (h *Hub) copyAttachmentDrive(ctx context.Context, id string) (int64, error) {
 	d := h.attachmentDrive
 	b, err := h.store.blob(id)
 	if err != nil || b.State != protocol.BlobStored {
-		return 0, errors.New("attachment no longer stored")
+		return 0, errAttachmentGone
 	}
 	var fileID, state string
 	if err = h.store.db.QueryRowContext(ctx, `SELECT file_id,state FROM relay_drive_blobs WHERE blob_id=?`, id).Scan(&fileID, &state); err != nil {
@@ -810,8 +824,23 @@ func (h *Hub) copyAttachmentDrive(ctx context.Context, id string) (int64, error)
 		}
 		// The provider copy is proven before committing its mapping. Neither a
 		// lost response nor a crash here can cause another Drive object.
-		if _, err = h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state='remote' WHERE blob_id=?`, id); err != nil {
+		// The mapping commits only while the file is still stored: an account
+		// deletion during the upload must not leave a Drive copy nobody tracks
+		// (the mapping row cascades away with an erased file).
+		committed, err := h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state='remote' WHERE blob_id=?
+ AND EXISTS(SELECT 1 FROM blobs WHERE id=? AND state=?)`, id, id, protocol.BlobStored)
+		var n int64
+		if err == nil {
+			n, err = committed.RowsAffected()
+		}
+		if err != nil {
 			return 0, err
+		}
+		if n == 0 {
+			if err = d.client.DeleteCiphertext(ctx, fileID, h.realmID, id, b.SHA256, b.Size); err != nil {
+				h.cfg.Logf("removing the Drive copy of erased file %s: %v", id, err)
+			}
+			return 0, errAttachmentGone
 		}
 	} else {
 		// A restart may land after the remote commit but before local removal.
