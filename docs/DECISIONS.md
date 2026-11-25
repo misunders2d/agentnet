@@ -1111,6 +1111,11 @@ All were read on November 25.
 - Marks also reach the person's own agent hosts, which enforce them on
   questions and tasks; only an own human device can set a block.
 - Device-thread (version 1) messages from a blocked person are held as well.
+- The gate covers every conversation that is not a group, so a blocked
+  person's guest or helper turns inside your direct chat with someone else
+  are held too.
+- Known limit: a device that admitted a message before the block reached it
+  keeps it and may copy it to your other devices as history.
 - The owner asked whether the engines should become one shared core with
   three adapters. Codex and Agy (consulted November 25) both advised against
   it for now: the browser keeps non-exportable WebCrypto keys and IndexedDB,
