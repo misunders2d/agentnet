@@ -7,7 +7,7 @@
 //   - once that ends, the new version mounts with the same chat open, its
 //     draft text and its attached file kept, without a switch or a reload;
 //   - bad bytes, a version needing a newer AgentNet, an untrusted digest
-//     and a version that fails to mount leave the running one usable.
+//     and a version that fails to mount leave the installed one usable.
 // Desktop light 1440 and Android-width dark 412.
 //   node skin_gallery_activate_rendered.cjs DAEMON_URL_WITH_TOKEN
 const fs = require('fs'), path = require('path'), crypto = require('crypto'), assert = require('node:assert/strict');
@@ -27,7 +27,7 @@ const documentRule = (version) =>
 // so the version that is applied can be read from the page.
 function comicAs(mark, agentnet = 'v0.8.25') {
   const m = JSON.parse(fs.readFileSync(path.join(comicDir, 'skin.json')));
-  const files = { 'skin.json': Buffer.from(JSON.stringify({ ...m, id: 'pulp', name: 'Pulp', agentnet })) };
+  const files = { 'skin.json': Buffer.from(JSON.stringify({ ...m, id: 'pulp', name: mark === 'v2' ? 'Pulp Updated' : 'Pulp', agentnet })) };
   for (const f of m.files) files[f] = fs.readFileSync(path.join(comicDir, f));
   files['style.css'] = Buffer.concat([files['style.css'], Buffer.from('\n.an-root{--pulp-build:"' + mark + '"}\n')]);
   files[m.document] = Buffer.concat([files[m.document], Buffer.from(documentRule(mark === 'v2' ? 2 : 1))]);
@@ -48,7 +48,7 @@ function digest(files) {
   const m = JSON.parse(files['skin.json']);
   return crypto.createHash('sha256').update(Buffer.concat([files['skin.json'], ...m.files.flatMap((n) => [Buffer.from(n), Buffer.from([0]), sha(files[n])])])).digest('hex');
 }
-const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pulp', description: 'Test.', version, api: 1, agentnet, digest: digest(files),
+const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: JSON.parse(files['skin.json']).name, description: 'Test.', version, api: 1, agentnet, digest: digest(files),
   files: Object.entries(files).map(([p, b]) => ({ path: p, sha256: sha(b).toString('hex'), size: b.length })), previews: [] });
 
 (async () => {
@@ -97,6 +97,10 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
         .filter((r) => r.name === '--pulp-test-version').map((r) => r.initialValue);
       return { documentRules, build: root ? getComputedStyle(root).getPropertyValue('--pulp-build').trim() : '', sheets, h1: sr?.querySelector('h1')?.textContent || '', card: !!sr?.querySelector('.skin-card') || !!document.querySelector('.skin-card') };
     });
+    const installed = (page) => page.evaluate(async () => {
+      const { catalog } = await import('/assets/local-skins.mjs');
+      return { digest: (await catalog()).find((s) => s.id === 'local:pulp')?.digest, trust: localStorage.getItem('agentnet.skin.trusted.local:pulp') };
+    });
 
     for (const view of [{ tag: 'desk-light', width: 1440, height: 900, scheme: 'light' }, { tag: 'android-dark', width: 412, height: 900, scheme: 'dark' }]) {
       const v1 = comicAs('v1'), v2 = comicAs('v2');
@@ -116,10 +120,10 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       await page.getByText('kept-note.txt').first().waitFor({ timeout: 10000 });
       await field.click();
       await field.fill('Draft kept across the skin update');
-      // The gallery answers while the field has focus: v2 is stored, trust moves, v1 stays.
+      // The gallery answers while the field has focus: v2 is staged, v1 stays installed and trusted.
       release(); state.hold = null;
-      await until(async () => (await page.evaluate(() => localStorage.getItem('agentnet.skin.trusted.local:pulp'))) === digest(v2), view.tag + ': v2 stored and trusted');
       await until(async () => (await applied(page)).sheets.length === 2, view.tag + ': v2 prepared beside v1');
+      assert.deepEqual(await installed(page), { digest: digest(v1), trust: digest(v1) }, view.tag + ': installed version is unchanged while v2 waits');
       assert.equal((await applied(page)).build, '"v1"', view.tag + ': no swap while typing');
       assert.deepEqual((await applied(page)).documentRules, ["1"], view.tag + ": deferred version leaves document styles alone");
       // Typing during the pending update stays immediate.
@@ -133,17 +137,39 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       let free; const held = new Promise((r) => { free = r; });
       await ctx.route(/\/api\/held-write/, async (route) => { await held; await route.fulfill({ status: 404, body: 'no such route' }); });
       await page.evaluate(() => { window.heldWrite = window.agentnet.api('/api/held-write', { x: 1 }).catch(() => 'settled'); });
-      const leftAt = Date.now();
       await page.locator('[data-part=conversation-head]').first().click({ position: { x: 5, y: 5 } });
       await page.waitForTimeout(300);
       assert.equal((await applied(page)).build, '"v1"', view.tag + ': no swap while a write is under way');
+      const hostControls = view.tag === 'android-dark';
+      const dialog = hostControls ? page.getByRole('dialog', { name: 'AgentNet controls' }) : page.locator('#gallery-update-test-dialog');
+      await page.evaluate((hostControls) => {
+        if (hostControls) window.agentnet.controls.open();
+        else {
+          const dialog = document.createElement('dialog');
+          dialog.id = 'gallery-update-test-dialog';
+          dialog.textContent = 'A dialog already open in the skin';
+          document.getElementById('skin').shadowRoot.querySelector('.an-root').append(dialog);
+          dialog.showModal();
+        }
+      }, hostControls);
+      await dialog.waitFor({ timeout: 5000 });
       free();
+      await page.evaluate(() => window.heldWrite);
+      await page.keyboard.press('Tab');
+      assert.equal((await applied(page)).build, '"v1"', view.tag + ': no swap while the dialog is open');
+      assert.equal(await dialog.isVisible(), true, view.tag + ': dialog stays open during the update');
+      const closedAt = Date.now();
+      if (hostControls) await page.keyboard.press('Escape');
+      else await dialog.evaluate((dialog) => dialog.close());
       await until(async () => (await applied(page)).build === '"v2"', view.tag + ': v2 opened in place', 5000);
-      const swapMs = Date.now() - leftAt - 300;
+      const swapMs = Date.now() - closedAt;
+      await until(async () => (await installed(page)).digest === digest(v2), view.tag + ': v2 installed after mount');
+      assert.deepEqual(await installed(page), { digest: digest(v2), trust: digest(v2) }, view.tag + ': trust follows the successfully mounted version');
       const after = await applied(page);
       assert.deepEqual(after.sheets, [{ href: '/local-skins/' + digest(v2) + '/style.css', on: true }], view.tag + ': only v2 styles remain');
       assert.equal(new URL(page.url()).searchParams.get('skin'), null, view.tag + ': no switch through the address');
       assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin')), 'local:pulp', view.tag + ': same skin selected');
+      assert.equal(await page.locator('#skin-bar .skin .value').textContent(), 'Pulp Updated', view.tag + ': host controls show the updated name');
       // Same chat, same draft, same attached file.
       assert.deepEqual((await applied(page)).documentRules, ["2"], view.tag + ": successful swap replaces the document rules");
       const field2 = page.locator('[data-part=composer] textarea').first();
@@ -153,7 +179,7 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       await page.getByText('kept-note.txt').first().waitFor({ timeout: 5000 });
       await snap('after');
       assert.deepEqual(errors, [], view.tag + ': page errors');
-      console.log(view.tag + ': swapped ' + swapMs + ' ms after the write settled; typing ' + typed.ms.toFixed(1) + ' ms');
+      console.log(view.tag + ': swapped ' + swapMs + ' ms after the dialog closed; typing ' + typed.ms.toFixed(1) + ' ms');
       await ctx.close();
     }
 
@@ -184,6 +210,13 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       assert.deepEqual(now.documentRules, ["1"], name + ": old document rules retained");
       const kept = await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('agentnet-skin-package-v1-')));
       assert.equal(kept.includes('agentnet-skin-package-v1-' + digest(next)), name === 'untrusted' || name === 'fails to mount', name + ': v2 stored only when verified and compatible');
+      if (name === 'fails to mount') {
+        assert.deepEqual(await installed(page), { digest: digest(v1), trust: digest(v1) }, name + ': v1 is still installed and trusted');
+        state.down = true;
+        await page.reload();
+        await until(async () => (await applied(page)).h1 === 'v1 running', name + ': v1 reopens offline', 5000);
+        assert.equal((await applied(page)).card, false, name + ': no failure card on reopen');
+      }
       assert.deepEqual(errors, [], name + ': page errors');
       await ctx.close();
       console.log('failure case ' + name + ': running version kept');

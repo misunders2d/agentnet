@@ -84,8 +84,7 @@ export function AppearanceSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   const [target, setTarget] = useState<SkinEntry | null>(null);
   // The host refreshes its catalog in place when a package is imported or removed.
   useEffect(() => host.onSkinsChange(refresh), [host]);
-  // Comic is always listed first: it is the skin drawing this page.
-  const skins = host.skins.some((s) => isHere(s.id)) ? host.skins : [{ api: 1, id: brand.id, name: brand.name, builtin: brand.id === "comic" }, ...host.skins];
+  const skins = host.skins.some((s) => isHere(s.id)) ? host.skins : [{ api: 1, id: brand.id, name: brand.name, builtin: ["comic", "office"].includes(brand.id) }, ...host.skins];
   // A gallery skin, once stored, is offered like any other: Use, then trust.
   const pick = (id: string) => setTarget(host.skins.find((s) => s.id === id) || null);
 
@@ -183,7 +182,7 @@ function SwitchSkin({ skin, onClose }: { skin: SkinEntry | null; onClose: () => 
       footer={<div className="flex flex-col gap-2 sm:flex-row-reverse"><Button variant="act" className="sm:flex-1" disabled={files} onClick={go}>Use {skin?.name}</Button><Button variant="outline" className="sm:flex-1" onClick={onClose}>Stay in {brand.name}</Button></div>}>
       {skin && (
         <div className="space-y-3">
-          <p>AgentNet reloads with {skin.name}. The bar at the top of it takes you back to Comic in one step.</p>
+          <p>AgentNet reloads with {skin.name}. {trusted ? "Switch skins anytime in Settings → Appearance." : "Open AgentNet controls to switch back to Comic."}</p>
           {files ? <p className="font-semibold text-danger">Files are waiting in a message you haven’t sent. Send or remove them first: they can’t survive the reload.</p>
             : text ? <p>Your unsent text stays saved here for when you come back.</p> : null}
           {!trusted && <Hint>It can read your chats and act as you, including sending messages and approving work. You’ll be asked to trust it first.</Hint>}

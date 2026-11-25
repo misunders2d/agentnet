@@ -11,13 +11,18 @@ import { lineOf, plural, span, speaker } from "./RoomPanel.model";
 
 export type Mode = "recent" | "selected" | "since";
 
+const sinceParts = (since: string) => {
+  const split = since.lastIndexOf("T");
+  return split < 0 ? [since, ""] : [since.slice(0, split), since.slice(split + 1)];
+};
+
 /** sinceAt: the cutoff a "Share messages since" value (local YYYY-MM-DDTHH:MM)
  *  names, or why it names none. The local wall-clock parts must round-trip
  *  exactly, as for reminders and schedules: a mistyped day or a time that
  *  does not exist here (a DST gap) is refused, never moved to another time.
  *  A cutoff after now is refused too. */
 export function sinceAt(since: string, now = Date.now()): { at: number; problem?: undefined } | { at?: undefined; problem: string } {
-  const [day = "", time = ""] = since.split("T");
+  const [day, time] = sinceParts(since);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { problem: "Enter the date as YYYY-MM-DD." };
   if (!/^\d{2}:\d{2}$/.test(time)) return { problem: "Enter the time as hours and minutes." };
   const [y, mo, d] = day.split("-").map(Number), [h, mi] = time.split(":").map(Number);
@@ -97,7 +102,7 @@ export function ContextChoice({ mode, onMode, recent, max, onRecent, picked, lab
  *  pattern: a typed YYYY-MM-DD date, a calendar only on request, a time
  *  field), the local time zone, and Last hour / Today / Yesterday. */
 function SinceFields({ since, onSince, onFocus }: { since: string; onSince: (v: string) => void; onFocus: () => void }) {
-  const [day = "", time = ""] = since.split("T");
+  const [day, time] = sinceParts(since);
   const calendar = useRef<HTMLInputElement>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const field = "min-h-11 w-full min-w-0 rounded-xl stroke bg-surface px-2.5 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]";
@@ -118,8 +123,8 @@ function SinceFields({ since, onSince, onFocus }: { since: string; onSince: (v: 
       </div>
       <p id="invite-since-zone" className="mt-1 text-[13px] text-text-2">Your time zone: {zoneLabel()}</p>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        {sinceShortcuts().map((q) => (
-          <button key={q.label} type="button" aria-pressed={since === q.value} onClick={() => { setShowCalendar(false); onSince(q.value); }}
+        {sinceShortcuts().map((q, i) => (
+          <button key={q.label} type="button" aria-pressed={since === q.value} onClick={() => { setShowCalendar(false); onSince(sinceShortcuts()[i].value); }}
             className={"min-h-11 rounded-full stroke px-3 text-[14px] font-bold press " + (since === q.value ? "bg-ink text-canvas" : "bg-surface text-ink hover:bg-sunken")}>{q.label}</button>
         ))}
         <button type="button" className="flex min-h-11 items-center gap-1.5 px-1.5 text-[14px] font-semibold underline underline-offset-2" onClick={() => {

@@ -208,7 +208,7 @@
   let runningVersion = "", newerRelease = null, updateGallerySkins = () => {};
   // galleryUpdated: what the open skin does once this page's gallery update
   // stored new versions (set after the skin mounts; MEL-819).
-  let galleryUpdated = () => {}, galleryStored = [];
+  let galleryUpdated = () => {}, galleryStored = null;
   // Writes this page has under way through any workspace's host: API
   // requests with a body, staged uploads, video preparation and Drive
   // uploads. A skin update waits for none of them to be running.
@@ -288,7 +288,10 @@
     updateGallerySkins = () => {
       if (started || !runningVersion) return;
       started = true; // once per page; the next open checks again
-      updateInstalled(common.gallery).then((ids) => { if (ids.length) { galleryStored = ids; galleryUpdated(ids); } }).catch(() => { /* offline or unsupported: next open */ });
+      updateInstalled(common.gallery, localSkins, (id) => {
+        if (id !== selected?.id || !selected.local || !workspaces?.state) return;
+        return { from: selected.digest, ready: (next) => { galleryStored = next; galleryUpdated(next); } };
+      }).catch(() => { /* offline or unsupported: next open */ });
     };
   } catch (_) { /* a program without it: import still works */ }
 
@@ -564,32 +567,33 @@
 
     // ---- a gallery update of the skin shown now (MEL-819)
     //
-    // This open's gallery check (updateGallerySkins) can store a newer
-    // version of the very skin on screen. That version opens here, with the
-    // same skin selected, instead of only at the next open: only when its
-    // exact digest is trusted (an update keeps the trust given to the version
-    // it replaced; anything else asks at the next open as before) and this
-    // AgentNet is new enough for it. It is mounted again the way a workspace
+    // This open's gallery check can stage a verified compatible replacement
+    // of the skin on screen. The replacement can open in place if the exact
+    // version it replaces is still trusted. It is mounted the way a workspace
     // switch mounts it, so the skin keeps its open chat, drafts and attached
     // files in its workspace's state. It waits while that would interrupt
     // anything: a write or upload under way, a pressed pointer, a dialog or
     // menu open, or typing in a field of a visible page; each of those
     // ending tries again (events, never a timer). Without a workspace to keep
-    // that state in, the next open shows it. If the new version cannot load
-    // or mount, the version that was running is mounted again; nothing is
-    // retried and nothing stored is removed until a later open.
+    // that state in, the next open shows it. The installed version and trust
+    // are advanced only after the replacement has mounted successfully.
     if (selected.local && workspaces && workspaces.state) {
       let pending = null, pressed = false, finished = false, queued = false;
-      const editing = () => { const a = surface.activeElement; return !!a && (a.isContentEditable || !!a.matches?.('input, textarea, select, [role="textbox"]')); };
+      const trustKey = "agentnet.skin.trusted." + selected.id;
+      const trustedDigest = (skin) => {
+        try { return isTrusted(skin, localStorage.getItem(trustKey)); } catch (_) { return false; }
+      };
+      const surfaces = [surface, bar?.element.shadowRoot].filter(Boolean);
+      const editing = () => surfaces.some(({ activeElement: a }) => a && (a.isContentEditable || a.matches('input, textarea, select, [role="textbox"]')));
       const foreground = () => !!root && [...root.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')].some((el) => el.getClientRects().length > 0);
-      const busy = () => writing > 0 || !!rebinding || pressed || foreground() || (document.visibilityState === "visible" && editing());
+      const busy = () => writing > 0 || !!rebinding || pressed || bar?.busy() || foreground() || (document.visibilityState === "visible" && editing());
       const listen = [["pointerdown", () => { pressed = true; }], ["pointerup", () => { setTimeout(() => { pressed = false; attempt(); }); }], ["pointercancel", () => { pressed = false; attempt(); }],
         ["focusout", () => setTimeout(attempt)], ["keyup", () => attempt()], ["visibilitychange", () => attempt()]];
       const inside = [["close", () => attempt()], ["animationend", () => attempt()], ["transitionend", () => attempt()]];
       const stop = () => {
         finished = true; pending = null;
         for (const [k, f] of listen) document.removeEventListener(k, f, true);
-        for (const [k, f] of inside) surface.removeEventListener(k, f, true);
+        for (const target of surfaces) for (const [k, f] of inside) target.removeEventListener(k, f, true);
         writeSettled.delete(attempt);
       };
       // attempt runs on those events; it swaps at most once per page.
@@ -602,13 +606,20 @@
           const { next, nextBase, nextSheet, nextModule, nextDocument } = pending;
           stop();
           const was = { module, sheet, base, selected, documentSheet };
+          if (!trustedDigest(was.selected)) { nextSheet?.remove(); return; }
           if (was.sheet) was.sheet.media = "not all";
           if (nextSheet) nextSheet.media = "";
           useDocumentRules(nextDocument);
           module = nextModule; sheet = nextSheet; base = nextBase; selected = next;
           try {
             await mountSkin();
+            if (!await localSkins.commitUpdate(next.id, was.selected.digest, next.digest, () => trustedDigest(was.selected))) {
+              throw new Error("The installed skin changed during the update");
+            }
+            try { if (trustedDigest(was.selected)) localStorage.setItem(trustKey, next.digest); } catch (_) { /* ask next open */ }
             was.sheet?.remove();
+            bar?.setSelected(next);
+            refreshSkins().catch(() => { /* next open */ });
           } catch (_) {
             module = was.module; sheet = was.sheet; base = was.base; selected = was.selected;
             nextSheet?.remove();
@@ -618,14 +629,11 @@
           }
         }).catch(failed);
       };
-      galleryUpdated = async () => {
+      galleryUpdated = async (next) => {
         if (finished || pending) return;
-        const next = common.skins.find((s) => s.id === selected.id && s.local);
-        if (!next || next.digest === selected.digest || next.api !== 1) return;
+        if (next.id !== selected.id || next.digest === selected.digest || next.api !== 1) return;
         if (next.agentnet && newerRelease && newerRelease(next.agentnet, runningVersion)) return;
-        let stored = null;
-        try { stored = localStorage.getItem("agentnet.skin.trusted." + next.id); } catch (_) { /* asks at the next open */ }
-        if (!isTrusted(next, stored)) return;
+        if (!trustedDigest(selected)) return;
         finished = true; // one try per page, whatever happens next
         const nextBase = "/local-skins/" + next.digest + "/";
         let nextSheet = null;
@@ -639,12 +647,12 @@
           finished = false;
           pending = { next, nextBase, nextSheet, nextModule, nextDocument };
           for (const [k, f] of listen) document.addEventListener(k, f, true);
-          for (const [k, f] of inside) surface.addEventListener(k, f, true);
+          for (const target of surfaces) for (const [k, f] of inside) target.addEventListener(k, f, true);
           writeSettled.add(attempt);
           attempt();
-        } catch (_) { nextSheet?.remove(); /* the running version stays; the next open opens the stored one */ }
+        } catch (_) { nextSheet?.remove(); /* the installed version stays */ }
       };
-      if (galleryStored.length) galleryUpdated(galleryStored); // stored while the skin was mounting
+      if (galleryStored) galleryUpdated(galleryStored); // stored while the skin was mounting
     }
 
     // A notification's destination: #conv=<64 hex>, #msg=<32 hex>[&conv=…][&dir=in|out]

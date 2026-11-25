@@ -220,18 +220,20 @@ draw its own through `host.gallery`.
   update stores a new digest; trust given to the exact digest it replaces
   moves to it, otherwise choosing it asks again. Nothing is uploaded.
 - **Automatic updates.** Once a page has read its release from an overview,
-  it installs the newest compatible published version of every gallery skin
-  stored in that browser, once per open. When the skin on screen is one of
-  them and its new exact digest is trusted and compatible, the host opens it
-  in place with the same skin selected (MEL-819): it loads the new version
-  first, then mounts it again the way a workspace switch does, so the skin
+  it checks for the newest compatible published version of every gallery skin
+  stored in that browser, once per open. With workspace state available, the
+  host stages the update for the skin on screen. If the exact version being
+  replaced is trusted, the host opens the update in place with the same skin
+  selected (MEL-819). It loads the new version first, then mounts it again
+  the way a workspace switch does, so the skin
   keeps its open chat, drafts and attached files in its workspace state. It
   waits, by events only, while a write or upload under way (`host.api` with
   a body, `stage`, `prepareVideo`, `drive.driveUpload`), a pressed pointer,
   an open dialog or menu, or a focused field on a visible page would be
-  interrupted. A version that fails to load or mount gives way to the one
-  that was running, once, with nothing retried; without workspace state the
-  next open uses it. Other gallery skins are used from the next open. A package stored under a gallery skin's id is that skin: an
+  interrupted. The installed digest and its trust advance after the new mount
+  succeeds. If the mount fails, the running version is restored and remains
+  installed on reopen. For skins off screen or without workspace state, the
+  verified update is used on the next open. A package stored under a gallery skin's id is that skin: an
   imported build of it is replaced too. A version that needs a newer
   AgentNet waits until AgentNet is updated; offline or busy, the next open
   tries again. Each open then removes versions that a newer one of the same

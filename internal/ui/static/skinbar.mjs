@@ -223,9 +223,15 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
   // ---- skins
   const pickSkin = (id) => { if (openMenu) openMenu.close(false); if (id !== selected.id) choose(id); };
   const skinButton = el("button", "pick skin"); skinButton.type = "button";
-  skinButton.setAttribute("aria-label", "Skin: " + selected.name + ". Choose another skin");
+  const skinName = el("span", "value");
+  const setSelected = (skin) => {
+    selected = skin;
+    skinButton.setAttribute("aria-label", "Skin: " + skin.name + ". Choose another skin");
+    skinName.textContent = skin.name;
+  };
+  setSelected(selected);
   const swatch = el("span", "swatch"); swatch.setAttribute("aria-hidden", "true"); swatch.append(icon("brush", 16));
-  skinButton.append(swatch, el("span", "key", "Skin"), el("span", "value", selected.name), (() => { const c = icon("chevron", 16); c.classList.add("chev"); return c; })());
+  skinButton.append(swatch, el("span", "key", "Skin"), skinName, (() => { const c = icon("chevron", 16); c.classList.add("chev"); return c; })());
   const lineOf = (s) => (s.id === selected.id ? "In use" : s.id === home.id ? "AgentNet’s own skin" : s.builtin ? "Built into AgentNet" : s.local ? "Stored in this browser" : "Installed on this computer");
   const skinMenu = makeMenu(skinButton, "Skins", (panel) => {
     const all = skins();
@@ -379,6 +385,8 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
   return {
     ready,
     open: openTools,
+    busy: () => tools.open || dialog.open || !!openMenu,
+    setSelected,
     claim() {
       claims++; launcher.hidden = true;
       const generation = claimGeneration;

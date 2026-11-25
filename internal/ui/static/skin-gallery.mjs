@@ -136,7 +136,7 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
     },
     /** Stores the package in this browser; resolves its catalog id for
      *  host.selectSkin, which asks for trust. Never selects it itself. */
-    async install(id) {
+    async install(id, stage) {
       if (!supported()) fail('This browser cannot store skins.');
       const { release, skin } = await find(id);
       if (!compatible(skin)) fail(skin.agentnet ? 'This skin needs AgentNet ' + skin.agentnet + ' or newer. Update AgentNet first.' : 'This skin needs a newer AgentNet.');
@@ -149,6 +149,11 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
       }
       const { item } = await prepare(files);
       if (item.package_id !== skin.id || item.digest !== skin.digest) fail(skin.name + ' did not match the gallery. Nothing was installed.');
+      if (stage) {
+        const saved = await store(files, { stageFrom: stage.from });
+        stage.ready(saved);
+        return saved.id;
+      }
       let held = null;
       try { held = (await stored()).find((x) => x.package_id === skin.id) || null; } catch (_) { /* no usable earlier version */ }
       const saved = await store(files);
@@ -164,12 +169,12 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
 /** Installs the published version of every gallery skin stored here that
  *  has a newer compatible one; resolves the ids updated. One failing skin
  *  never stops the others. A browser storing no skin never asks the gallery. */
-export async function updateInstalled(g, local = localSkins) {
+export async function updateInstalled(g, local = localSkins, stage) {
   const updated = [];
   if (!local.supported() || !(await local.catalog()).length) return updated;
   for (const s of (await g.list()).skins) {
     if (s.state !== 'update') continue;
-    try { await g.install(s.id); updated.push(s.id); } catch (_) { /* the gallery offers it again */ }
+    try { await g.install(s.id, stage?.(s.installed)); updated.push(s.id); } catch (_) { /* the gallery offers it again */ }
   }
   return updated;
 }

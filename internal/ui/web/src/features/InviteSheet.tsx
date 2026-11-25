@@ -168,7 +168,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     }
   }
   function bring() {
-    if (!c || !t || !route || busy || offline || route === "guest" && !guestCheck) return;
+    if (!c || !t || !route || !allowed || !ready) return;
     const who = { key: c.key, name: shownName };
     if (route === "agent") void submit([{ ...who, route, joinOwn: now, more: !!c.alreadyHere,
       input: { conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map(m => m.id), tasks_from: tasksFrom, note: note.trim() } }]);
