@@ -277,7 +277,7 @@ const server=http.createServer((req,res)=>{
     await composer.waitFor({state:'visible'});
     await field().waitFor();await field().fill('Captured scheduled draft');
     await page.locator('input[type=file]').setInputFiles({name:'captured.txt',mimeType:'text/plain',buffer:Buffer.from('captured exact file bytes')});
-    const menu=async name=>{await page.getByRole('button',{name:'Add to message',exact:true}).click();const choice=page.getByRole('menuitem',{name:new RegExp('^'+name)});await choice.waitFor({state:'visible'});assert.equal(await page.getByRole('menuitem',{name:/^Schedule/}).count(),1,'one scheduling menu entry');await choice.click();};
+    const menu=async name=>{if(width<1024){await composer.getByRole('button',{name:'Schedule…',exact:true}).click();return;}await composer.getByRole('button',{name:'More send options',exact:true}).click();const choice=page.getByRole('menuitem',{name:new RegExp('^'+name)});await choice.waitFor({state:'visible'});assert.equal(await page.getByRole('menuitem',{name:/^Schedule/}).count(),1,'one scheduling menu entry');await choice.click();};
     const create=()=>page.getByRole('dialog',{name:'Schedule message',exact:true}),schedules=()=>page.getByRole('region',{name:'Outbox',exact:true}).getByRole('region',{name:'Scheduled messages',exact:true});
     const chats=async()=>{await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:'Chats',exact:true}).click();await composer.waitFor({state:'visible'});await schedules().waitFor({state:'hidden'});};
     const management=async()=>{await menu('Schedule…');await create().getByRole('button',{name:'Scheduled messages',exact:true}).click();await schedules().waitFor({state:'visible'});};

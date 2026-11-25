@@ -101,13 +101,21 @@ async function drop(field, mode, names = ['notes.txt']) {
       await page.getByRole('button', { name: 'Remove too-large.txt', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Remove too-large.txt', exact: true }).click();
       if (process.env.AGENTNET_DROP_SCREENSHOTS) await page.screenshot({ path: process.env.AGENTNET_DROP_SCREENSHOTS + '-' + skin + '-' + width + '.png' });
+      if (skin === 'comic') {
+        // The paperclip opens the file picker directly (no menu step).
+        const attach = page.getByRole('button', { name: 'Attach a file', exact: true });
+        const [chooser] = await Promise.all([page.waitForEvent('filechooser'), attach.click()]);
+        assert.equal(chooser.isMultiple(), true, 'paperclip opens the multi-file picker');
+      }
       await page.evaluate(() => fixture.disable());
       // A background limit/permission refresh cannot let a file fall through
       // to the textarea's default text/path insertion.
       if (skin === 'comic') {
-        await page.getByRole('button', { name: 'Add to message', exact: true }).click();
-        await page.locator('[role=menuitem][aria-disabled=true]').filter({ hasText: 'Photo or file' }).waitFor();
-        await page.keyboard.press('Escape');
+        const refused = page.getByRole('button', { name: 'Attach a file', exact: true }).and(page.locator('[aria-disabled="true"]'));
+        await refused.waitFor();
+        await refused.click({ force: true }); // aria-disabled stays clickable for its reason
+        await page.getByRole('alert').filter({ hasText: 'Files can’t be sent here.' }).waitFor();
+        assert.equal(await field.inputValue(), 'Keep this draft', 'a refused paperclip keeps the draft');
       } else await page.waitForFunction(() => document.querySelector('#skin').shadowRoot.querySelector('#attach').hidden);
       assert.equal(await drop(field, 'normal', ['disabled.txt']), true);
       await page.getByText('Files can’t be attached here right now.', { exact: true }).waitFor();

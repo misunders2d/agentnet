@@ -10,9 +10,9 @@ import { pastePictures, pasteTable } from "../pictures.mjs";
 // request over from your agent). Drafts are kept per conversation and only
 // what was sent is cleared. Nothing typed here grants anything: asking goes
 // through askAgent, and an owner's OK is never given from text.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { IconAlertCircle, IconAt, IconCloudOff, IconLock, IconMoodSmile } from "@tabler/icons-react";
+import { IconAlertCircle, IconAt, IconChevronUp, IconClock, IconCloudOff, IconLock, IconMoodSmile, IconPaperclip } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
 import { agentHistoryThread, agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentHost, threadAgentKey, threadAgentID, threadAuthor, whoName } from "../model";
@@ -21,7 +21,8 @@ import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, droppedDrafts, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
 import type { DroppedFile } from "../host";
 import { agentTargets, spanAgentTargets, withoutAgents, candidates, decode, encode, guestAuthor, matches, shift, trigger, type Candidate, type Span } from "./Composer.mentions";
-import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, sideButton, type MenuAction } from "./Composer.parts";
+import { Field, FormatStrip, keep, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, toolButton, type MenuAction } from "./Composer.parts";
+import { skin as brand } from "../skin/brand";
 import { MentionList, optionId } from "./Composer.picker";
 import { useTeams } from "./Teams";
 import { collectiveOptions, collectiveHref } from "../collective-mentions.mjs";
@@ -38,6 +39,15 @@ import { scheduleReason } from "./Composer.schedule-model";
 import { mediaKind, prepareMedia } from "./Composer.media";
 
 const EMPTY: Draft = { text: "" };
+// Whether the desktop formatting strip shows above the draft: open unless
+// this device's person closed it (a convenience, kept on this device only).
+const formatKey = brand.storage + ".composer-formatting";
+const formatShown = () => { try { return localStorage.getItem(formatKey) !== "closed"; } catch { return true; } };
+// A short window (a landscape phone, a small laptop pane) has no room for the
+// strip above the draft: there, as on a phone, Aa swaps it into the tools row.
+const shortQuery = "(max-height: 560px)";
+const shortSubscribe = (change: () => void) => { const q = matchMedia(shortQuery); q.addEventListener("change", change); return () => q.removeEventListener("change", change); };
+const useShort = () => useSyncExternalStore(shortSubscribe, () => matchMedia(shortQuery).matches, () => false);
 const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Who a send goes to: the conversation, an agent asked in it, the device of
@@ -95,6 +105,10 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const [emojiWarm, setEmojiWarm] = useState(false); // load emoji data before the first open
   const [schedulePane, setSchedulePane] = useState<SchedulePane>(null);
   const [audienceOpen, setAudienceOpen] = useState(false);
+  const [deskFormat, setDeskFormat] = useState(formatShown);    // desktop: strip above the draft
+  const [phoneFormat, setPhoneFormat] = useState(false);        // phone/short: strip in place of the tools
+  const short = useShort();
+  useEffect(() => setPhoneFormat(false), [conv]);
   useEffect(() => setSchedulePane(null), [conv]);
   useEffect(() => setAudienceOpen(false), [conv]);
   const [zone, setZone] = useState<HTMLElement | null>(null);
@@ -219,10 +233,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         return style.position !== "absolute" && style.position !== "fixed" && Number(style.flexGrow) === 0 ? height + node.offsetHeight : height;
       }, 0);
       const remaining = container.clientHeight - fixed - (composer.offsetHeight - ta.offsetHeight);
-      // One line fills the composer row (46 px, 48 from lg) with the field's own
-      // border, which is 1.5 px on a phone: a fixed 44 px left it 1 px taller.
-      const edge = getComputedStyle(mirrored.parentElement ?? mirrored);
-      const floor = (matchMedia("(min-width: 1024px)").matches ? 48 : 46) - parseFloat(edge.borderTopWidth) - parseFloat(edge.borderBottomWidth);
+      // At least one line: the draft spans the frame above the tools row.
+      const floor = parseFloat(padding.lineHeight) + parseFloat(padding.paddingTop) + parseFloat(padding.paddingBottom);
       const height = Math.max(floor, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
       const scroll = ta.scrollTop;
       if (ta.style.height !== height) ta.style.height = height;
@@ -807,11 +819,25 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const showSchedule = (pane: SchedulePane) => { if (pane === "list") { setSchedulePane(null); store.showTab("outbox", "scheduled"); } else setSchedulePane(pane); };
   const scheduleDialogs = <ScheduleDialogs key={conv} pane={schedulePane} onPane={showSchedule} conv={conv} dm={dm} reason={scheduleWhy}
     capture={() => {const current=latest(), decoded=decode(current.text);return {draft:{...current,files:[...(current.files || [])]},body:encode(decoded.text,decoded.spans,true).trim()};}} />;
+  // Bring in lives in the conversation header; the paperclip attaches files
+  // directly; Schedule is the phone's clock and the desktop Send menu.
+  const fileWhy = filesAllowed ? "" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here";
+  const fileHint = filesAllowed && lim ? "Attach a file: up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : fileWhy;
+  const openSchedule = () => showSchedule(text.trim() || files.length ? "create" : "list");
   const actions: MenuAction[] = [
-    ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
-    { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
-    { label: "Schedule…", sub:scheduleWhy || undefined, disabled:!!scheduleWhy, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:()=>showSchedule(text.trim() || files.length ? "create" : "list") },
+    { label: "Schedule…", sub:scheduleWhy || undefined, disabled:!!scheduleWhy, icon:menuIcons.clock, tone:"bg-agent text-agent-ink", run:openSchedule },
   ];
+  // A refused tool stays focusable and says why in the status line.
+  const refuse = (why: string) => { setNotice({ conv, text: why.replace(/\.?$/, ".") }); };
+  const inline = !wide || short; // the strip swaps into the tools row
+  const toggleFormat = () => {
+    if (inline) { setPhoneFormat(open => !open); return; }
+    setDeskFormat(open => { try { localStorage.setItem(formatKey, open ? "closed" : "open"); } catch { /* this visit only */ } return !open; });
+  };
+  const formatOpen = inline ? phoneFormat : deskFormat;
+  const formatId = "composer-format-" + (inline ? "row" : "desk");
+  const strip = (className: string) => <FormatStrip id={formatId} selected={formatting.selected && !sending} run={formatting.run}
+    shortcut={f => (mac ? "⌘" : "Ctrl+") + f.shortcut} className={className} />;
 
   // A changed identity: checked and trusted from here (on a computer).
   if (closed && thread?.key.pending && !dm) return <TrustNotice thread={thread} />;
@@ -831,6 +857,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>
+      {/* What this message carries (reply, files, who it asks, recipients, status). In a short
+          window it scrolls within a bounded height, so the draft and Send stay on screen. */}
+      <div className="[@media(max-height:560px)]:max-h-[24dvh] [@media(max-height:560px)]:overflow-y-auto [@media(max-height:560px)]:overscroll-contain">
       {missingReply && <ReplyChip title="Reply unavailable" text="Your draft is kept. Choose another message or cancel this reply." cancel="Cancel unavailable reply"
         onCancel={() => { write({ ...latest(), replyTo: undefined }); focusField(); }} />}
       {missingTopic && <ReplyChip title="Topic unavailable" text="Your draft is kept. Choose a topic above, or return to Main." cancel="Move draft to Main"
@@ -869,14 +898,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       </details>}
       {status && <StatusLine status={status} />}
       {notice?.conv===conv&&notice.refresh&&<Button size="sm" variant="outline" onClick={()=>void store.refreshOpen().then(ok=>{if(ok)setNotice(null);},e=>setNotice({conv,text:errorText(e),refresh:true}))}>Refresh work status</Button>}
+      </div>
 
-      <div ref={row} className="flex items-end gap-2">
-        <PlusMenu actions={actions} disabled={sending} finalFocus={() => !schedulePane} />
-        {dm && <button type="button" aria-label="Mention someone" title={"Mention someone (" + (mac ? "⌘2" : "Ctrl+2") + ")"} aria-keyshortcuts={mac ? "Meta+2" : "Control+2"} aria-haspopup="listbox"
-          aria-expanded={open} aria-controls={open && offered.length ? listId : undefined} disabled={sending}
-          onMouseDown={(e) => e.preventDefault()} onClick={openMentions} className={sideButton}>
-          <IconAt size={22} stroke={2.2} aria-hidden="true" className="text-ink" />
-        </button>}
+      {/* One frame: (desktop formatting), the full-width draft, then the flat tools row. */}
+      <div data-part="composer-field" className="relative min-w-0 rounded-2xl bg-canvas stroke transition-shadow duration-200 focus-within:[box-shadow:0_0_0_3px_color-mix(in_srgb,var(--an-agent-ink)_30%,transparent)]">
+        {!inline && formatOpen && strip("flex flex-wrap items-center gap-0.5 border-b border-hairline px-1.5 py-1")}
         {formatting.controls(<Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} value={text} placeholder={placeholder} aria-label={placeholder}
           enterKeyHint={wide ? "send" : "enter"} autoComplete="off" spellCheck
           aria-autocomplete="list" aria-controls={open && offered.length ? listId : undefined}
@@ -885,13 +911,40 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           onSelect={(e) => { formatting.select(e.currentTarget); setCaret(e.currentTarget.selectionStart === e.currentTarget.selectionEnd ? e.currentTarget.selectionStart : null); }}
           onBlur={() => { setCaret(null); setMentionRange(null); typing.stop(); }}
           onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
-          onKeyDown={keys} onPaste={paste} onFocus={() => setEmojiWarm(true)}
-          trailing={<Popover.Trigger handle={emojiHandle} ref={emojiButton} aria-label="Emoji" title="Emoji" disabled={sending}
-            onMouseDown={(e) => e.preventDefault()} onPointerEnter={() => setEmojiWarm(true)} onClick={() => setEmojiWarm(true)}
-            className="absolute right-[3px] bottom-[1.5px] grid size-10 place-items-center rounded-full hover:bg-sunken focus-visible:outline-2 focus-visible:outline-agent-ink disabled:opacity-40 data-[popup-open]:bg-sunken lg:bottom-[3px]">
-            <IconMoodSmile size={22} stroke={2} aria-hidden="true" className="text-text-2" />
-          </Popover.Trigger>} />, { disabled: sending, className: "flex-1" })}
-        <SendButton ready={ready} busy={sending} label={sendLabel} />
+          onKeyDown={keys} onPaste={paste} onFocus={() => setEmojiWarm(true)} />, { disabled: sending, menu: false })}
+        <div ref={row} data-part="composer-tools" className="flex min-w-0 items-center gap-0.5 px-1 pb-1 lg:px-1.5 lg:pb-1.5">
+          <button type="button" aria-label="Formatting" title="Formatting" aria-expanded={formatOpen} aria-controls={formatOpen ? formatId : undefined}
+            onMouseDown={keep} onClick={toggleFormat} className={toolButton}>
+            <span aria-hidden="true" className="text-[15px] font-bold leading-none">Aa</span>
+          </button>
+          {/* On a phone the strip takes the tools' place in this row; the tools
+              stay mounted (the smiley anchors the emoji picker), only hidden. */}
+          <div className={"min-w-0 flex-1 items-center gap-0.5 " + (inline && formatOpen ? "hidden" : "flex")}>
+            <button type="button" aria-label="Attach a file" title={fileHint} aria-disabled={!filesAllowed || sending} onMouseDown={keep}
+              onClick={() => { if (sending) return; if (!filesAllowed) refuse(fileWhy); else picker.current?.click(); }} className={toolButton}>
+              <IconPaperclip size={21} stroke={2} aria-hidden="true" />
+            </button>
+            {dm && <button type="button" aria-label="Mention someone" title={"Mention someone (" + (mac ? "⌘2" : "Ctrl+2") + ")"} aria-keyshortcuts={mac ? "Meta+2" : "Control+2"} aria-haspopup="listbox"
+              aria-expanded={open} aria-controls={open && offered.length ? listId : undefined} disabled={sending}
+              onMouseDown={keep} onClick={openMentions} className={toolButton}>
+              <IconAt size={21} stroke={2.2} aria-hidden="true" />
+            </button>}
+            <Popover.Trigger handle={emojiHandle} ref={emojiButton} aria-label="Emoji" title="Emoji" disabled={sending}
+              onMouseDown={keep} onPointerEnter={() => setEmojiWarm(true)} onClick={() => setEmojiWarm(true)} className={toolButton}>
+              <IconMoodSmile size={21} stroke={2} aria-hidden="true" />
+            </Popover.Trigger>
+          </div>
+          {inline && formatOpen && strip("flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none]")}
+          <div className="ml-auto flex shrink-0 items-center gap-2 lg:gap-1">
+            {!wide && <button type="button" aria-label="Schedule…" title={scheduleWhy || "Schedule message"} aria-disabled={!!scheduleWhy || sending} onMouseDown={keep}
+              onClick={() => { if (sending) return; if (scheduleWhy) refuse(scheduleWhy); else openSchedule(); }} className={toolButton + " border-[1.5px] border-hairline"}>
+              <IconClock size={20} stroke={2} aria-hidden="true" />
+            </button>}
+            <SendButton ready={ready} busy={sending} label={sendLabel} />
+            {wide && <PlusMenu actions={actions} disabled={sending} finalFocus={() => !schedulePane}
+              trigger={{ label: "More send options", icon: <IconChevronUp size={18} stroke={2.4} aria-hidden="true" />, className: toolButton }} />}
+          </div>
+        </div>
       </div>
 
       <input ref={picker} type="file" multiple hidden tabIndex={-1} onChange={(e) => { addFiles([...(e.target.files || [])]); e.target.value = ""; }} />

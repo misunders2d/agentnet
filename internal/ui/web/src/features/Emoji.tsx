@@ -156,7 +156,10 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
         </div>
       )}
 
-      <Picker.Viewport ref={viewport} onScroll={scrolled} className="relative min-h-11 flex-1 outline-none">
+      {/* At least a sticky category heading plus one whole 44px row, so a
+          short space (the taller composer leaves less above a message) still
+          shows a complete emoji; Frequently used gives up its room first. */}
+      <Picker.Viewport ref={viewport} onScroll={scrolled} className="relative min-h-[4.75rem] flex-1 outline-none">
         <Picker.Loading className="absolute inset-0 grid place-items-center text-[13px] text-muted">
           <span className="an-late flex items-center gap-1.5">Loading emoji<span className="working-dot">.</span><span className="working-dot">.</span><span className="working-dot">.</span></span>
         </Picker.Loading>

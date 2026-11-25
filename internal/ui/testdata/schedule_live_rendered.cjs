@@ -17,7 +17,7 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),assert=require('node:a
   const list=()=>page.getByRole('region',{name:'Outbox',exact:true}).getByRole('region',{name:'Scheduled messages',exact:true});
   const chats=async()=>{await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:'Chats',exact:true}).click();await field().waitFor({state:'visible'});await list().waitFor({state:'hidden'});};
   const openChat=async()=>{await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Bob/}).first().click();await field().waitFor();};
-  const openSchedule=async()=>{await page.getByRole('button',{name:'Add to message',exact:true}).click();await page.getByRole('menuitem',{name:/^Schedule…/}).click();};
+  const openSchedule=async()=>{await page.getByRole('button',{name:'More send options',exact:true}).click();await page.getByRole('menuitem',{name:/^Schedule…/}).click();};
   await page.goto(process.env.SCHEDULE_URL);await openChat();
   await field().fill('Real backend scheduled message');
   await page.locator('input[type=file]').setInputFiles({name:'kept.txt',mimeType:'text/plain',buffer:Buffer.from('exact retained schedule bytes')});

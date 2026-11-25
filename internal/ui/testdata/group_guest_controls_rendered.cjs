@@ -1429,7 +1429,7 @@ if(process.env.AGENTNET_COMPOSER_FOLLOWUP_REGRESSION==='1'){
    await choose(' Use English instead');
    assert.notEqual(await form.locator('[data-part="send"]').getAttribute('aria-disabled'),'true','queued siblings never block the next tagged message');
    assert.equal(await form.getByRole('combobox').count(),0,'no request selector');assert.equal(await form.getByRole('button',{name:'Cancel steering',exact:true}).count(),0);
-   await form.getByRole('button',{name:'Add to message',exact:true}).click();assert.equal(await page.getByRole('menuitem',{name:/Steer current work/}).count(),0,'no extra steering action');await form.getByRole('button',{name:'Add to message',exact:true}).click();await page.getByRole('menu').waitFor({state:'hidden'});await settle(page);
+   assert.equal(await form.getByRole('button',{name:/Steer current work/}).count(),0,'no extra steering control');const sendMenu=form.getByRole('button',{name:'More send options',exact:true});if(await sendMenu.count()){await sendMenu.click();await page.getByRole('menu').waitFor();assert.equal(await page.getByRole('menuitem',{name:/Steer current work/}).count(),0,'no extra steering action');await sendMenu.click();await page.getByRole('menu').waitFor({state:'hidden'});}await settle(page);
    await form.locator('input[type=file]').setInputFiles({name:'canonical.md',mimeType:'text/markdown',buffer:Buffer.from('canonical original bytes')});
    await form.locator('[data-part="send"]').click();await page.getByText(/Synthetic uncertain response/).first().waitFor();
    const retry=page.getByRole('button',{name:/Retry/}).first();await retry.waitFor();

@@ -35,7 +35,7 @@ stays Comic's.
 | `fonts/*.woff2` | The font files `document.css` names (copied to `m/fonts/`) | Absent: Comic's Onest and Rubik are used. |
 | `brand.tsx` | `skin` (manifest `id`, `name`, Settings `blurb`, `storage` key prefix, `themeKey`), `words` (headings a skin may word its own way: today `chats`) and `Mark` (44px mark in Settings) | `id` equal to the manifest's. `storage` and `themeKey` start with the skin's own id (`pulp`, `pulp.theme`), never `agentnet.`, which holds the host's skin choice and trust (Comic, built in, keeps its historical `agentnet.messenger` and `agentnet.theme`). Actions keep AgentNet's words. |
 | `Avatar.tsx` | `PersonAvatar`, `AgentAvatar` (with `mood`: neutral, working, waiting, done, asleep; and an optional `device` badge), `GroupAvatar`, `Presence` | The same exports and props. An agent is drawn from its stable seed so it always looks the same; moods stay recognisable; a person's own picture (`avatarPicture`) wins over a drawing; guests keep a distinct mark. Decorative only (`aria-hidden`). |
-| `SendButton.tsx` | The composer's send control | A `type="submit"` button named by `label`, `aria-disabled` while not ready or busy, keeping focus in the field on a tap, `data-part="send"`. As tall as the field, "+" and "@" (46px; 48px from `lg`) and `self-end`, so the composer row lines up. |
+| `SendButton.tsx` | The composer's send control | A `type="submit"` button named by `label`, `aria-disabled` while not ready or busy, keeping focus in the field on a tap, `data-part="send"`. It ends the composer's tools row (see [Composer layout](#composer-layout)): at most 44px tall on a phone and 40px from `lg`, so the row keeps its height; Comic draws an arrow, with the label's words from `lg`. |
 | `TopicIntro.tsx` | What shows above a topic's messages (Comic: nothing) | Receives `TopicFacts` (title, main, state, index, at, count). Never hides or delays the messages. |
 | `RequestFrame.tsx` | The frame around a request that needs someone (`tone`: act, work, quiet; `label`; `at`) | Renders `children` (who asks, what, every action) reachable: at most one explicit "open" step, never dropped or reworded. `data-part="request"`. |
 
@@ -69,8 +69,11 @@ a contract: AgentNet keeps them on the same elements, and
 | `bubble` | Its bubble |
 | `typing` | Who is typing |
 | `composer` | The message box |
-| `composer-field` | Its text field's frame |
+| `composer-field` | Its frame: the formatting strip (desktop), the full-width draft and the tools row |
+| `composer-format` | The formatting strip (desktop: above the draft; phone: in place of the tools) |
+| `composer-tools` | The tools row below the draft: Aa, file, @, emoji, then schedule (phone) and Send |
 | `send` | The send control |
+| `send-menu` | The desktop Send menu's chevron (Schedule…) beside `send` |
 | `request` | A request card (`data-tone`: act, work, quiet) |
 | `relay-attachment-storage` | Relay-wide attachment storage status and admin controls |
 
@@ -85,6 +88,30 @@ Prefer tokens over part styles, and part styles over new slots. Never hide a
 control or text with a part style: restyle it. Write part styles outside any
 `@layer`: unlayered rules win over Comic's Tailwind utilities, so no
 `!important` is needed.
+
+## Composer layout
+
+The composer is one frame (`composer-field`) inside `composer`. The draft
+spans the frame's full width; below it, the flat `composer-tools` row holds
+Aa ("Formatting"), the paperclip ("Attach a file", which opens the file
+picker directly), @ ("Mention someone") and the emoji picker, then the
+schedule clock ("Schedule…", phone only) and `send`, with `send-menu` ("More
+send options": Schedule…) after it from `lg`. Bring in lives in the conversation header, not the composer.
+
+Aa toggles `composer-format` (`aria-expanded`), buttons for the same
+formatting actions as the desktop selection menu and shortcuts; on a touch
+screen it replaces the button that used to follow a selection. On a phone the strip replaces the file, @ and
+emoji buttons in the same row and scrolls sideways; Send and the clock stay
+where they were. From `lg` the strip sits above the draft, open by default;
+closing or opening it is remembered on this device. A window at most 560px
+tall swaps the strip into the tools row as on a phone. Every tool keeps the
+field's focus and selection. A refused file or schedule tool stays
+focusable (`aria-disabled`) and says why in the composer's status line;
+formatting buttons are dimmed and titled "Select text to format" until text
+is selected.
+
+Overlays may restyle these parts; keep every control reachable and the
+send control's slot contract above.
 
 ## Build an overlay
 
