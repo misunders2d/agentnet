@@ -1741,6 +1741,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if err != nil {
 		return personErr(err)
 	}
+	// Before any direct admission (guest events and external participation
+	// included): a blocked person's direct messages are held quietly.
+	if root.Kind != protocol.ConvKindGroup && sp.info.Person != "" && sp.info.Person != me.info.Person {
+		if blocked, e := personBlocked(a.store.db, me.info.Person, sp.info.Person); e != nil {
+			return e
+		} else if blocked {
+			return a.holdBlocked(ctx, env, in, sender, "conversation message")
+		}
+	}
 	if in.Sub == envelope.SubRootSync {
 		return a.admitRootSync(ctx, env, in, root, sender, sp, fromQuarantine, hold)
 	}
@@ -1792,13 +1801,6 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if root.Kind == protocol.ConvKindGroup {
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
-	}
-	if sp.info.Person != "" && sp.info.Person != me.info.Person {
-		if blocked, e := personBlocked(a.store.db, me.info.Person, sp.info.Person); e != nil {
-			return e
-		} else if blocked {
-			return a.holdBlocked(ctx, env, in, sender)
-		}
 	}
 	if in.Human != nil {
 		return a.admitHumanTurn(ctx, env, in, root, sp, sender, fromQuarantine, hold)

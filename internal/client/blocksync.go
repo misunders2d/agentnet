@@ -311,10 +311,31 @@ func (a *Agent) mayDeliverBlockSync(env envelope.Envelope) (bool, bool, error) {
 // acknowledged, never offered for review, counted unread or alerted, and not
 // released by unblocking (as Telegram and WhatsApp drop what a blocked
 // contact sent).
-func (a *Agent) holdBlocked(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public) error {
-	if err := a.holdOpened(ctx, "conversation message", env, in, sender, reasonBlocked, "sender is blocked"); err != nil {
+func (a *Agent) holdBlocked(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, what string) error {
+	if err := a.holdOpened(ctx, what, env, in, sender, reasonBlocked, "sender is blocked"); err != nil {
 		return err
 	}
 	_, err := a.store.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=? AND reason=?`, env.ID, reasonBlocked)
 	return err
+}
+
+// blockedControl reports whether a control outside a group comes from a
+// device of a person this installation's person blocked. Local records only:
+// a person is blocked from a chat with them, so their record is here.
+func (a *Agent) blockedControl(in envelope.Inner, address string, key identity.Public) (bool, error) {
+	if in.Conv != "" {
+		root, _, found, err := a.store.conversation(in.Conv)
+		if err != nil || found && root.Kind == protocol.ConvKindGroup {
+			return false, err
+		}
+	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil || !ok {
+		return false, err
+	}
+	p, ok, err := a.store.personByAddress(address)
+	if err != nil || !ok || p.info.Fingerprint != key.Fingerprint() || p.info.Person == "" || p.info.Person == me.info.Person {
+		return false, err
+	}
+	return personBlocked(a.store.db, me.info.Person, p.info.Person)
 }

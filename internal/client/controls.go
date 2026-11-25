@@ -954,6 +954,13 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	if !allowed {
 		return hold(reasonInvalid, "sender permanently removed from this workspace")
 	}
+	// A blocked person's reactions, edits and other controls outside groups
+	// are held quietly too.
+	if blocked, e := a.blockedControl(in, env.From, sender); e != nil {
+		return e
+	} else if blocked {
+		return a.holdBlocked(ctx, env, in, sender, "control")
+	}
 	if envelope.AssistantReaction(in) { // the assistant's, decided as its reply would be
 		return a.admitAssistantReaction(ctx, env, in, sender, fromQuarantine, hold)
 	}
