@@ -18,6 +18,8 @@ class UpdaterInstrumentation : Instrumentation() {
     private var mode = "install"
     private var latencySuite = "history"
     private var ownedFixture = false
+    private var nativeLastSeq = 0
+    private val nativeAnswered = org.json.JSONArray()
     override fun onCreate(arguments: Bundle?) {
         phase("create-before")
         super.onCreate(arguments)
@@ -817,6 +819,7 @@ class UpdaterInstrumentation : Instrumentation() {
                   window.__agentnetLatencyInput=$input;
                   window.__agentnetLatencyPlatform='android';
                   window.__agentnetLatencySuite=${JSONObject.quote(latencySuite)};
+                  window.__agentnetNativeInput=${latencySuite == "compose"};
                   window.latencyReport=null;
                   return true;
                 })()
@@ -840,6 +843,7 @@ class UpdaterInstrumentation : Instrumentation() {
             var lastProgress = ""
             val reportExpression = if (latencySuite == "video") "window.latencyReport || window.latencyProgress?.active || null" else "window.latencyReport"
             while (report == null && System.nanoTime() < runEnd) {
+                if (latencySuite == "compose") answerNativeInput(activity, web)
                 val raw = javascript(web, reportExpression)
                 if (raw.startsWith('"')) {
                     val progress = org.json.JSONArray("[$raw]").getString(0)
@@ -874,6 +878,17 @@ class UpdaterInstrumentation : Instrumentation() {
                 if (!nativeSaveValid && measured.optBoolean("ok")) measured.put("ok", false)
                     .put("error", "Native download cancellation or original staged bytes were not proven")
             }
+            var nativeInputValid = true
+            if (latencySuite == "compose") {
+                // Fail closed: the hook must have run, once per step, all answered ok.
+                val steps = (0 until nativeAnswered.length()).map { nativeAnswered.getJSONObject(it) }
+                val proof = measured.optJSONObject("androidNativeFormatting")
+                nativeInputValid = steps.map { it.optString("step") } == listOf("focus", "toggle", "verify", "restore") &&
+                    steps.all { it.optBoolean("ok") } && proof?.optJSONArray("steps")?.length() == 4
+                measured.put("androidNativeInput", JSONObject().put("answered", nativeAnswered).put("ok", nativeInputValid))
+                if (!nativeInputValid && measured.optBoolean("ok")) measured.put("ok", false)
+                    .put("error", "Trusted native Aa taps with the soft keyboard visible were not proven")
+            }
             measured.put("nativeOS", "Android").put("engine", "MainActivity WebView")
                 .put("engineVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("device", android.os.Build.MODEL)
@@ -886,6 +901,7 @@ class UpdaterInstrumentation : Instrumentation() {
             phase("latency-report-after")
             check(measured.optBoolean("ok")) { measured.optString("error", "Native Android latency fixture failed") }
             check(nativeSaveValid) { "Native download cancellation or original staged bytes were not proven" }
+            check(nativeInputValid) { "Trusted native Aa taps with the soft keyboard visible were not proven" }
         } finally {
             saveMonitor?.let { removeMonitor(it) }
             phase("latency-finally-before")
@@ -894,13 +910,69 @@ class UpdaterInstrumentation : Instrumentation() {
                   window.__agentnetLatencyDispose?.();
                   document.getElementById('fixture')?.remove();document.getElementById('latency-test-script')?.remove();
                   for (const {el,display,inert} of window.__agentnetLatencyPrevious||[]) {el.style.display=display;el.inert=inert;}
-                  delete window.__agentnetLatencyInput;delete window.__agentnetLatencyPlatform;delete window.__agentnetLatencySuite;delete window.__agentnetLatencyPrevious;
+                  delete window.__agentnetLatencyInput;delete window.__agentnetLatencyPlatform;delete window.__agentnetLatencySuite;delete window.__agentnetLatencyPrevious;delete window.__agentnetNativeInput;
                   return true;
                 })()
             """.trimIndent())
             scriptFile.delete(); inputFile.delete()
             phase("latency-finally-after")
         }
+    }
+
+    /** Answers the compose fixture's native-input request with a real
+     * screen tap and the platform's own soft-keyboard insets; never a DOM
+     * event, focus request or keyboard show/hide call. */
+    private fun answerNativeInput(activity: MainActivity, web: WebView) {
+        val raw = javascript(web, "JSON.stringify(window.__anNativeRequest||null)")
+        val encoded = org.json.JSONArray("[$raw]").get(0)
+        if (encoded !is String || encoded == "null") return
+        val request = JSONObject(encoded)
+        val seq = request.getInt("seq")
+        if (seq <= nativeLastSeq) return // Already answered; never tap twice.
+        nativeLastSeq = seq
+        val reply = JSONObject().put("seq", seq).put("step", request.optString("step"))
+        try {
+            check(android.os.Build.VERSION.SDK_INT >= 30) { "Soft-keyboard visibility needs API 30 insets." }
+            fun nativeState(): Pair<Boolean?, Boolean> {
+                var ime: Boolean? = null; var focused = false
+                runOnMainSync {
+                    ime = activity.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime())
+                    focused = activity.hasWindowFocus() && web.hasFocus()
+                }
+                return ime to focused
+            }
+            request.optJSONObject("tap")?.let { tap ->
+                val (imeBefore, focusBefore) = nativeState()
+                reply.put("imeBeforeTap", imeBefore).put("focusBeforeTap", focusBefore)
+                val location = IntArray(2)
+                var scale = 0f
+                runOnMainSync { web.getLocationOnScreen(location); scale = web.width.toFloat() / request.getDouble("innerWidth").toFloat() }
+                check(scale > 0f) { "Unknown WebView scale." }
+                val x = location[0] + tap.getDouble("x").toFloat() * scale
+                val y = location[1] + tap.getDouble("y").toFloat() * scale
+                val down = android.os.SystemClock.uptimeMillis()
+                val event = { action: Int, at: Long -> android.view.MotionEvent.obtain(down, at, action, x, y, 0).apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN } }
+                event(android.view.MotionEvent.ACTION_DOWN, down).also { sendPointerSync(it); it.recycle() }
+                event(android.view.MotionEvent.ACTION_UP, down + 50).also { sendPointerSync(it); it.recycle() }
+                reply.put("tapped", true)
+            }
+            val want = when (request.optString("ime")) { "visible" -> true; "hidden" -> false; else -> null }
+            var state = nativeState()
+            if (want != null && !request.optBoolean("now")) {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (state.first != want && System.nanoTime() < deadline) { Thread.sleep(50); state = nativeState() }
+            }
+            reply.put("imeVisible", state.first).put("nativeFocus", state.second)
+            check(want == null || state.first == want) { "Soft keyboard was not ${request.optString("ime")}." }
+            check(want != true || state.second) { "Activity and WebView did not keep native focus." }
+            if (request.optString("step") == "toggle") check(reply.optBoolean("imeBeforeTap") && reply.optBoolean("focusBeforeTap")) { "Soft keyboard or native focus was missing before the Aa tap." }
+            reply.put("ok", true)
+        } catch (e: Exception) {
+            // SecurityException: the point landed in another window (e.g. the keyboard).
+            reply.put("ok", false).put("error", "${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
+        }
+        nativeAnswered.put(JSONObject().put("seq", seq).put("step", reply.optString("step")).put("ok", reply.optBoolean("ok")))
+        javascript(web, "window.__anNativeReply=$reply;true")
     }
 
     private fun javascript(page: WebView, script: String): String {
