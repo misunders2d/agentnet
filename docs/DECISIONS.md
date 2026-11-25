@@ -1077,8 +1077,19 @@ All were read on November 25.
   - The person's agent identities are erased too.
   - Relay backups age out within 30 days, and the deletion page says so.
   - Copies already delivered stay on the recipients' devices.
-  - This is an explicit exception to "preserve original signed
-    identities", limited to a person deleting their own account.
+  - Refinement (November 25, owner accepted the recommendation): the signed
+    identity chain stays. It holds the name, and the email for Google
+    sign-in, and groups verify past history against it. Erasing it would stop
+    later members from verifying groups that person created or changed.
+    Everything else is erased: picture, stored files, undelivered messages,
+    the Google sign-in mapping, notification data and unused invitations.
+    All devices are revoked and marked deleted. The deletion page discloses
+    the kept record as retained for security, which Google allows when
+    disclosed. A full erase with a "Deleted account" placeholder waits until
+    Google objects.
+  - The relay deletes its own schema-upgrade database copies
+    (`hub.db.vN.bak`) older than 30 days, so the page's 30-day backup
+    statement is true for relays on that release.
 - **Data safety** declares name, email (Google sign-in only), photos (the
   profile picture), user IDs, device IDs and message routing metadata.
   Message content and files are not declared, because they are end-to-end
