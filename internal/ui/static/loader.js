@@ -4,14 +4,14 @@
 // (/assets/skins/index.json, plus the packages stored in this browser),
 // its document rules (fonts) adopted by the page, its stylesheet and root
 // inside a shadow tree of #skin, and its entry's mount/unmount. Built-in
-// skins (Comic, the default) are packages too; only trust differs: a
+// skins (Comic and Office) are packages too; only trust differs: a
 // built-in one is trusted by this host's fixed list, any other one after
 // the person accepts its exact digest. A shadow tree is styling isolation,
 // not a sandbox: every skin runs with the page's full trust.
 //
-// Every skin but Comic gets the host's switcher above it (skinbar.mjs):
-// one step back to Comic, the skin menu and the workspace control. Comic
-// draws its own (Settings → Appearance → Skin, and its workspace menu).
+// Gallery and installed skins get the host's switcher (skinbar.mjs),
+// with a step back to Comic. The built-in skins draw their own skin and
+// workspace controls.
 //
 // Workspaces: when the program serves /assets/workspaces.mjs, the host keeps
 // one shell with one immutable transport per membership (a home of this
@@ -113,7 +113,7 @@
   catalog.catch(() => { /* seen where it is used */ });
   // Which skin opens and whether it needs consent: built-in skins are
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
-  const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
+  const { BUILT_IN, HOME, FRESH, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
   const { parseLink, linkTo, matchingWorkspace, checkTarget } = await import('/assets/conversation-links.mjs');
   // Leaving the page starts no API request and ends those it still waits
   // on. From beforeunload until the next document commits (pagehide), WebKit
@@ -406,11 +406,11 @@
     into.replaceChildren(gate);
     (actions[0] || h).focus();
   };
-  // adoptDocument: a package's document rules (manifest "document"). The
+  // loadDocumentRules: a package's document rules (manifest "document"). The
   // page keeps only its @font-face and @property rules, with every URL
   // resolved inside the package; anything else in it is dropped. Browsers
   // ignore both kinds inside a shadow tree, so they apply at document level.
-  const adoptDocument = async (href, base) => {
+  const loadDocumentRules = async (href, base) => {
     const r = await fetch(href);
     if (!r.ok) throw new Error("Could not load the skin’s fonts");
     const parsed = new CSSStyleSheet();
@@ -428,22 +428,32 @@
         if (ok) kept.insertRule(css, kept.cssRules.length);
       }
     }
-    document.adoptedStyleSheets = [...document.adoptedStyleSheets, kept];
+    return kept;
+  };
+  let documentSheet = null;
+  const useDocumentRules = (sheet) => {
+    if (documentSheet === sheet) return;
+    const sheets = [...document.adoptedStyleSheets].filter((rule) => rule !== documentSheet);
+    if (sheet) sheets.push(sheet);
+    document.adoptedStyleSheets = sheets;
+    documentSheet = sheet;
   };
 
   let selected = null, surface = page, homeName = "Comic", fallback = false;
   try {
+    let saved = null, packageChoice = false;
+    try { saved = localStorage.getItem("agentnet.skin"); packageChoice = localStorage.getItem("agentnet.skin.package") === saved; } catch (_) { /* local preference */ }
+    const query = new URL(location.href).searchParams.get("skin");
     const listed = await within(catalog, Math.max(0, catalogAsked + CATALOG_WAIT - Date.now())).catch(() => LATE);
     if (listed !== LATE) offered = listed;
     else {
-      // No list of skins yet (late or failed): Comic's own manifest too,
-      // from its fixed path, and the page opens with whichever answers
-      // first (the list, when both have). Lateness alone never fails the
-      // page: a slow link opens it later, as always. Comic opened from its
-      // manifest is trusted by the host's list as always; the person's saved
-      // choice is kept for the next load, and the list fills in when it comes.
-      const own = fetchJSON("/assets/skins/" + HOME + "/skin.json", "Comic").then((m) => {
-        if (!m || m.api !== 1 || m.id !== HOME) throw new Error("This program has no Comic skin");
+      // A late catalog must not force a different built-in skin. Fetch the
+      // selected built-in (Office for a fresh profile) from its fixed path.
+      // Comic remains the fallback for a skin that needs the full catalog.
+      const requested = query || saved || FRESH;
+      const builtin = requested === "local:" + FRESH ? FRESH : BUILT_IN.includes(requested) ? requested : HOME;
+      const own = fetchJSON("/assets/skins/" + builtin + "/skin.json", "Built-in skin").then((m) => {
+        if (!m || m.api !== 1 || m.id !== builtin) throw new Error("This program could not open its built-in skin");
         return [m];
       });
       own.catch(() => { /* seen by Promise.any, or the list answered */ });
@@ -452,18 +462,16 @@
       offered = first.list;
       if (first.own) {
         fallback = true;
-        catalog.then((list) => { offered = list; return refreshSkins(); }).catch(() => { /* Comic only, until the next load */ });
+        catalog.then((list) => { offered = list; return refreshSkins(); }).catch(() => { /* the built-in skin stays open */ });
       }
     }
     await refreshSkins();
     // A choice saved before Comic was a package ("default", "classic")
     // opens Comic and is rewritten once; ?skin=default names Comic too.
-    let saved = null, packageChoice = false;
-    try { saved = localStorage.getItem("agentnet.skin"); packageChoice = localStorage.getItem("agentnet.skin.package") === saved; } catch (_) { /* local preference */ }
-    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved, packageChoice });
+    const choice = choose(common.skins, { query, saved, packageChoice });
     const home = choice.home;
-    if (!home) throw new Error("This program has no Comic skin");
-    homeName = home.name;
+    if (!choice.selected || (!home && !choice.selected.builtin)) throw new Error("This program has no Comic skin");
+    if (home) homeName = home.name;
     if (choice.save) try { localStorage.setItem("agentnet.skin", choice.save); } catch (_) { /* local preference */ }
     selected = choice.selected;
 
@@ -509,7 +517,10 @@
       // A failure seen before the skin mounts stops it, as always; the rules
       // arriving after DOCUMENT_WAIT are adopted then, and a late failure
       // leaves the fallback fonts.
-      const rules = adoptDocument(base + selected.document, base);
+      const opening = selected;
+      const rules = loadDocumentRules(base + selected.document, base).then((sheet) => {
+        if (selected === opening) useDocumentRules(sheet);
+      });
       rules.catch(() => { /* seen by within, or the fallback fonts stay */ });
       await within(rules, DOCUMENT_WAIT);
     }
@@ -568,13 +579,13 @@
     // or mount, the version that was running is mounted again; nothing is
     // retried and nothing stored is removed until a later open.
     if (selected.local && workspaces && workspaces.state) {
-      let pending = null, pressed = false, finished = false;
+      let pending = null, pressed = false, finished = false, queued = false;
       const editing = () => { const a = surface.activeElement; return !!a && (a.isContentEditable || !!a.matches?.('input, textarea, select, [role="textbox"]')); };
-      const foreground = () => !!root && [...root.querySelectorAll('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')].some((el) => el.getClientRects().length > 0);
+      const foreground = () => !!root && [...root.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')].some((el) => el.getClientRects().length > 0);
       const busy = () => writing > 0 || !!rebinding || pressed || foreground() || (document.visibilityState === "visible" && editing());
-      const listen = [["pointerdown", () => { pressed = true; }], ["pointerup", () => { pressed = false; attempt(); }], ["pointercancel", () => { pressed = false; attempt(); }],
+      const listen = [["pointerdown", () => { pressed = true; }], ["pointerup", () => { setTimeout(() => { pressed = false; attempt(); }); }], ["pointercancel", () => { pressed = false; attempt(); }],
         ["focusout", () => setTimeout(attempt)], ["keyup", () => attempt()], ["visibilitychange", () => attempt()]];
-      const inside = [["animationend", () => attempt()], ["transitionend", () => attempt()]];
+      const inside = [["close", () => attempt()], ["animationend", () => attempt()], ["transitionend", () => attempt()]];
       const stop = () => {
         finished = true; pending = null;
         for (const [k, f] of listen) document.removeEventListener(k, f, true);
@@ -583,13 +594,17 @@
       };
       // attempt runs on those events; it swaps at most once per page.
       const attempt = () => {
-        if (!pending || finished || busy()) return;
-        const { next, nextBase, nextSheet, nextModule } = pending;
-        stop();
+        if (!pending || finished || queued || busy()) return;
+        queued = true;
         mounting = mounting.then(async () => {
-          const was = { module, sheet, base, selected };
+          queued = false;
+          if (!pending || finished || busy()) return;
+          const { next, nextBase, nextSheet, nextModule, nextDocument } = pending;
+          stop();
+          const was = { module, sheet, base, selected, documentSheet };
           if (was.sheet) was.sheet.media = "not all";
           if (nextSheet) nextSheet.media = "";
+          useDocumentRules(nextDocument);
           module = nextModule; sheet = nextSheet; base = nextBase; selected = next;
           try {
             await mountSkin();
@@ -597,6 +612,7 @@
           } catch (_) {
             module = was.module; sheet = was.sheet; base = was.base; selected = was.selected;
             nextSheet?.remove();
+            useDocumentRules(was.documentSheet);
             if (was.sheet) was.sheet.media = "";
             await mountSkin();
           }
@@ -614,14 +630,14 @@
         const nextBase = "/local-skins/" + next.digest + "/";
         let nextSheet = null;
         try {
-          if (next.document) { const rules = adoptDocument(nextBase + next.document, nextBase); rules.catch(() => {}); await within(rules, DOCUMENT_WAIT); }
+          const nextDocument = next.document ? await loadDocumentRules(nextBase + next.document, nextBase) : null;
           // Loaded now, applied only when it opens: the running version keeps its look.
           if (next.style) { nextSheet = document.createElement("link"); nextSheet.rel = "stylesheet"; nextSheet.media = "not all"; nextSheet.href = nextBase + next.style;
             await new Promise((resolve, reject) => { nextSheet.onload = resolve; nextSheet.onerror = () => reject(new Error("Could not load " + nextSheet.href)); surface.append(nextSheet); }); }
           const nextModule = await import(nextBase + next.entry);
           if (typeof nextModule.mount !== "function") throw new Error("This skin has no mount function");
           finished = false;
-          pending = { next, nextBase, nextSheet, nextModule };
+          pending = { next, nextBase, nextSheet, nextModule, nextDocument };
           for (const [k, f] of listen) document.addEventListener(k, f, true);
           for (const [k, f] of inside) surface.addEventListener(k, f, true);
           writeSettled.add(attempt);

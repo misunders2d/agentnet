@@ -20,6 +20,9 @@ const sha = (b) => crypto.createHash('sha256').update(b).digest();
 let lastPage = null;
 const comicDir = path.join(__dirname, '..', 'static', 'skins', 'comic');
 
+const documentRule = (version) =>
+  '\n@property --pulp-test-version { syntax: "<number>"; inherits: false; initial-value: ' + version + '; }\n';
+
 // Comic's own package as the gallery skin "pulp"; mark appends to its style
 // so the version that is applied can be read from the page.
 function comicAs(mark, agentnet = 'v0.8.25') {
@@ -27,16 +30,18 @@ function comicAs(mark, agentnet = 'v0.8.25') {
   const files = { 'skin.json': Buffer.from(JSON.stringify({ ...m, id: 'pulp', name: 'Pulp', agentnet })) };
   for (const f of m.files) files[f] = fs.readFileSync(path.join(comicDir, f));
   files['style.css'] = Buffer.concat([files['style.css'], Buffer.from('\n.an-root{--pulp-build:"' + mark + '"}\n')]);
+  files[m.document] = Buffer.concat([files[m.document], Buffer.from(documentRule(mark === 'v2' ? 2 : 1))]);
   return files;
 }
 // A small package for the failure cases.
 function tiny(word, { agentnet = 'v0.8.25', throws = false } = {}) {
-  const m = { api: 1, id: 'pulp', name: 'Pulp', entry: 'entry.mjs', style: 'style.css', files: ['entry.mjs', 'style.css'], agentnet };
+  const m = { api: 1, id: 'pulp', name: 'Pulp', entry: 'entry.mjs', style: 'style.css', document: 'document.css', files: ['entry.mjs', 'style.css', 'document.css'], agentnet };
   return {
     'skin.json': Buffer.from(JSON.stringify(m)),
     'entry.mjs': Buffer.from(throws ? 'export function mount(){throw new Error("broken")}'
       : `export function mount(root,host){const h=document.createElement('h1');h.textContent=${JSON.stringify(word)};root.append(h);host.onOpen(()=>{});}export function unmount(root){root.replaceChildren();}`),
     'style.css': Buffer.from('h1 { font: 700 32px serif; } /* ' + word + ' */'),
+    'document.css': Buffer.from(documentRule(word.startsWith('v2') ? 2 : 1)),
   };
 }
 function digest(files) {
@@ -88,7 +93,9 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
     const applied = (page) => page.evaluate(() => {
       const sr = document.getElementById('skin')?.shadowRoot, root = sr?.querySelector('.an-root');
       const sheets = [...(sr?.querySelectorAll('link[href*="/local-skins/"]') || [])].map((l) => ({ href: l.getAttribute('href'), on: l.media !== 'not all' }));
-      return { build: root ? getComputedStyle(root).getPropertyValue('--pulp-build').trim() : '', sheets, h1: sr?.querySelector('h1')?.textContent || '', card: !!sr?.querySelector('.skin-card') || !!document.querySelector('.skin-card') };
+      const documentRules = [...document.adoptedStyleSheets].flatMap((s) => [...s.cssRules])
+        .filter((r) => r.name === '--pulp-test-version').map((r) => r.initialValue);
+      return { documentRules, build: root ? getComputedStyle(root).getPropertyValue('--pulp-build').trim() : '', sheets, h1: sr?.querySelector('h1')?.textContent || '', card: !!sr?.querySelector('.skin-card') || !!document.querySelector('.skin-card') };
     });
 
     for (const view of [{ tag: 'desk-light', width: 1440, height: 900, scheme: 'light' }, { tag: 'android-dark', width: 412, height: 900, scheme: 'dark' }]) {
@@ -114,6 +121,7 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       await until(async () => (await page.evaluate(() => localStorage.getItem('agentnet.skin.trusted.local:pulp'))) === digest(v2), view.tag + ': v2 stored and trusted');
       await until(async () => (await applied(page)).sheets.length === 2, view.tag + ': v2 prepared beside v1');
       assert.equal((await applied(page)).build, '"v1"', view.tag + ': no swap while typing');
+      assert.deepEqual((await applied(page)).documentRules, ["1"], view.tag + ": deferred version leaves document styles alone");
       // Typing during the pending update stays immediate.
       const typed = await field.evaluate((el) => new Promise((resolve) => {
         const t0 = performance.now(); el.focus();
@@ -137,6 +145,7 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       assert.equal(new URL(page.url()).searchParams.get('skin'), null, view.tag + ': no switch through the address');
       assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin')), 'local:pulp', view.tag + ': same skin selected');
       // Same chat, same draft, same attached file.
+      assert.deepEqual((await applied(page)).documentRules, ["2"], view.tag + ": successful swap replaces the document rules");
       const field2 = page.locator('[data-part=composer] textarea').first();
       await field2.waitFor({ timeout: 10000 });
       assert.equal((await page.locator('[data-part=conversation-head]').first().innerText()).split('\n')[0], head, view.tag + ': same chat open');
@@ -172,6 +181,7 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: 'Pu
       const now = await applied(page);
       assert.equal(now.h1, 'v1 running', name + ': the running version stays');
       assert.equal(now.card, false, name + ': no failure card');
+      assert.deepEqual(now.documentRules, ["1"], name + ": old document rules retained");
       const kept = await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('agentnet-skin-package-v1-')));
       assert.equal(kept.includes('agentnet-skin-package-v1-' + digest(next)), name === 'untrusted' || name === 'fails to mount', name + ': v2 stored only when verified and compatible');
       assert.deepEqual(errors, [], name + ': page errors');

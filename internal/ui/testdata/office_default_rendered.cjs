@@ -14,10 +14,11 @@ const origin = new URL(target).origin;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
   const lines = [];
   // One fresh profile per case; anything outside this program fails (offline).
-  const open = async ({ storage = {}, width = 1280, height = 800, scheme = 'light', touch = false, catalog = null, url = target } = {}) => {
+  const open = async ({ storage = {}, width = 1280, height = 800, scheme = 'light', touch = false, catalog = null, catalogOffline = false, url = target } = {}) => {
     const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, hasTouch: touch, isMobile: touch });
     const outside = [];
     await ctx.route((u) => u.origin !== origin, (route) => { outside.push(route.request().url()); return route.abort(); });
+    if (catalogOffline) await ctx.route(/\/assets\/skins\/index\.json$/, (route) => route.abort());
     if (catalog) await ctx.route(/\/assets\/skins\/index\.json$/, async (route) => { const r = await route.fetch(); await route.fulfill({ response: r, json: catalog(await r.json()) }); });
     await ctx.addInitScript((s) => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v); } }, storage);
     const page = await ctx.newPage(), errors = [];
@@ -101,6 +102,18 @@ const origin = new URL(target).origin;
     assert.equal((await state(chose.page)).skin, 'comic', 'chosen Comic opens next time');
     lines.push('choosing Comic on a new profile is recorded and kept');
     await chose.ctx.close();
+    for (const [storage, want] of [[{}, ["office", null]], [{ "agentnet.skin": "comic" }, ["comic", "comic"]]]) {
+      const c = await open({ storage, catalogOffline: true });
+      const s = await state(c.page);
+      assert.deepEqual([s.skin, s.saved], want, "offline catalog preserves the intended built-in skin");
+      assert.deepEqual(c.errors, []);
+      await c.ctx.close();
+    }
+    const officeLink = new URL(target);
+    officeLink.searchParams.set("skin", "local:office");
+    const migratedLink = await open({ storage: { "agentnet.skin": "local:office" }, url: officeLink.href });
+    assert.deepEqual(Object.values(await state(migratedLink.page)).slice(0, 2), ["office", "office"], "old Office links still open Office");
+    await migratedLink.ctx.close();
     // A catalog without Office (an older program serving this page's files).
     const older = await open({ catalog: (list) => list.filter((s) => s.id !== 'office') });
     assert.deepEqual(Object.values(await state(older.page)).slice(0, 2), ['comic', null], 'catalog without Office opens Comic, records nothing');

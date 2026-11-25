@@ -40,6 +40,7 @@ export function choose(skins, { query = null, saved = null, packageChoice = fals
   if (saved === "local:" + FRESH && skins.some((s) => s.id === FRESH && s.builtin)) saved = save = FRESH;
   let requested = query || saved || null;
   if (requested === "default") requested = HOME;
+  if (requested === "local:" + FRESH) requested = FRESH;
   const asked = requested ? skins.find((s) => s.id === requested) || null : null;
   const fresh = requested ? null : skins.find((s) => s.id === FRESH && s.builtin) || null;
   return { selected: asked || fresh || home, home, save, remember: !!asked };
