@@ -1063,9 +1063,7 @@ All were read on November 25.
 **Owner decisions (November 25):**
 - **Terms of use.** The person accepts [TERMS.md](../TERMS.md) and the
   privacy policy on the first-run page. Google sign-in, Join and Add this
-  computer wait for the checkbox. The browser landing page and Comic's
-  add-workspace sheet are not gated; the Play requirement covers the app's
-  first run.
+  computer wait for the checkbox.
 - **Report** a message or person. The report goes inside AgentNet to that
   workspace's admins, with the messages the reporter chooses, and the admins
   act on it. Encryption means admins see only what is included.
@@ -1085,3 +1083,7 @@ All were read on November 25.
   profile picture), user IDs, device IDs and message routing metadata.
   Message content and files are not declared, because they are end-to-end
   encrypted.
+
+**Implementation note (not an owner decision):** the first build gates only
+the app's first-run page, which Play reviews. The browser landing page and
+Comic's add-workspace sheet are not gated yet.
