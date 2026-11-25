@@ -35,10 +35,15 @@ design. Keep those transitions fast, interruptible and optional through
 reduced-motion preferences; preserve readable content and familiar action
 labels. Passing compatibility tests does not establish a successful design.
 
-- **Comic** (`comic`) is AgentNet's own skin, the default and the only
-  built-in one: the messenger, built from `internal/ui/web` into the package
+- **Comic** (`comic`) is AgentNet's own skin and the way back from any
+  other: the messenger, built from `internal/ui/web` into the package
   `internal/ui/static/skins/comic/` and embedded in the program.
-- **Classic** and **Zoom** (`classic`, `zoom`) are packages in the
+- **Office** (`office`) is built in too, and is what a browser that never
+  chose a skin opens: Comic with its own skin layer
+  (`internal/ui/skins/office/overlay`), built by the same `web/build.sh` into
+  `internal/ui/static/skins/office/`. Files byte-identical to Comic's
+  (emoji data, fonts, shared chunks) are embedded once.
+- **Classic**, **Zoom**, **Pulp** and the others are packages in the
   [agentnet-skins](https://github.com/misunders2d/agentnet-skins) collection,
   installed like any other skin.
 - Installed skins: packages placed next to the program (below), and
@@ -65,7 +70,13 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
    then kept for the next load, and the catalog fills `host.skins` if it
    arrives later;
 2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
-   else Comic. A saved `default` or `classic` (the names before skins were
+   else Office (Comic when the catalog has no Office). Only a skin someone
+   chose is recorded: a browser that never chose keeps no saved skin, and a
+   saved skin whose package is missing for now opens Comic and stays saved.
+   A saved `agentnet.skin` from before Office was built in, Comic included,
+   is kept. A saved gallery Office (`local:office`) opens the built-in Office
+   and is rewritten once; its preferences (`office`, `office.theme`) carry
+   over. A saved `default` or `classic` (the names before skins were
    packages) opens Comic and is rewritten once; choices made through the package loader
    are marked separately so choosing an installed Classic package survives reload. `?skin=default` names Comic;
 3. asks for trust unless the skin is built in;
@@ -78,8 +89,9 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
    a rebind) it calls `unmount(root)` and mounts again on a fresh root over a
    host bound to the new membership.
 
-Comic draws its own way to switch (Settings → Appearance → Skin) and its
-own workspace menu. Every other skin gets the host's **switcher bar** above
+Comic and Office draw their own way to switch (Settings → Appearance →
+Skin) and their own workspace menu. Every other skin gets the host's
+**switcher bar** above
 it: one step back to Comic, the skin menu (Comic, then installed and
 browser-local skins, with import and removal), and the workspace control
 (switch, join, leave, reconnect). The bar sits in the page's flow above the
@@ -91,10 +103,11 @@ is a conformance expectation, not a security guarantee.
 
 ### Trust
 
-A built-in skin is trusted by the host's own fixed list of ids (`comic`),
-never by anything a manifest says. No installed or browser-local package may
-use those ids or `default`, or show as a built-in skin (the name Comic, in
-any case or spacing): the program
+A built-in skin is trusted by the host's own fixed list of ids (`comic`,
+`office`), never by anything a manifest says. No installed or browser-local
+package may use those ids or `default`, or show as a built-in skin (the
+names Comic and Office, in any case or spacing), and the gallery does not
+offer one even when an older catalog still lists it: the program
 skips such a directory and the browser refuses such a package. Every list of
 skins says where each one comes from (built in, installed on this computer,
 stored in this browser). The rules live in one browser module,

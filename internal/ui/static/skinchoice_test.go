@@ -30,8 +30,8 @@ func jsList(t *testing.T, file, name string) []string {
 }
 
 // The browser's copy of the skin ids is the program's: skin-choice.mjs
-// trusts exactly the reserved ids but "default" as built in, opens the
-// first embedded skin by default, and local-skins.mjs refuses exactly the
+// trusts exactly the reserved ids but "default" as built in, goes home to
+// the first embedded skin (Comic), and local-skins.mjs refuses exactly the
 // reserved ids (it imports them, so the copies cannot drift).
 func TestBrowserSkinIDsMatchProgram(t *testing.T) {
 	builtIn := jsList(t, "skin-choice.mjs", "BUILT_IN")
@@ -84,7 +84,7 @@ func TestSkinChoiceAndTrust(t *testing.T) {
 const skinChoiceCases = `
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
-const { mark, choose, trusted, takenName, HOME } = await import(pathToFileURL("skin-choice.mjs").href);
+const { mark, choose, trusted, takenName, HOME, FRESH } = await import(pathToFileURL("skin-choice.mjs").href);
 const digest = "a".repeat(64), other = "b".repeat(64);
 const skins = [
   { api: 1, id: "comic", name: "Comic", digest: "c".repeat(64) },
@@ -129,6 +129,26 @@ assert.equal(trusted(mark({ id: "notebook", builtin: true, digest }), null), fal
 // No package shows as a built-in skin.
 for (const n of ["Comic", " comic ", "COMIC"]) assert.equal(takenName(n), true, n);
 for (const n of ["Notebook example", "Comic book", "Default", "Classic", "Zoom"]) assert.equal(takenName(n), false, n);
+// MEL-821: Office is built in and what a profile that never chose opens.
+assert.equal(FRESH, "office");
+for (const n of ["Office", " office "]) assert.equal(takenName(n), true, n);
+const office = mark({ api: 1, id: "office", name: "Office", digest: "d".repeat(64) });
+const withOffice = [skins[0], office, ...skins.slice(1), mark({ api: 1, id: "local:pulp", name: "Pulp", digest, local: true })];
+const pick = (o) => [id(choose(withOffice, o)), choose(withOffice, o).save, choose(withOffice, o).remember];
+assert.equal(office.builtin, true); assert.equal(trusted(office, null), true, "built-in Office needs no consent");
+assert.deepEqual(pick({}), ["office", null, false], "no saved choice opens Office and records nothing");
+assert.deepEqual(pick({ saved: "comic" }), ["comic", null, true], "a saved Comic (chosen or not) stays Comic");
+assert.deepEqual(pick({ saved: "office" }), ["office", null, true]);
+assert.deepEqual(pick({ saved: "local:pulp" }), ["local:pulp", null, true], "a saved gallery skin stays");
+assert.deepEqual(pick({ saved: "notebook" }), ["notebook", null, true], "a saved installed skin stays");
+assert.deepEqual(pick({ saved: "local:office" }), ["office", "office", true], "a gallery Office moves to the built-in one, once");
+assert.deepEqual(pick({ saved: "default" }), ["comic", "comic", true], "legacy default still means Comic");
+assert.deepEqual(pick({ saved: "gone" }), ["comic", null, false], "a missing saved skin opens Comic and the choice is kept");
+assert.deepEqual(pick({ query: "comic" }), ["comic", null, true], "?skin=comic is a choice");
+assert.deepEqual(pick({ query: "default" }), ["comic", null, true]);
+assert.deepEqual([id(choose(skins, {})), choose(skins, {}).remember], ["comic", false], "an older catalog without Office opens Comic");
+assert.deepEqual([id(choose(skins, { saved: "local:office" })), choose(skins, { saved: "local:office" }).save], ["comic", null], "no built-in Office: the gallery choice is not rewritten");
+assert.equal(trusted(mark({ api: 1, id: "local:office", name: "Office", digest, local: true }), null), false, "a stored Office package is never built in");
 console.log("skin choice PASS");
 `
 
@@ -136,7 +156,7 @@ console.log("skin choice PASS");
 // (in any case or spacing) is left out of the catalog. "Classic" and "Zoom"
 // are the names of agentnet-skins packages, not reserved.
 func TestInstalledSkinCannotTakeBuiltInName(t *testing.T) {
-	for _, name := range []string{"Comic", " comic ", "COMIC"} {
+	for _, name := range []string{"Comic", " comic ", "COMIC", "Office", " office "} {
 		if !ReservedSkinName(name) {
 			t.Errorf("%q is not reserved", name)
 		}

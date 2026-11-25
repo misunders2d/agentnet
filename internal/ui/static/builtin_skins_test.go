@@ -23,16 +23,16 @@ func catalogOf(t *testing.T, dir string) []map[string]any {
 	return list
 }
 
-// Built-in skins are packages like any other: Comic, the only one, with its
-// manifest's entry, style, document rules and files, and a digest of its
-// bytes. Classic and Zoom are packages from the agentnet-skins collection.
+// Built-in skins are packages like any other: Comic and Office, each with
+// its manifest's entry, style, document rules and files, and a digest of its
+// bytes. Classic, Zoom and Pulp are packages from the agentnet-skins collection.
 func TestBuiltinSkinCatalog(t *testing.T) {
 	for _, dir := range []string{"", t.TempDir()} {
 		list := catalogOf(t, dir)
-		if len(list) != 1 {
+		if len(list) != 2 {
 			t.Fatalf("catalog %q: %v", dir, list)
 		}
-		for i, id := range []string{"comic"} {
+		for i, id := range []string{"comic", "office"} {
 			skin := list[i]
 			if skin["id"] != id || skin["entry"] != "entry.mjs" || skin["style"] != "style.css" || len(skin["digest"].(string)) != 64 {
 				t.Fatalf("catalog %q: %v", dir, list)
@@ -41,11 +41,11 @@ func TestBuiltinSkinCatalog(t *testing.T) {
 				t.Fatal("the catalog carries a trust word: trust is the host's own list")
 			}
 		}
-		if list[0]["name"] != "Comic" || list[0]["document"] != "document.css" {
+		if list[0]["name"] != "Comic" || list[0]["document"] != "document.css" || list[1]["name"] != "Office" || list[1]["document"] != "document.css" || list[0]["digest"] == list[1]["digest"] {
 			t.Fatal(list)
 		}
 	}
-	if !slices.Equal(BuiltinSkins, []string{"comic"}) {
+	if !slices.Equal(BuiltinSkins, []string{"comic", "office"}) {
 		t.Fatalf("built-in skins %v", BuiltinSkins)
 	}
 }

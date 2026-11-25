@@ -96,6 +96,12 @@ out keeps Comic's look:
 
 - `--an-sidebar` (default `--an-canvas`): the desktop list column's
   background (Office draws it a shade darker than the conversation).
+- `--an-timeline-max` (default `800px`): the widest the message column
+  grows before it is centred with space on both sides.
+- `--an-bubble-max` (default `70%`, from `lg`): the widest a message is, as
+  a share of that column. Keep a readable line (about 80 characters): Office
+  uses `min(70%, 38rem)` with a 1040px column, so a laptop's conversation has
+  no empty side gutters.
 
 The list column's width (`--an-list-width`) belongs to the person: they drag
 or key the `list-resize` separator, and AgentNet keeps it between 240 and

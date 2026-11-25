@@ -44,19 +44,21 @@ type skinAsset struct {
 }
 
 // BuiltinSkins are the packages embedded in this program, in the order the
-// catalog offers them; the first is the default. Their trust comes from
-// this fixed list (and skin-choice.mjs's copy of it), never from a manifest.
-// Comic is the only one; other skins (Classic, Zoom) are packages from the
-// agentnet-skins collection, installed like any other.
-var BuiltinSkins = []string{"comic"}
+// catalog offers them. Their trust comes from this fixed list (and
+// skin-choice.mjs's copy of it), never from a manifest. Comic, the first,
+// is AgentNet's own skin and the way back from any other; Office (Comic
+// with its own skin layer, skins/office) is what a new profile opens
+// (skin-choice.mjs FRESH). Other skins (Classic, Zoom, Pulp…) are packages
+// from the agentnet-skins collection, installed like any other.
+var BuiltinSkins = []string{"comic", "office"}
 
 // ReservedSkinIDs are the ids no installed or browser-local package may
-// use: the built-in skin and "default", the default interface's old name.
-var ReservedSkinIDs = []string{"comic", "default"}
+// use: the built-in skins and "default", the default interface's old name.
+var ReservedSkinIDs = []string{"comic", "office", "default"}
 
 // ReservedSkinName reports whether name is a built-in skin's, ignoring case
-// and spacing: no installed or browser-local package may show as Comic
-// (skin-choice.mjs takenName).
+// and spacing: no installed or browser-local package may show as Comic or
+// Office (skin-choice.mjs takenName).
 func ReservedSkinName(name string) bool {
 	n := strings.ToLower(strings.Join(strings.Fields(name), " "))
 	return n != "default" && slices.Contains(ReservedSkinIDs, n)
@@ -187,7 +189,9 @@ func makeSkinAsset(data []byte, mime string) skinAsset {
 }
 
 // builtinSkin reads an embedded package (skins/<id>/) through the same
-// validation as an installed one.
+// validation as an installed one. A built-in overlay of Comic (Office)
+// embeds only the files that differ from Comic's; the others are Comic's
+// own bytes (web/build.sh removes them, its SHA256SUMS still lists them).
 func builtinSkin(id string) (Skin, map[string]skinAsset, error) {
 	pkg, err := fs.Sub(files, "skins/"+id)
 	if err != nil {
@@ -198,6 +202,9 @@ func builtinSkin(id string) (Skin, map[string]skinAsset, error) {
 			return nil, errors.New("invalid path")
 		}
 		b, err := fs.ReadFile(pkg, name)
+		if errors.Is(err, fs.ErrNotExist) && id != "comic" && name != "skin.json" {
+			b, err = fs.ReadFile(files, "skins/comic/"+name)
+		}
 		if err == nil && int64(len(b)) > limit {
 			return nil, errors.New("file too large")
 		}

@@ -7,6 +7,7 @@
 // except for an update of a version the person trusted.
 // Nothing is uploaded and no AgentNet data leaves this page.
 import * as localSkins from './local-skins.mjs';
+import { RESERVED, takenName } from './skin-choice.mjs';
 
 export const REPOSITORY = 'misunders2d/agentnet-skins';
 export const LATEST = 'https://api.github.com/repos/' + REPOSITORY + '/releases/latest';
@@ -92,7 +93,10 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
     const latest = json(await get(LATEST, LIMITS.latest, fetcher));
     const release = latest && typeof latest.tag_name === 'string' ? latest.tag_name : '';
     if (!TAG.test(release) || latest.draft || latest.prerelease) fail('The skin gallery has no published release yet.');
-    const skins = validate(json(await get(RAW + release + '/published/catalog.json', LIMITS.catalog, fetcher)));
+    // A skin now built into AgentNet (Office) is not offered again, even by a
+    // catalog published before it was: the built-in one is already here.
+    const skins = validate(json(await get(RAW + release + '/published/catalog.json', LIMITS.catalog, fetcher)))
+      .filter((s) => !RESERVED.includes(s.id) && !takenName(s.name));
     cached = { at: Date.now(), release, skins };
     return cached;
   };

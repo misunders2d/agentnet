@@ -467,9 +467,10 @@
     if (choice.save) try { localStorage.setItem("agentnet.skin", choice.save); } catch (_) { /* local preference */ }
     selected = choice.selected;
 
-    // The switcher over every skin but Comic: before trust is asked, so the
-    // way back is there from the first moment.
-    if (selected.id !== HOME) {
+    // The switcher over every skin not built in (Comic and Office carry
+    // their own skin choice in Settings): before trust is asked, so the way
+    // back is there from the first moment.
+    if (!selected.builtin) {
       const { mountSkinBar } = await import("/assets/skinbar.mjs");
       bar = mountSkinBar(document.body, {
         skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
@@ -730,7 +731,9 @@
     };
     window.addEventListener("hashchange", route);
     route();
-    if (!fallback) try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
+    // Only a skin someone chose is recorded: a new profile's Office is not,
+    // and a saved choice whose package is missing for now is kept.
+    if (!fallback && choice.remember) try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
   } catch (e) {
     bar?.reset(); controlsRoot = null;
     const box = text("div", "");

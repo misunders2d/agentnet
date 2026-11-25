@@ -2,6 +2,61 @@
 
 ## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
 
+### MEL-821 Office built in, the default for a new profile; MEL-823 Office gutters
+
+Owner decision (Q1, November 25): bundle Office and open it on a fresh or
+unset profile, keep every saved choice. Office's skin layer moved into core
+(`internal/ui/skins/office/overlay`, from agentnet-skins at 84adba27, one
+maintained copy); `web/build.sh` builds Comic and then Office, deterministic;
+files byte-identical to Comic's are embedded once (`builtinSkin` serves
+Comic's bytes, Office's `SHA256SUMS` still lists them): Office adds 1.61 MB
+(entry.mjs 1.52 MB, style.css, document.css, skin.json) instead of 3.52 MB.
+`skin-choice.mjs`: `BUILT_IN` comic, office; `HOME` stays Comic (way back,
+unknown ids, late-catalog fallback); `FRESH` Office for no choice; a saved
+`local:office` becomes `office` once; `remember` lets the loader record only
+a skin someone chose. Built-in skins carry their own skin choice in
+Settings, so Office gets no host switcher bar. The gallery hides reserved
+ids and names even from an older catalog, and never fetches them to update.
+MEL-822's darker Office list column (`--an-sidebar` #F4F5F7 light, #15181B
+dark; muted text 5.9:1 and 7.2:1) and MEL-823's gutters live in the in-core
+Office theme: Comic now reads `--an-timeline-max` (800px) and
+`--an-bubble-max` (70%) with fallbacks, Office sets 1040px and
+`min(70%, 38rem)`. Left/right space beside the messages at 1280×720 went
+from 102/62 px to 56/16 px, at 1366×768 from 145/105 to 56/16 (the 40 px
+avatar column stays);
+1024 and phone unchanged; at 1920 the column stops at 1040 px.
+
+`TestOfficeDefaultRendered` (`office_default_rendered.cjs`, Chromium, every
+non-program request aborted): a new profile opens Office at 1280 light and
+390 dark touch in 355–458 ms with `agentnet.skin` still unset after a
+reload and no switcher bar; saved Comic, Office, `default`, a gallery Office
+with `office.theme` dark (opens built-in Office dark, rewritten to `office`),
+a saved gallery skin that is missing (opens Comic, choice kept), `?skin=comic`
+on a new profile (recorded), and a catalog without Office (Comic, nothing
+recorded); Office's message column equals its pane at 1280 and 390, is
+1040 px centred at 1920, Comic's stays 800 px. `TestSkinChoiceAndTrust`
+covers the same choices in node; `skin_gallery_check.mjs` an older catalog
+listing Office and a lookalike name; `TestBuiltinSkinCatalog` and
+`TestBuiltinSkinServedBytesMatchBuild` the embedded Office. Screenshots of
+Office at 1280, 1366 dark, 1024, 1920 and 390 inspected (scratch, not
+committed). Not yet run: WebKitGTK shell, the Android WebView, an upgrade
+from a browser that really holds a stored gallery Office package (simulated
+by its saved choice and theme; that stored package stays in the browser,
+unlisted, about 3.5 MB), and the late-catalog fallback on a new profile
+(opens Comic, records nothing).
+
+Rendered checks written for Comic keep testing Comic: `TestMain` puts a
+test-only Node preload in `NODE_OPTIONS` (`testdata/comic_preload.cjs`) that
+seeds `agentnet.skin = comic` in each Playwright context when nothing is
+saved, as the loader before MEL-821 did on first open;
+`TestOfficeDefaultRendered` opts out (`AGENTNET_TEST_FRESH_SKIN=1`). Older
+checks updated for this release's behaviour: re-clicking the open rail item
+now hides its list (appcontrols, skin contract: open a section only when it is
+not already open with its list showing), the invite's Date and Time fields
+(group parity, guest controls), a removed skin's fallback no longer rewrites
+the saved choice (skins), and Office's entry joins Comic's React DOM
+allowance in `TestPageInsertsTextOnly`.
+
 ### MEL-824 and MEL-822 desktop list column: hide, resize, compact
 
 On desktop, clicking the active **Chats** or **Settings** rail item hides its

@@ -146,4 +146,22 @@ assert.equal(newer('0.8.26', 'v0.8.25'), false);
   assert.equal(tampered.store[0].digest, old.digest); assert.equal(tampered.trusted['local:pulp'], old.digest);
 }
 
-console.log('skin gallery check PASS: fixed sources, verified previews and files, digest before storing, version gate, fail-closed catalogs, updates keep exact trust');
+{ // MEL-821: Office is built in. A catalog published before that still lists
+  // it: the gallery offers it no more, installs nothing for it and never
+  // fetches it to update a gallery Office this browser still holds.
+  const office = pkg('office');
+  // prepare itself refuses the reserved id, so the entries are written out.
+  const listed = (id, name, files) => ({ id, name, description: 'A test skin.', version: '1.0.0', api: 1, agentnet: 'v0.8.25', digest: 'f'.repeat(64),
+    files: Object.entries(files).map(([path, b]) => ({ path, sha256: sha(b), size: b.length })), previews: [] });
+  await assert.rejects(prepare(asFiles(office)), /manifest/, 'no browser-local package may be Office');
+  const cat = { catalog: 1, skins: [catalog.skins[0], listed('office', 'Office', office), listed('dinerx', ' office ', diner)] };
+  const held = [{ api: 1, id: 'local:office', package_id: 'office', name: 'Office', digest: 'e'.repeat(64), local: true }];
+  const w = world({ cat, files: { pulp, office }, held });
+  assert.deepEqual((await w.g.list()).skins.map((s) => s.id), ['pulp'], 'Office and a lookalike name are not offered');
+  await assert.rejects(w.g.install('office'), /not in the gallery/);
+  assert.deepEqual(await updateInstalled(w.g, w.local), []);
+  assert.ok(!w.asked.some((u) => u.includes('/published/office/')), 'no Office file is fetched');
+  assert.equal(w.store[0].digest, 'e'.repeat(64), 'the stored gallery Office is left as it was');
+}
+
+console.log('skin gallery check PASS: fixed sources, verified previews and files, digest before storing, version gate, fail-closed catalogs, updates keep exact trust, built-in Office not offered');
