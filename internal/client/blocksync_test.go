@@ -26,6 +26,7 @@ func TestBlockDirectMessagesAcrossOwnDevices(t *testing.T) {
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
 	phone := linked(t, w.alice)
+	worker := linkedVia(t, w.alice, "worker", w.alice.ApproveAgentLink) // an own agent host
 	conv := newDM(t, w.bob, w.alice)
 	bob, _, err := w.bob.store.selfPerson(w.bob.Address)
 	if err != nil {
@@ -47,10 +48,14 @@ func TestBlockDirectMessagesAcrossOwnDevices(t *testing.T) {
 	if err := w.alice.SetBlocked(func() string { me, _, _ := w.alice.store.selfPerson(w.alice.Address); return me.info.Person }(), true); err != errBlockSelf {
 		t.Fatalf("self block: %v", err)
 	}
-	eventually(t, "block follows own human device", func() bool {
+	eventually(t, "block follows own devices, agent host included", func() bool {
 		b, err := phone.BlockedPersons()
-		return err == nil && slices.Equal(b, []string{bob.info.Person})
+		h, herr := worker.BlockedPersons()
+		return err == nil && herr == nil && slices.Equal(b, []string{bob.info.Person}) && slices.Equal(h, []string{bob.info.Person})
 	})
+	if err := worker.SetBlocked(bob.info.Person, false); err == nil {
+		t.Fatal("an agent host changed a block")
+	}
 	send("while blocked")
 	eventually(t, "held quietly on both own devices", func() bool {
 		a, _ := quarantinedBlocked(t, w.alice)
@@ -67,6 +72,15 @@ func TestBlockDirectMessagesAcrossOwnDevices(t *testing.T) {
 	}
 	if b, _ := w.bob.BlockedPersons(); len(b) != 0 {
 		t.Fatalf("block leaked to the blocked person: %v", b)
+	}
+	// A device-thread (version 1) message is held as well.
+	if _, err := w.bob.Send(tctx(t), w.alice.Address, "direct while blocked", ""); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "device-thread message held quietly", func() bool { held, _ := quarantinedBlocked(t, w.alice); return held == 2 })
+	var direct int
+	if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE body=?`, "direct while blocked").Scan(&direct); err != nil || direct != 0 {
+		t.Fatalf("blocked device-thread message reached the inbox: %d %v", direct, err)
 	}
 	if err := phone.SetBlocked(bob.info.Person, false); err != nil {
 		t.Fatal(err)

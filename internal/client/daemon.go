@@ -858,6 +858,14 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		}
 		return err
 	}
+	if err == nil {
+		// A blocked person's device-thread messages, questions and tasks.
+		if blocked, e := a.blockedSender(in, env.From, sender); e != nil {
+			return e
+		} else if blocked && in.V != envelope.Version3 {
+			return a.holdBlocked(ctx, env, in, sender, "message")
+		}
+	}
 	if err == nil && in.V == envelope.Version3 {
 		err = a.admitControl(ctx, env, in, sender, false)
 		if err == nil && in.Conv == "" {

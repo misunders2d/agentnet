@@ -1337,6 +1337,14 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 			}
 			continue
 		}
+		if blocked, err := a.blockedSender(in, address, e.Public); err != nil {
+			return "", err
+		} else if blocked {
+			if err := a.holdBlocked(ctx, env, in, e.Public, "message"); err != nil {
+				return "", err
+			}
+			continue
+		}
 		if namedAgentFields(in) {
 			if err := a.checkDeviceAgent(in, e.Public); err != nil {
 				continue

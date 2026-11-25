@@ -956,7 +956,7 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	}
 	// A blocked person's reactions, edits and other controls outside groups
 	// are held quietly too.
-	if blocked, e := a.blockedControl(in, env.From, sender); e != nil {
+	if blocked, e := a.blockedSender(in, env.From, sender); e != nil {
 		return e
 	} else if blocked {
 		return a.holdBlocked(ctx, env, in, sender, "control")

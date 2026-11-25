@@ -1105,8 +1105,12 @@ All were read on November 25.
   Telegram and WhatsApp drop what a blocked contact sent while blocked
   (observed product behavior; not code-inspected).
 - Known limit: the sender's copy still gets the true `quarantined` receipt,
-  which an attentive sender could read as a block. Messengers hide this; a
-  later change can send no receipt instead.
+  shown to them as "Couldn't be verified there", which they could read as a
+  block. Messengers hide this; a later change can send a different receipt.
+  The Block dialog therefore does not promise that they aren't told.
+- Marks also reach the person's own agent hosts, which enforce them on
+  questions and tasks; only an own human device can set a block.
+- Device-thread (version 1) messages from a blocked person are held as well.
 - The owner asked whether the engines should become one shared core with
   three adapters. Codex and Agy (consulted November 25) both advised against
   it for now: the browser keeps non-exportable WebCrypto keys and IndexedDB,

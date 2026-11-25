@@ -2011,9 +2011,11 @@ export class Engine {
     return ref;
   }
   readMarkKey(owner,ref) { return "read-mark/"+owner+"/"+ref.conv+"/"+ref.fingerprint+"/"+ref.lid; }
-  async readSyncAuthority(r,from,fromFP,to,toFP,checks=[]) {
+  // humanRecipient false also admits own agent hosts as recipients (block
+  // marks, client.ownSyncAuthority); the writer is always an own human device.
+  async readSyncAuthority(r,from,fromFP,to,toFP,checks=[],humanRecipient=true) {
     const own=await this.groupRead(checks,"kv","person");
-    if(!own || own.state!=="self" || own.person!==r.person || !own.hashes.includes(r.roster) || from===to || ![[from,fromFP],[to,toFP]].every(([address,fp])=>own.devices.some(d=>d.address===address&&d.fingerprint===fp)&&(own.human_keys||[]).includes(fp)))throw Error("Read sync is only between current own-human devices.");
+    if(!own || own.state!=="self" || own.person!==r.person || !own.hashes.includes(r.roster) || from===to || ![[from,fromFP,true],[to,toFP,humanRecipient]].every(([address,fp,human])=>own.devices.some(d=>d.address===address&&d.fingerprint===fp)&&(!human||(own.human_keys||[]).includes(fp))))throw Error("Read sync is only between current own-human devices.");
     for(const [address,fp] of [[from,fromFP],[to,toFP]]) {
       if(address===this.address&&fp===this.fp)continue;
       const pin=await this.groupRead(checks,"pins",address);
@@ -2432,6 +2434,13 @@ export class Engine {
   }
   blockMarkKey(owner,person){return "block-mark/"+owner+"/"+person;}
   blockMarkCopyKey(fp,owner,person){return "block-mark-copy/"+fp+"/"+this.blockMarkKey(owner,person);}
+  // blockedDevice: the device belongs to a person this person blocked
+  // (client.blockedSender). Local records only.
+  async blockedDevice(address,fingerprint){
+    if(!this.me?.person)return false;
+    const sp=await this.personByDevice(address,fingerprint);
+    return !!sp?.person&&sp.person!==this.me.person&&!!(await this.store.get("kv",this.blockMarkKey(this.me.person,sp.person)))?.blocked;
+  }
   async blockedPersons(){
     const own=await this.store.get("kv","person");if(!own?.person)return [];
     return (await this.store.prefix("kv","block-mark/"+own.person+"/")).filter(m=>m.blocked).map(m=>m.person).sort();
@@ -2463,7 +2472,7 @@ export class Engine {
       for(const dev of current.devices){
         if (!await this.recipientAvailable(dev,checks)) continue;
         if(!await stateWindow(this.store,dev))continue;
-        if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
+        if(dev.address===this.address)continue; // own agent hosts too: they hold blocked questions and tasks
         // A device that cannot read blocks yet keeps one waiting carrier.
         const pointer="block-mark-carrier/"+current.person+"/"+dev.fingerprint,last=await this.groupRead(checks,"kv",pointer);
         if(last?.id&&(await this.groupRead(checks,"outbox",last.id))?.state==="waiting")continue;
@@ -2476,7 +2485,7 @@ export class Engine {
         }
         if(!blocks.length)continue;
         const body=JSON.stringify({v:1,person:current.person,roster:current.hash,blocks}),r=wire.parseBlockSync(body);
-        try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks);}catch{continue;}
+        try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks,false);}catch{continue;}
         const id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubBlockSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
         ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapReminderSyncV2,sub:wire.SubBlockSync,body,envelope,at,state:"queued",aside:true}},{s:"kv",k:pointer,v:{id}});
         for(const t of blocks)ops.push({s:"kv",k:this.blockMarkCopyKey(dev.fingerprint,current.person,t.person),v:{...t,id}});
@@ -2487,15 +2496,15 @@ export class Engine {
   }
   async blockSyncGate(rec) {
     await this.refreshPerson(this.me);const r=wire.parseBlockSync(rec.body);
-    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp,[],false);
     const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
     if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapReminderSyncV2))throw Object.assign(Error("This device needs to update AgentNet to synchronize blocked people."),{code:"topic_sync_unsupported"});
-    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);return {why:"",pin};
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp,[],false);return {why:"",pin};
   }
   async admitBlockSync(n,env,pin, admission = null) {
     const r=wire.parseBlockSync(n.body),checks=[],ops=[];
     if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Blocks belong to another person.");
-    await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks,false);}catch(e){throw new Hold("invalid",e.message);}
     for(const t of r.blocks){
       const k=this.blockMarkKey(r.person,t.person),old=await this.groupRead(checks,"kv",k);
       if(wire.blockMarkNewer(t,old))ops.push({s:"kv",k,v:{...t,key:k,owner:r.person}});
@@ -7594,6 +7603,7 @@ export class Engine {
       status: n.status || "", ...(n.human?{human:n.human}:{}), // captured public consent remains available to later resolution
       attachments: n.attachments.length ? n.attachments : undefined };
     if (n.v === 1) {
+      if (await this.blockedDevice(env.from, pin.fingerprint)) throw new Hold("blocked", "sender is blocked");
       await this.checkDeviceAgent(n, env.from, pin.fingerprint);
       const row = { ...base, ...(n.agent_id ? { agent_id: n.agent_id } : {}), ...(n.target ? { target: n.target } : {}), v: 1, state: n.kind === "question" || n.kind === "task" ? "held" : "" };
       if (isNotice(row)) return this.noticeOps(await this.store.all("inbox"), row); // one card per host (client.supersedeNotices)
@@ -9454,10 +9464,7 @@ export class Engine {
     const checks = [];
     // A blocked person's reactions, edits and other controls outside groups
     // are held quietly too (client.blockedControl). Local records only.
-    if (this.me?.person && !(n.conv && await this.store.get("kv","group/"+n.conv))) {
-      const sp = await this.personByDevice(env.from, pin.fingerprint);
-      if (sp?.person && sp.person !== this.me.person && (await this.store.get("kv", this.blockMarkKey(this.me.person, sp.person)))?.blocked) throw new Hold("blocked", "sender is blocked");
-    }
+    if (!(n.conv && await this.store.get("kv","group/"+n.conv)) && await this.blockedDevice(env.from, pin.fingerprint)) throw new Hold("blocked", "sender is blocked");
     if (n.sub === wire.SubClear) return this.admitClear(n, env, pin, admission); // a person-local act: no membership asked
     if (wire.humanEdit(n)) return this.admitHumanEdit(n, env, pin, admission); // to its turn's captured audience: decided as that turn was
     if(n.conv && await this.store.get("kv","group/"+n.conv))return this.admitGroupControl(n,env,pin);

@@ -16,7 +16,7 @@ export function BlockConfirm({ person, name, open, onOpenChange }: { person: str
   const store = useApp();
   return <Confirm open={open} onOpenChange={onOpenChange} title={"Block " + name + "?"} ok="Block"
     onOk={() => { onOpenChange(false); void store.setBlocked(person, true, name); }}>
-    <p>{name} won’t be able to message you, ask your assistant questions or give it tasks directly. They aren’t told.</p>
+    <p>{name} won’t be able to message you, ask your assistants questions or give them tasks directly.</p>
     <p>Groups you share don’t change. You can unblock them here at any time.</p>
   </Confirm>;
 }

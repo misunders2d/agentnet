@@ -118,7 +118,10 @@ for (const e of [a, phone]) {
   check(!(await bodies(e)).includes('WHILE BLOCKED'), 'the blocked message never reaches the chat on ' + e.address);
   check(!(await e.overview()).quarantine.some(q => q.notice_reason === 'blocked'), 'no held notice for a blocked message on ' + e.address);
 }
-check((await b.blockedPersons()).length === 0, 'the blocked person learns nothing of the block');
+check((await b.blockedPersons()).length === 0, "the block stays off the blocked person's own list");
+await b.sendDirect({ to: a.address, kind: 'message', body: 'DIRECT WHILE BLOCKED' });
+await w.drain(a);
+check((await blockedHeld(a)).length === 2 && !(await a.store.all('inbox')).some(r => r.body === 'DIRECT WHILE BLOCKED'), "a blocked person's device-thread message is held too");
 
 // Another person's device cannot set our blocks.
 const seal = async (sender, marks, target = a) => wire.seal({ v: wire.Version2, id: wire.newID(), from: sender.address, to: target.address, ts: Math.floor(now / 1000), kind: 'message', sub: wire.SubBlockSync, replica: true, body: JSON.stringify({ v: 1, person: a.me.person, roster: a.me.hash, blocks: marks }) }, sender.keys, target.pub);

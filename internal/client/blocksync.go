@@ -78,6 +78,9 @@ func (a *Agent) SetBlocked(person string, blocked bool) error {
 	if person == me.info.Person {
 		return errBlockSelf
 	}
+	if !me.roster.Human(a.Self().Fingerprint()) {
+		return errors.New("block: only your own human device can block")
+	}
 	old, _, err := blockMarkIn(tx, `person_blocks WHERE owner=? AND person=?`, me.info.Person, person)
 	if err != nil {
 		return err
@@ -135,7 +138,7 @@ func (a *Agent) syncBlocks() (bool, error) {
 	var copies []outCopy
 	var sent [][]protocol.BlockMark
 	for _, dev := range me.roster.Devices {
-		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
+		if dev.Address == a.Address { // own agent hosts too: they hold blocked questions and tasks
 			continue
 		}
 		if full, e := syncStateWindowFull(tx, dev); e != nil {
@@ -144,7 +147,7 @@ func (a *Agent) syncBlocks() (bool, error) {
 			continue
 		}
 		r := protocol.BlockSync{V: 1, Person: me.info.Person, Roster: me.info.Roster}
-		if topicSyncAuthority(tx, protocol.TopicSync{Person: r.Person, Roster: r.Roster}, a.Address, fp, dev.Address, dev.Fingerprint()) != nil {
+		if blockSyncAuthority(tx, r, a.Address, fp, dev.Address, dev.Fingerprint()) != nil {
 			continue
 		}
 		// A device that cannot read marks yet keeps one waiting carrier.
@@ -231,7 +234,7 @@ func (a *Agent) admitBlockSync(ctx context.Context, env envelope.Envelope, in en
 		return err
 	}
 	defer tx.Rollback()
-	if err = topicSyncAuthority(tx, protocol.TopicSync{Person: r.Person, Roster: r.Roster}, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
+	if err = blockSyncAuthority(tx, r, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
 		tx.Rollback()
 		return hold(reasonInvalid, err.Error())
 	}
@@ -281,13 +284,12 @@ func (a *Agent) mayDeliverBlockSync(env envelope.Envelope) (bool, bool, error) {
 		return true, false, err
 	}
 	r, parseErr := protocol.ParseBlockSync([]byte(body))
-	auth := protocol.TopicSync{Person: r.Person, Roster: r.Roster}
 	check := func() (identity.Public, bool, error) {
 		key, pending, found, e := a.store.peer(env.To)
 		if e != nil {
 			return key, false, e
 		}
-		ok := parseErr == nil && found && pending == nil && key.Fingerprint() == fp && topicSyncAuthority(a.store.db, auth, env.From, a.Self().Fingerprint(), env.To, fp) == nil
+		ok := parseErr == nil && found && pending == nil && key.Fingerprint() == fp && blockSyncAuthority(a.store.db, r, env.From, a.Self().Fingerprint(), env.To, fp) == nil
 		if !ok {
 			e = a.store.setOutboxState(env.ID, stateNotDelivered, "block owner or device authority changed", "")
 		}
@@ -319,10 +321,11 @@ func (a *Agent) holdBlocked(ctx context.Context, env envelope.Envelope, in envel
 	return err
 }
 
-// blockedControl reports whether a control outside a group comes from a
-// device of a person this installation's person blocked. Local records only:
-// a person is blocked from a chat with them, so their record is here.
-func (a *Agent) blockedControl(in envelope.Inner, address string, key identity.Public) (bool, error) {
+// blockedSender reports whether a control outside a group, or a device-thread
+// (version 1) message, comes from a device of a person this installation's
+// person blocked. Local records only: a person is blocked from a chat with
+// them, so their record is here.
+func (a *Agent) blockedSender(in envelope.Inner, address string, key identity.Public) (bool, error) {
 	if in.Conv != "" {
 		root, _, found, err := a.store.conversation(in.Conv)
 		if err != nil || found && root.Kind == protocol.ConvKindGroup {
@@ -338,4 +341,8 @@ func (a *Agent) blockedControl(in envelope.Inner, address string, key identity.P
 		return false, err
 	}
 	return personBlocked(a.store.db, me.info.Person, p.info.Person)
+}
+
+func blockSyncAuthority(q dbq, r protocol.BlockSync, from, fromFP, to, toFP string) error {
+	return ownSyncAuthority(q, protocol.ReadSync{Person: r.Person, Roster: r.Roster}, from, fromFP, to, toFP, false)
 }
