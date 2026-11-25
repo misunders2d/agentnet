@@ -100,7 +100,7 @@ const fs = require('node:fs');
       });
       await field.fill('Keep this exact mobile send');
       await composer.getByRole('button',{name:'Send',exact:true}).click();
-      await page.getByText('Message saved on this phone. Open Saved messages at the top to retry.',{exact:true}).waitFor();
+      await page.getByText('Send not confirmed. Saved on this phone; open Saved messages at the top to retry.',{exact:true}).waitFor();
       await page.getByRole('button',{name:'Saved messages (1) · Review',exact:true}).click();
       await page.getByRole('heading',{name:'Saved messages',exact:true}).waitFor();
       const why=page.getByText('Why sending wasn’t confirmed',{exact:true});
