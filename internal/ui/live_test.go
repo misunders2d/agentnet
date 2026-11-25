@@ -48,6 +48,12 @@ func liveWorldHub(t *testing.T) (alice, bob *client.Agent, live *Live, hub *test
 // liveWorldHubAt keeps bob's home at a path the caller chose.
 func liveWorldHubAt(t *testing.T, bobHome string) (alice, bob *client.Agent, live *Live, hub *testhub.Proc) {
 	t.Helper()
+	alice, bob, live, hub, _ = liveWorldHubAtWithStop(t, bobHome)
+	return
+}
+
+func liveWorldHubAtWithStop(t *testing.T, bobHome string) (alice, bob *client.Agent, live *Live, hub *testhub.Proc, stopBob func()) {
+	t.Helper()
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
@@ -70,8 +76,9 @@ func liveWorldHubAt(t *testing.T, bobHome string) (alice, bob *client.Agent, liv
 	run, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { bob.Run(run, client.RunOptions{}); close(done) }()
-	t.Cleanup(func() { stop(); <-done; bob.Close() })
-	return alice, bob, NewLive(bob), hub
+	stopBob = func() { stop(); <-done }
+	t.Cleanup(func() { stopBob(); bob.Close() })
+	return alice, bob, NewLive(bob), hub, stopBob
 }
 
 func waitReview(t *testing.T, l *Live) Overview {
