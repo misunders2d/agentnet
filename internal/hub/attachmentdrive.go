@@ -706,7 +706,11 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 		}
 		delete(inflight, r.id)
 		if errors.Is(r.err, errAttachmentGone) {
-			continue // an erased file is nobody's transfer failure
+			// An erased file is nobody's transfer failure. Its upload has now
+			// closed the file, which Windows would not let an erase remove
+			// while it was open, so erase again.
+			h.eraseDeletedFiles(ctx)
+			continue
 		}
 		if r.err == nil {
 			h.attachmentDrive.mu.Lock()

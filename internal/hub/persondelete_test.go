@@ -147,6 +147,9 @@ func TestPersonDeleteDuringDriveUploadLeavesNoCopy(t *testing.T) {
 	if err := <-copied; err == nil {
 		t.Fatal("an upload of an erased file committed")
 	}
+	// The worker erases again once the cancelled upload has closed the file
+	// (Windows refuses to remove an open file).
+	h.eraseDeletedFiles(t.Context())
 	if _, err := h.store.blob(id); err == nil {
 		t.Fatal("the erased file's row is still there")
 	}
