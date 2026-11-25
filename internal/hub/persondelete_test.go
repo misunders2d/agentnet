@@ -184,12 +184,13 @@ func TestPersonDeleteMidUploadKeepsDriveRunning(t *testing.T) {
 	p.blockPath = ""
 	p.mu.Unlock()
 	close(release)
-	other := b.upload(t, h, a.addr, []byte("someone else's file"))
-	awaitAttachmentState(t, h, other, "remote")
+	// The pass that carried the erased file ends without pausing Drive.
 	status := awaitRelayDriveStatus(t, h, func(s drivecontract.RelayStorageStatus) bool { return !s.Migration.Running })
 	if status.State != "connected" || status.Notice != "" {
 		t.Fatalf("an erased file paused Drive: %+v", status)
 	}
+	other := b.upload(t, h, a.addr, []byte("someone else's file"))
+	awaitAttachmentState(t, h, other, "remote")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := h.store.blob(erased); err != nil {
@@ -204,10 +205,14 @@ func TestPersonDeleteMidUploadKeepsDriveRunning(t *testing.T) {
 	if err := h.store.db.QueryRow(`SELECT file_id FROM relay_drive_blobs WHERE blob_id=?`, other).Scan(&otherID); err != nil {
 		t.Fatal(err)
 	}
+	c, err := h.store.relayDriveConnection(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for fid := range p.files {
-		if fid != "fixture-folder" && fid != otherID {
+		if fid != c.FolderID && fid != otherID {
 			t.Fatalf("Drive copy %s of an erased file remains", fid)
 		}
 	}
