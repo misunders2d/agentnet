@@ -154,7 +154,7 @@ func (a *Agent) SetViewCachesOff(off bool) { a.topicCache.off.Store(off) }
 // "h" through outbox), the Hub's routes, sent reports, and the dirty tables.
 var viewCoverSkip = []string{"sqlite_sequence", "unread_dirty", "view_dirty", "routes", "reported",
 	"agent_model_copies", "attention_mark_copies", "direct_topic_copies", "group_invitation_copies", "own_invitation_copies",
-	"read_mark_copies", "reminder_mark_copies", "topic_location_copies", "topic_mark_copies", "topic_title_copies"}
+	"person_block_copies", "read_mark_copies", "reminder_mark_copies", "topic_location_copies", "topic_mark_copies", "topic_title_copies"}
 
 // viewMessageKey names the chat of the message whose id is col.
 func viewMessageKey(col string) func(string) string {

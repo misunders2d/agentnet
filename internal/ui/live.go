@@ -248,6 +248,9 @@ func (l *Live) buildOverview(listArchived bool, unread *[]UnreadRow) (Overview, 
 	if rs, err := l.reminders(); err == nil {
 		o.Reminders, o.Remind = rs, true
 	}
+	if bs, err := l.a.BlockedPersons(); err == nil {
+		o.Blocked, o.Block = bs, true
+	}
 	o.Files = l.fileLimits()
 	if err := l.dmOverview(&o, unread, mutes); err != nil {
 		return o, err
@@ -417,7 +420,7 @@ func directoryOf(v client.MemberView, self string) Directory {
 		if m.Address == self {
 			continue
 		}
-		e := DirMember{Address: m.Address, Joined: time.Unix(m.Joined, 0)}
+		e := DirMember{Address: m.Address, Joined: time.Unix(m.Joined, 0), Admin: m.Admin}
 		if v.Current {
 			e.Presence, e.Suspended = m.Presence, m.Suspended
 		}

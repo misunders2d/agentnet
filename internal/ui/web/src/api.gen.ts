@@ -400,6 +400,7 @@ export interface DirMember {
   presence: string;
   joined: string;
   suspended?: boolean;
+  admin?: boolean;
 }
 
 export interface Directory {
@@ -877,6 +878,8 @@ export interface Overview {
   notify?: NotifyView;
   reminders?: ReminderView[];
   remind: boolean;
+  blocked?: string[];
+  block?: boolean;
   files?: FileLimits;
   person?: PersonView;
   people: PersonView[] | null;

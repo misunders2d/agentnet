@@ -284,6 +284,7 @@ type enrolledMember struct {
 	person  *protocol.PersonRef // the newest roster step of its person, if any
 	agent   bool                // its newest caps record lists protocol.CapAgent (a hint)
 	version *string             // the version its stream last reported ("": none), if any did
+	admin   bool                // a workspace admin device (a hint for where reports go)
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
@@ -293,7 +294,7 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	// not its last session's: a stream sets last_session on connect, before
 	// that session publishes, and the hint must not flicker on reconnect.
 	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash,
-		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1), a.client_version
+		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1), a.client_version, a.admin
 		FROM agents a LEFT JOIN persons p ON p.person = a.person_id
 		WHERE a.revoked_at IS NULL AND a.pending_person IS NULL ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
@@ -305,7 +306,7 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 		var m enrolledMember
 		var person, hash, caps, version sql.NullString
 		var seq sql.NullInt64
-		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps, &version); err != nil {
+		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps, &version, &m.admin); err != nil {
 			return nil, false, err
 		}
 		if version.Valid {

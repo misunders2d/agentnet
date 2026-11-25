@@ -1815,7 +1815,7 @@ export class Engine {
           if (job.state === "accepted" || descriptor?.state === "delivered") retained.add(id);
         }
       }
-      const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync,wire.SubReminderSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
+      const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync,wire.SubReminderSync,wire.SubBlockSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
       const detail = revoked ? "That device was removed from the server." : "That exact device is no longer one of your devices.";
       for (const row of await this.store.outboxStates(["queued","waiting","receiver_waiting","archive_staged","archive_uploading"], address)) {
         if (retained.has(row.id) || row.recipient_fp !== fingerprint || !revoked && (!sync.has(row.sub) && !children.has(row.id) || row.sub === "history" && row.recipient_admission && !row.group_history)) continue;
@@ -1849,7 +1849,7 @@ export class Engine {
     const own = await this.store.get("kv", "person");
     if (own?.state !== "self") return;
     const book = await this.historyBook(), targets = new Map();
-    const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync,wire.SubReminderSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
+    const sync = new Set(["history", wire.SubHistoryArchive, wire.SubDeviceHistory, wire.SubReadSync, wire.SubRootSync, wire.SubTopicSync, wire.SubTopicStateSync,wire.SubReminderSync,wire.SubBlockSync, wire.SubDirectTopicSync, wire.SubModelSync, wire.SubInvitationSync]);
     for (const row of await this.store.outboxStates(["queued","waiting","receiver_waiting","archive_staged","archive_uploading"])) if (sync.has(row.sub) && row.to && row.recipient_fp && (own.known || []).some(d => d.address === row.to && d.fingerprint === row.recipient_fp)) targets.set(row.to + "/" + row.recipient_fp, {address:row.to,fingerprint:row.recipient_fp});
     for (const job of Object.values(book)) targets.set(job.device + "/" + job.fingerprint, {address:job.device,fingerprint:job.fingerprint});
     for (const job of await this.store.prefix("kv", "history-archive/out/")) targets.set(job.to + "/" + job.recipient_fp, {address:job.to,fingerprint:job.recipient_fp});
@@ -2005,15 +2005,17 @@ export class Engine {
   }
 
   readRef(m) {
-    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubReminderSync,wire.SubDirectTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
+    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubModelSync,wire.SubTopicSync,wire.SubTopicStateSync,wire.SubReminderSync,wire.SubBlockSync,wire.SubDirectTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
     const ref={conv:m.conv||"",fingerprint:m.fp||m.claimed_key||"",lid:m.lid||m.id};
     if(!wire.validFingerprint(ref.fingerprint) || !wire.validID(ref.lid))return null;
     return ref;
   }
   readMarkKey(owner,ref) { return "read-mark/"+owner+"/"+ref.conv+"/"+ref.fingerprint+"/"+ref.lid; }
-  async readSyncAuthority(r,from,fromFP,to,toFP,checks=[]) {
+  // humanRecipient false also admits own agent hosts as recipients (block
+  // marks, client.ownSyncAuthority); the writer is always an own human device.
+  async readSyncAuthority(r,from,fromFP,to,toFP,checks=[],humanRecipient=true) {
     const own=await this.groupRead(checks,"kv","person");
-    if(!own || own.state!=="self" || own.person!==r.person || !own.hashes.includes(r.roster) || from===to || ![[from,fromFP],[to,toFP]].every(([address,fp])=>own.devices.some(d=>d.address===address&&d.fingerprint===fp)&&(own.human_keys||[]).includes(fp)))throw Error("Read sync is only between current own-human devices.");
+    if(!own || own.state!=="self" || own.person!==r.person || !own.hashes.includes(r.roster) || from===to || ![[from,fromFP,true],[to,toFP,humanRecipient]].every(([address,fp,human])=>own.devices.some(d=>d.address===address&&d.fingerprint===fp)&&(!human||(own.human_keys||[]).includes(fp))))throw Error("Read sync is only between current own-human devices.");
     for(const [address,fp] of [[from,fromFP],[to,toFP]]) {
       if(address===this.address&&fp===this.fp)continue;
       const pin=await this.groupRead(checks,"pins",address);
@@ -2214,6 +2216,7 @@ export class Engine {
     this.syncDirectTopics().catch(()=>{});
     this.syncTopicLocations().catch(()=>{});
     this.syncReminders().catch(()=>{});
+    this.syncBlocks().catch(()=>{});
     this.syncTopicMarks().catch(()=>{}); // marks follow every wake names do (connect, own roster, admission)
     this.topicSyncAgain=true;
     if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
@@ -2428,6 +2431,87 @@ export class Engine {
       if(ops.length){await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();}
       if(page.length<64)return;
     }
+  }
+  blockMarkKey(owner,person){return "block-mark/"+owner+"/"+person;}
+  blockMarkCopyKey(fp,owner,person){return "block-mark-copy/"+fp+"/"+this.blockMarkKey(owner,person);}
+  // blockedDevice: the device belongs to a person this person blocked
+  // (client.blockedSender). Local records only.
+  async blockedDevice(address,fingerprint){
+    if(!this.me?.person)return false;
+    const sp=await this.personByDevice(address,fingerprint);
+    return !!sp?.person&&sp.person!==this.me.person&&!!(await this.store.get("kv",this.blockMarkKey(this.me.person,sp.person)))?.blocked;
+  }
+  async blockedPersons(){
+    const own=await this.store.get("kv","person");if(!own?.person)return [];
+    return (await this.store.prefix("kv","block-mark/"+own.person+"/")).filter(m=>m.blocked).map(m=>m.person).sort();
+  }
+  async setBlocked(person,blocked){
+    const checks=[],own=await this.groupRead(checks,"kv","person");if(!this.ownTopicWriter(own))throw Error("Blocking requires your current human device.");
+    if(person===own.person)throw Error("You cannot block yourself.");
+    const key=this.blockMarkKey(own.person,person),old=await this.groupRead(checks,"kv",key);
+    const fact={person,blocked:!!blocked,revision:Math.max(this.now(),(old?.revision||0)+1),writer:this.fp};
+    if(!wire.validBlockMark(fact))throw Error("Choose a person to block or unblock.");
+    await this.store.write([{s:"kv",k:key,v:{...fact,key,owner:own.person}}],checks);
+    this.changed();this.syncBlocks().catch(()=>{});
+    return {note:blocked?"Blocked.":"Unblocked.",person,blocked:!!blocked};
+  }
+  syncBlocks() {
+    this.blockSyncAgain=true;
+    if(!this.blockSyncRun)this.blockSyncRun=(async()=>{do{this.blockSyncAgain=false;try{await this.syncBlockPages();}catch(e){if(e instanceof StoreConflict)this.blockSyncAgain=true;else throw e;}}while(this.blockSyncAgain);})().finally(()=>{this.blockSyncRun=null;});
+    return this.blockSyncRun;
+  }
+  async syncBlockPages() { return this.withHistoryProduction(()=>this.syncBlockPagesUnpaced()); }
+  async syncBlockPagesUnpaced() {
+    const seedChecks=[],own=await this.groupRead(seedChecks,"kv","person");
+    if(!this.ownTopicWriter(own))return;
+    const prefix="block-mark/"+own.person+"/";let after=prefix;
+    for(;;){
+      const page=(await this.store.after("kv",after,64)).filter(r=>r?.key?.startsWith(prefix));if(!page.length)return;after=page.at(-1).key;
+      const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
+      if(!this.ownTopicWriter(current)||current.person!==own.person)return;
+      for(const dev of current.devices){
+        if (!await this.recipientAvailable(dev,checks)) continue;
+        if(!await stateWindow(this.store,dev))continue;
+        if(dev.address===this.address)continue; // own agent hosts too: they hold blocked questions and tasks
+        // A device that cannot read blocks yet keeps one waiting carrier.
+        const pointer="block-mark-carrier/"+current.person+"/"+dev.fingerprint,last=await this.groupRead(checks,"kv",pointer);
+        if(last?.id&&(await this.groupRead(checks,"outbox",last.id))?.state==="waiting")continue;
+        const blocks=[];
+        for(const saved of page){
+          const fact=await this.groupRead(checks,"kv",saved.key);if(!fact)continue;
+          const ck=this.blockMarkCopyKey(dev.fingerprint,current.person,fact.person),copy=await this.groupRead(checks,"kv",ck),row=copy?.id&&await this.groupRead(checks,"outbox",copy.id);
+          if(copy&&!wire.blockMarkNewer(fact,copy)&&!wire.blockMarkNewer(copy,fact)&&(copy.seen||row&&["queued","waiting","custody","delivered","quarantined"].includes(row.state)))continue;
+          const {person,blocked,revision,writer}=fact;blocks.push({person,blocked,revision,writer});
+        }
+        if(!blocks.length)continue;
+        const body=JSON.stringify({v:1,person:current.person,roster:current.hash,blocks}),r=wire.parseBlockSync(body);
+        try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks,false);}catch{continue;}
+        const id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubBlockSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+        ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapReminderSyncV2,sub:wire.SubBlockSync,body,envelope,at,state:"queued",aside:true}},{s:"kv",k:pointer,v:{id}});
+        for(const t of blocks)ops.push({s:"kv",k:this.blockMarkCopyKey(dev.fingerprint,current.person,t.person),v:{...t,id}});
+      }
+      if(ops.length){await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();}
+      if(page.length<64)return;
+    }
+  }
+  async blockSyncGate(rec) {
+    await this.refreshPerson(this.me);const r=wire.parseBlockSync(rec.body);
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp,[],false);
+    const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
+    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapReminderSyncV2))throw Object.assign(Error("This device needs to update AgentNet to synchronize blocked people."),{code:"topic_sync_unsupported"});
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp,[],false);return {why:"",pin};
+  }
+  async admitBlockSync(n,env,pin, admission = null) {
+    const r=wire.parseBlockSync(n.body),checks=[],ops=[];
+    if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Blocks belong to another person.");
+    await this.refreshPerson(this.me, admission ? {...admission,roster:r.roster} : null);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks,false);}catch(e){throw new Hold("invalid",e.message);}
+    for(const t of r.blocks){
+      const k=this.blockMarkKey(r.person,t.person),old=await this.groupRead(checks,"kv",k);
+      if(wire.blockMarkNewer(t,old))ops.push({s:"kv",k,v:{...t,key:k,owner:r.person}});
+      const ck=this.blockMarkCopyKey(pin.fingerprint,r.person,t.person),copy=await this.groupRead(checks,"kv",ck);
+      if(wire.blockMarkNewer(t,copy))ops.push({s:"kv",k:ck,v:{...t,seen:true}});
+    }
+    ops.checks=checks;ops.blockSync=true;ops.syncCarrier=true;return ops;
   }
   async reminderSyncGate(rec) {
     await this.refreshPerson(this.me);const r=wire.parseReminderSync(rec.body);
@@ -4232,6 +4316,7 @@ export class Engine {
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubDirectTopicSync)await this.directTopicSyncGate(rec);
       if(rec.sub===wire.SubReminderSync)await this.reminderSyncGate(rec);
+      if(rec.sub===wire.SubBlockSync)await this.blockSyncGate(rec);
       if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
@@ -4328,6 +4413,7 @@ export class Engine {
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubDirectTopicSync)await this.directTopicSyncGate(rec);
       if(rec.sub===wire.SubReminderSync)await this.reminderSyncGate(rec);
+      if(rec.sub===wire.SubBlockSync)await this.blockSyncGate(rec);
       if(rec.sub===wire.SubTopicStateSync)await this.topicStateSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubModelSync)await this.modelSyncGate(rec);
@@ -4426,6 +4512,7 @@ export class Engine {
     if(rec?.sub===wire.SubTopicSync)return this.topicSyncGate(rec);
     if(rec?.sub===wire.SubDirectTopicSync)return this.directTopicSyncGate(rec);
     if(rec?.sub===wire.SubReminderSync)return this.reminderSyncGate(rec);
+    if(rec?.sub===wire.SubBlockSync)return this.blockSyncGate(rec);
     if(rec?.sub===wire.SubTopicStateSync)return this.topicStateSyncGate(rec);
     if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubModelSync)return this.modelSyncGate(rec);
@@ -7300,7 +7387,7 @@ export class Engine {
     const previous = await this.store.get("held", env.id);
     const detail_code=heldFailureCode(reason,why);
     logical ||= previous?.logical || "";
-    const ops=[{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, ...(admission?.[relayIngress] === env.id ? {relay_ingress:true} : {}), at: previous?.at || this.now(), detail_code, notice_archived:canArchiveHeld(reason) && previous?.reason===reason && (reason==="proof_pending" || (previous?.detail_code||"")===detail_code) && !!previous?.notice_archived, ...(logical ? {logical} : {}) } },
+    const ops=[{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, ...(admission?.[relayIngress] === env.id ? {relay_ingress:true} : {}), at: previous?.at || this.now(), detail_code, notice_archived:reason==="blocked" || canArchiveHeld(reason) && previous?.reason===reason && (reason==="proof_pending" || (previous?.detail_code||"")===detail_code) && !!previous?.notice_archived, ...(logical ? {logical} : {}) } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }],checks=[];
     if(await this.store.get("kv","archive-child/"+env.id))ops.splice(1,1);
     await this.removeReceivePending(data,env,ops,checks);
@@ -7350,7 +7437,7 @@ export class Engine {
       if (this.connected && ops.some(o => o.s === "convs" || o.s === "kv" && o.k.startsWith("group/") && o.v?.context || o.s === "inbox" && o.v?.sub === "event")) {
         this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
       }
-      this.reminderWake();if(ops.reminderSync)this.syncReminders().catch(()=>{});
+      this.reminderWake();if(ops.reminderSync)this.syncReminders().catch(()=>{});if(ops.blockSync)this.syncBlocks().catch(()=>{});
       if(ops.topicSync)this.syncTopicTitles().catch(()=>{});
       if(ops.readSync)this.syncReadMarks().catch(()=>{});
       if(ops.rootSync){this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});}
@@ -7503,6 +7590,7 @@ export class Engine {
     if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin, admission);
     if(n.sub===wire.SubDirectTopicSync)return this.admitDirectTopicSync(n,env,pin,admission);
     if(n.sub===wire.SubReminderSync)return this.admitReminderSync(n,env,pin,admission);
+    if(n.sub===wire.SubBlockSync)return this.admitBlockSync(n,env,pin,admission);
     if(n.sub===wire.SubTopicStateSync)return this.admitTopicStateSync(n,env,pin, admission);
     if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin, admission);
     if(n.sub===wire.SubModelSync)return this.admitModelSync(n,env,pin, admission);
@@ -7515,6 +7603,7 @@ export class Engine {
       status: n.status || "", ...(n.human?{human:n.human}:{}), // captured public consent remains available to later resolution
       attachments: n.attachments.length ? n.attachments : undefined };
     if (n.v === 1) {
+      if (await this.blockedDevice(env.from, pin.fingerprint)) throw new Hold("blocked", "sender is blocked");
       await this.checkDeviceAgent(n, env.from, pin.fingerprint);
       const row = { ...base, ...(n.agent_id ? { agent_id: n.agent_id } : {}), ...(n.target ? { target: n.target } : {}), v: 1, state: n.kind === "question" || n.kind === "task" ? "held" : "" };
       if (isNotice(row)) return this.noticeOps(await this.store.all("inbox"), row); // one card per host (client.supersedeNotices)
@@ -7535,6 +7624,13 @@ export class Engine {
     if (!this.me) throw new Hold("invalid", "this device has no person");
     const senderOwn = this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint);
     const senderPerson = senderOwn ? this.me : await this.personOf(env.from, pin, admission);
+    // A blocked person's direct messages, questions and tasks are held
+    // quietly before any admission (client.holdBlocked).
+    if (!senderOwn && senderPerson?.person && senderPerson.person !== this.me.person) {
+      const mark = await this.store.get("kv", this.blockMarkKey(this.me.person, senderPerson.person));
+      if (admission) admission.checks.push({s:"kv",k:this.blockMarkKey(this.me.person, senderPerson.person),v:mark});
+      if (mark?.blocked) throw new Hold("blocked", "sender is blocked");
+    }
     if (n.human && n.sub!=="event") return this.admitHumanTurn(n, env, pin, base, root, senderPerson, null, admission);
     const external = await this.admitExternal(n, env, pin, base, root, senderPerson, admission);
     if (external) return external;
@@ -8592,7 +8688,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSync, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV2, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -9366,6 +9462,9 @@ export class Engine {
 
   async admitControl(n, env, pin, admission = null) {
     const checks = [];
+    // A blocked person's reactions, edits and other controls outside groups
+    // are held quietly too (client.blockedControl). Local records only.
+    if (!(n.conv && await this.store.get("kv","group/"+n.conv)) && await this.blockedDevice(env.from, pin.fingerprint)) throw new Hold("blocked", "sender is blocked");
     if (n.sub === wire.SubClear) return this.admitClear(n, env, pin, admission); // a person-local act: no membership asked
     if (wire.humanEdit(n)) return this.admitHumanEdit(n, env, pin, admission); // to its turn's captured audience: decided as that turn was
     if(n.conv && await this.store.get("kv","group/"+n.conv))return this.admitGroupControl(n,env,pin);
@@ -10502,10 +10601,10 @@ export class Engine {
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null }, receive_status: await this.receiveStatus(),
-      threads, topics, topic_list: true, schedules: true, remind:true, reminders:(await this.reminders()).map(({state,fact,...r})=>r), review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
+      threads, topics, topic_list: true, schedules: true, remind:true, reminders:(await this.reminders()).map(({state,fact,...r})=>r), block:true, blocked:await this.blockedPersons(), review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
-          .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
+          .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000), ...(m.admin === true ? { admin: true } : {}) })) },
       notify,
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
@@ -13236,6 +13335,16 @@ export class Engine {
     case "/api/person/picture":
       if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>k!=="png") || typeof body.png !== "string") throw Error("Choose a picture.");
       return this.setPersonPicture(body.png);
+    case "/api/person/delete": {
+      // Account deletion (hub/persondelete.go): the relay erases this person;
+      // what this browser holds stays until the workspace is removed here.
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>k!=="person") || !this.me?.person || body.person !== this.me.person) throw Error("Name your own person to delete it.");
+      const out = await this.call("POST", "/v1/person/delete", JSON.stringify({ person: body.person }));
+      return { note: "Your account was deleted.", deleted: out?.deleted || [] };
+    }
+    case "/api/person/block":
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>!["person","blocked"].includes(k)) || !wire.validID(body.person) || typeof body.blocked !== "boolean") throw Error("Choose a person to block or unblock.");
+      return this.setBlocked(body.person, body.blocked);
     case "/api/person/label":
       if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => k !== "label") || typeof body.label !== "string") throw new Error("Choose a display label.");
       return this.renamePerson(body.label);

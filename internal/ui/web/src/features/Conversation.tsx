@@ -22,7 +22,8 @@ import { canContinueTopic, TopicContinuation } from "./Conversation.transfer";
 import { PersonTopics } from "./PersonTopics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
-import { chatList, deviceKind } from "../model";
+import { chatList, deviceKind, personName } from "../model";
+import { BlockedBar, useBlocked } from "./Block";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 
 /** convKey names what a conversation pane shows: a DM or group by its id,
@@ -74,6 +75,9 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     canReply: t ? !t.frozen : th ? !th.key?.pending : false,
   });
   const ctx = useMemo(() => ctxWith(overview), [open.id, t, th, overview, names]);
+  // A blocked person's direct chat shows Unblock in the composer's place.
+  const blockedPeer = t && t.kind !== "group" && t.peer.person && t.peer.person !== overview?.person?.person ? t.peer : undefined;
+  const blocked = useBlocked(blockedPeer?.person);
   // The timeline's messages see the overview only through the fields they read.
   const msgCtx = useMemo(() => ctxWith(msgOverview), [open.id, t, th, msgOverview, names]);
   const hs = useMemo(() => helpers(ctx, (fn) => store.run(fn)), [ctx]);
@@ -130,6 +134,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
         ? <SelectBar count={selected.length} onCancel={() => setSelected(null)} onMove={canInvite || th && !th.key?.pending ? () => setOrganize(true) : undefined}
             onContribute={canInvite ? () => setContribute(true) : undefined}
             onBringIn={() => { store.openInvite(ctx.conv, selected); setSelected(null); }} />
+        : blocked && blockedPeer ? <BlockedBar person={blockedPeer.person!} name={personName(blockedPeer)} />
         : <Composer dm={t ?? undefined} thread={th ?? undefined} />}
       {!wide && !leaving && <RoomSheet />}
       {!leaving && <InviteSheet />}

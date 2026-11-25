@@ -11,7 +11,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconArrowBackUp, IconCopy, IconDots, IconPencil, IconTrash, IconInfoCircle, IconMoodSmile, IconSquareCheck,
-  IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown, IconAlarm,
+  IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown, IconAlarm, IconFlag,
 } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { discardRetainedText, useRetainedText } from "../retained-text";
@@ -42,6 +42,7 @@ export interface Acts {
   reminded?: boolean;         // it has a pending reminder
   topic?:()=>void;
   assign?: () => void;
+  report?: () => void;        // "Report…": someone else's message, to the workspace's admins
 }
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
@@ -98,6 +99,7 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
       {can.remind && acts.remind && render(<IconAlarm size={20} />, acts.reminded ? "Change reminder…" : "Remind me…", acts.remind)}
       {can.edit && render(<IconPencil size={20} />, "Edit", acts.edit)}
       {render(<IconInfoCircle size={20} />, acts.detailsLabel || "Details", acts.details)}
+      {acts.report && render(<IconFlag size={20} />, "Report…", acts.report, true)}
       {can.del && render(<IconTrash size={20} />, "Delete…", acts.del, true)}
     </>
   );
