@@ -133,3 +133,25 @@ func TestBlockSyncAuthorityAndOrder(t *testing.T) {
 		t.Fatalf("own newer block, then a stale unblock: %v", b)
 	}
 }
+
+// A blocked person's message is held with its notice already archived: no
+// view or count reads it as a review notice before a second write.
+func TestBlockedHoldArchivesNoticeInOneWrite(t *testing.T) {
+	w := newWorld(t, "")
+	env := envelope.Envelope{ID: protocol.NewID(), From: w.bob.Address} // holding stores it unopened
+	if _, _, err := w.alice.store.holdCopy(env, "", "", reasonBlocked, "sender is blocked"); err != nil {
+		t.Fatal(err)
+	}
+	if held, shown := quarantinedBlocked(t, w.alice); held != 1 || shown != 0 {
+		t.Fatalf("held %d, shown %d; want 1 held, none shown", held, shown)
+	}
+	if _, _, err := w.alice.store.holdCopy(env, "", "", reasonProof, "that device has no person yet"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.alice.store.holdCopy(env, "", "", reasonBlocked, "sender is blocked"); err != nil {
+		t.Fatal(err)
+	}
+	if held, shown := quarantinedBlocked(t, w.alice); held != 1 || shown != 0 {
+		t.Fatalf("re-held as blocked: held %d, shown %d", held, shown)
+	}
+}

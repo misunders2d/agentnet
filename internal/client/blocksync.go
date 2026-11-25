@@ -19,9 +19,21 @@ import (
 // and tasks are held quietly on every one of the owner's devices. Groups are
 // unchanged. Marks travel only between current own-human devices, like
 // reminder marks (remindersync.go); the newest revision wins.
+// blockSyncSchema: person_blocks marks every view ("v*"), as ViewCoverSchema's
+// fixed-key tables do; ViewCoverSchema is a shipped step, so its triggers are
+// here. person_block_copies is no view's (viewCoverSkip).
 const blockSyncSchema = `
 CREATE TABLE person_blocks(owner TEXT NOT NULL,person TEXT NOT NULL,blocked INTEGER NOT NULL,revision INTEGER NOT NULL,writer TEXT NOT NULL,PRIMARY KEY(owner,person));
 CREATE TABLE person_block_copies(owner TEXT NOT NULL,recipient_fp TEXT NOT NULL,person TEXT NOT NULL,blocked INTEGER NOT NULL,revision INTEGER NOT NULL,writer TEXT NOT NULL,carrier TEXT NOT NULL,PRIMARY KEY(owner,recipient_fp,person));
+CREATE TRIGGER view_person_blocks_in AFTER INSERT ON person_blocks BEGIN
+ INSERT INTO view_dirty SELECT 'v*',(SELECT max(seq)+1 FROM view_dirty) WHERE 1 ON CONFLICT DO UPDATE SET seq=excluded.seq;
+END;
+CREATE TRIGGER view_person_blocks_set AFTER UPDATE ON person_blocks BEGIN
+ INSERT INTO view_dirty SELECT 'v*',(SELECT max(seq)+1 FROM view_dirty) WHERE 1 ON CONFLICT DO UPDATE SET seq=excluded.seq;
+END;
+CREATE TRIGGER view_person_blocks_out AFTER DELETE ON person_blocks BEGIN
+ INSERT INTO view_dirty SELECT 'v*',(SELECT max(seq)+1 FROM view_dirty) WHERE 1 ON CONFLICT DO UPDATE SET seq=excluded.seq;
+END;
 `
 
 // reasonBlocked holds a direct message from a person the owner blocked. It is
@@ -314,11 +326,7 @@ func (a *Agent) mayDeliverBlockSync(env envelope.Envelope) (bool, bool, error) {
 // released by unblocking (as Telegram and WhatsApp drop what a blocked
 // contact sent).
 func (a *Agent) holdBlocked(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, what string) error {
-	if err := a.holdOpened(ctx, what, env, in, sender, reasonBlocked, "sender is blocked"); err != nil {
-		return err
-	}
-	_, err := a.store.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=? AND reason=?`, env.ID, reasonBlocked)
-	return a.store.done(err) // views read the archived notice now, not on a later change
+	return a.holdOpened(ctx, what, env, in, sender, reasonBlocked, "sender is blocked") // held with its notice archived
 }
 
 // blockedSender reports whether a control outside a group, or a device-thread
