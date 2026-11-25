@@ -53,6 +53,8 @@ a contract: AgentNet keeps them on the same elements, and
 | `rail` | The desktop navigation rail |
 | `tabs` | The phone tab bar |
 | `list` | The chat list section |
+| `list-panel` | The desktop list column (`data-hidden` while its rail item hides it; width from `--an-list-width`) |
+| `list-resize` | Its separator: drag, arrow keys (Shift for bigger steps), Home/End, double-click to reset |
 | `list-title` | Its heading (`words.chats`) |
 | `chat-row` | One chat in the list (`data-kind`: agent, group, person…; `data-unread` when unread) |
 | `chat-title-line` | The row's first line: title, then time |
@@ -88,6 +90,16 @@ Prefer tokens over part styles, and part styles over new slots. Never hide a
 control or text with a part style: restyle it. Write part styles outside any
 `@layer`: unlayered rules win over Comic's Tailwind utilities, so no
 `!important` is needed.
+
+Optional layout tokens, read with a fallback so an overlay that leaves them
+out keeps Comic's look:
+
+- `--an-sidebar` (default `--an-canvas`): the desktop list column's
+  background (Office draws it a shade darker than the conversation).
+
+The list column's width (`--an-list-width`) belongs to the person: they drag
+or key the `list-resize` separator, and AgentNet keeps it between 240 and
+480px while leaving the conversation at least 440px. An overlay never sets it.
 
 ## Composer layout
 

@@ -2,6 +2,42 @@
 
 ## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
 
+### MEL-824 and MEL-822 desktop list column: hide, resize, compact
+
+On desktop, clicking the active **Chats** or **Settings** rail item hides its
+list column and clicking again brings it back (`aria-expanded`,
+`aria-controls`); clicking the other one opens its list. Agents, Review and
+Outbox stay full-width workspaces with no list and no toggle. The column stays
+mounted while hidden (`inert`, `aria-hidden`, zero width, its content keeps
+its own width so nothing reflows); Ctrl K (⌘K) brings a hidden chat list
+back with search focused. The open
+conversation and composer stay in the same grid slot. A separator
+(`list-resize`, `role=separator`) on the column's edge takes a drag (pointer
+capture; the grid's `--an-list-width` follows the pointer without a React
+render, one state commit on release), arrow keys (16 px, Shift 48 px),
+Home/End and double-click (reset to 320). Width stays between 240 and 480 px
+and always leaves the conversation 440 px; width and hidden state are kept
+per skin on this device. The phone keeps its tabs and has no separator.
+MEL-822 compaction (Comic's source, so Office and Pulp inherit it): a 320 px
+default list (was 300–360 px), a 68 px rail (was 76), 40 px desktop
+avatars, tighter list padding,
+and the search hint hidden when the column is narrower than 22rem so the
+placeholder stays whole. `--an-sidebar` lets a skin shade the column.
+
+`TestListPanelCollapseResizeRendered` (`listpanel_rendered.cjs`, Chromium,
+1280×720 light, 1024×700 dark, 1920×1080 light, 390×844 touch): with a chat
+open, a draft and an attached file, hide/show, every key step, Home/End
+bounds (max = min(480, width − 508)), a mouse drag that tracks the pointer and
+stops at 240, double-click reset, Settings open/hide and Chats reopen,
+Ctrl K on a hidden list (search focused), each at
+the next frame in 13–63 ms; the same textarea element stays connected with its
+draft and file; Agents has no list column; width and hidden state survive a
+reload; no page error. `TestComicPanelLayout` checks the column's part and
+separator. Screenshots of each desktop size shown and hidden inspected
+(scratch, not committed). Not yet run: WebKitGTK shell, and Classic, Holonet
+and Zoom (standalone gallery skins; their own list needs the same change in
+the gallery repository).
+
 ### MEL-820 invite history: Share messages since
 
 The combined `datetime-local` field became **Share messages since** with
