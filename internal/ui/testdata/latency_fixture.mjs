@@ -979,6 +979,37 @@ try {
     await tap('compose.android-format-apply',control('Bold'),()=>field.value==='**Fixture** draft','formatted selection visible in the draft');
     await tap('compose.android-format-close',control('Formatting'),()=>control('Formatting')?.getAttribute('aria-expanded')==='false'&&!!control('Attach a file'),'tools back in place of the strip');
     await retire();await fill('compose.android-format-reset',field,'Fixture draft');
+    if(window.__agentnetNativeInput===true){
+     // Real taps from UpdaterInstrumentation (screen points, soft keyboard up):
+     // Aa keeps the draft focused/selected, Send in place, and opens visibly
+     // under the existing 1100 ms bound. Synthetic DOM cannot prove focus.
+     const native=async(step,el,ime,now=false)=>{const r=el?.getBoundingClientRect(),seq=globalThis.__anNativeSeq=(globalThis.__anNativeSeq||0)+1;if(el)assert(onScreen(el),'native '+step+' target not on screen');window.__anNativeReply=null;window.__anNativeRequest={seq,step,ime,now,innerWidth,tap:el?{x:r.left+r.width/2,y:r.top+r.height/2}:null};const end=performance.now()+8000;while(window.__anNativeReply?.seq!==seq&&performance.now()<end)await pause(10);const reply=window.__anNativeReply;window.__anNativeRequest=null;window.__anNativeReply=null;assert(reply?.seq===seq,'no native driver reply for '+step);assert(reply.ok===true,'native '+step+' failed: '+JSON.stringify(reply));return reply;};
+     const field=text(),box=field.closest('[data-part="composer"]'),send=box?.querySelector('[data-part="send"]'),proof=reports.androidNativeFormatting={steps:[]};
+     assert(field.value==='Fixture draft'&&box&&shown(send),'exact draft, composer and Send before native Aa');
+     const trusted=[],seen=e=>{if(e.isTrusted)trusted.push({type:e.type,t:performance.now(),field:e.composedPath().includes(field),toggle:!!toggle&&e.composedPath().includes(toggle)});};let toggle=null,focusLoss=0;const lost=()=>{focusLoss++;};
+     for(const type of ['pointerdown','touchstart'])document.addEventListener(type,seen,true);field.addEventListener('blur',lost);
+     try{
+      proof.steps.push(await native('focus',field,'visible'));
+      assert(trusted.some(e=>e.field)&&shadow.activeElement===field,'trusted tap focused the exact draft');
+      const aa=()=>control('Formatting');if(aa()?.getAttribute('aria-expanded')==='true'){aa().click();await until(()=>aa()?.getAttribute('aria-expanded')==='false','Formatting collapsed before the native tap');}
+      field.setSelectionRange(0,7);toggle=aa();assert(toggle&&toggle.getAttribute('aria-expanded')==='false'&&!control('Bold'),'collapsed Formatting toggle before the tap');
+      const rect=el=>{const r=el.getBoundingClientRect();return{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width};},inner=el=>{const c=getComputedStyle(el);return el.clientWidth-parseFloat(c.paddingLeft)-parseFloat(c.paddingRight);},wrap=field.closest('[data-part="composer-field"]'),style=getComputedStyle(field),before={send:rect(send),field:rect(field),wrapWidth:wrap.getBoundingClientRect().width,wrapInner:inner(wrap),boxInner:inner(box),fontSize:style.fontSize,lineHeight:style.lineHeight};
+      focusLoss=0;const from=trusted.length;let shownAt=null;const watch=()=>{if(shownAt===null&&aa()?.getAttribute('aria-expanded')==='true'&&onScreen(control('Bold')))shownAt=performance.now();else if(shownAt===null)requestAnimationFrame(watch);};requestAnimationFrame(watch);
+      proof.steps.push(await native('toggle',toggle,'visible',true));
+      await until(()=>shownAt!==null,'formatting choices visible after the trusted Aa tap',1100);await pause(500);
+      proof.steps.push(await native('verify',null,'visible',true));
+      const input=trusted.slice(from).find(e=>e.toggle),after={send:rect(send),field:rect(field)};
+      Object.assign(proof,{before,after,inputs:trusted.slice(from).map(({type,field,toggle})=>({type,field,toggle})),feedbackMs:input?shownAt-input.t:null,focusLoss,selection:[field.selectionStart,field.selectionEnd],activeIsField:shadow.activeElement===field});
+      assert(input&&!trusted.slice(from).some(e=>e.field),'trusted input reached the exact Aa toggle only');
+      assert(proof.feedbackMs>=0&&proof.feedbackMs<1100,'Aa visible feedback within the existing under-1100-ms bound');
+      assert(focusLoss===0&&proof.activeIsField&&field.selectionStart===0&&field.selectionEnd===7&&field.value==='Fixture draft','Aa kept draft focus, exact selection and text');
+      assert(['left','top','right','bottom'].every(k=>Math.abs(after.send[k]-before.send[k])<=1),'Send did not move when Aa opened');
+      assert(before.fontSize==='16px'&&before.send.top>=before.field.bottom-1&&before.field.width>=before.wrapInner-1&&before.wrapWidth>=before.boxInner-1,'full-width 16px draft above the Send row');
+      aa().click();await until(()=>aa()?.getAttribute('aria-expanded')==='false','Formatting collapses again');field.blur();
+      proof.steps.push(await native('restore',null,'hidden'));
+     }finally{for(const type of ['pointerdown','touchstart'])document.removeEventListener(type,seen,true);field.removeEventListener('blur',lost);}
+     await retire();
+    }
    }
    await tap('compose.mention-open',control('Mention someone'),()=>!!active('[role="listbox"]'),'mention choices visible');
    const option=active('[role="option"]');if(option)await tap('compose.mention-pick',option,()=>text().value.includes('@'),'selected mention inserted in draft');
