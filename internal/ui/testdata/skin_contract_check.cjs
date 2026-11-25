@@ -21,6 +21,9 @@
 const fs = require('fs'), path = require('path'), http = require('http'), crypto = require('crypto'), assert = require('node:assert/strict');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
 const [target, ...dirs] = process.argv.slice(2);
+// Opens a rail section: on the desktop, clicking the item already open hides
+// its list (MEL-824), so an open section with its list showing is left as is.
+const openSection = async (b) => { if (await b.getAttribute('aria-current') === 'page' && await b.getAttribute('aria-expanded') === 'true') return; await b.click(); };
 if (!target || !dirs.length) { console.error('usage: skin_contract_check.cjs DAEMON_URL SKIN_DIR...'); process.exit(2); }
 const daemon = new URL(target), token = daemon.searchParams.get('t');
 const hostModules = Object.fromEntries(['typing.mjs', 'core.css', 'skin-base.css'].map(name => ['/assets/' + name, path.join(__dirname, '..', 'static', name)]));
@@ -230,7 +233,7 @@ const journeys = {
     await staysModal(page, 'dialog', 'the trust sheet');
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'detached' });
-    await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }).click();
+    await openSection(page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }));
     await listTitle.waitFor();
     // The demo has retained legacy threads, not a concrete agent catalog.
     // They stay out of current chats. An explicit host history link can still
@@ -264,7 +267,7 @@ const journeys = {
     // The demo has no file limits; host.stage is walked in the company world.
     const back = page.getByRole('button', { name: 'Back to chats', exact: true });
     if (await back.isVisible()) await back.click();
-    else await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }).click();
+    else await openSection(page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }));
     await row(human).click();
     await page.locator('[data-mid="' + human.id + '"]').waitFor();
     await page.getByRole('button', { name: 'New topic' }).click();
