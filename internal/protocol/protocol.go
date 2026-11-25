@@ -231,6 +231,18 @@ type RevokePersonResponse struct {
 	Revoked []string `json:"revoked"`
 }
 
+// DeletePersonRequest erases the caller's own person from the relay (Google
+// Play account deletion; docs/DECISIONS.md, November 25, 2026). Person must
+// be the caller's own, named again as confirmation.
+type DeletePersonRequest struct {
+	Person string `json:"person"`
+}
+
+// DeletePersonResponse lists the devices deleted with the person.
+type DeletePersonResponse struct {
+	Deleted []string `json:"deleted"`
+}
+
 // Receipt reports what the Hub can prove about a message.
 const StreamReceipts = "receipts"
 const ReceiptBatch = 100

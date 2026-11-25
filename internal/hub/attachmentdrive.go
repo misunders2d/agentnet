@@ -196,6 +196,7 @@ func (h *Hub) initAttachmentDrive() error {
 	d.cancel = cancel
 	go h.runAttachmentDrive(ctx)
 	d.signal()
+	go h.eraseDeletedFiles(ctx) // deleted accounts' files left by an earlier run
 	return nil
 }
 func (d *relayDrive) signal() {

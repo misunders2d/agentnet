@@ -75,6 +75,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/invites/revoke", h.handleInviteRevoke)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/person/revoke", h.handlePersonRevoke)
+	mux.HandleFunc("POST /v1/person/delete", h.handlePersonDelete) // persondelete.go: the person's own erase
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
 	mux.HandleFunc("PUT /v1/admin/workspace", h.handleWorkspacePut) // hub/workspace.go; the name rides the member list
@@ -462,6 +463,8 @@ func writeRevokedAgent(w http.ResponseWriter, a agent) {
 		writeError(w, http.StatusForbidden, protocol.CodeLinkRefused, "the device link was refused")
 	case "expired":
 		writeError(w, http.StatusForbidden, protocol.CodeLinkExpired, "nobody approved the device link in time")
+	case "deleted":
+		writeError(w, http.StatusForbidden, protocol.CodeRevoked, "this account was deleted")
 	default:
 		writeError(w, http.StatusForbidden, protocol.CodeRevoked, "agent revoked")
 	}
