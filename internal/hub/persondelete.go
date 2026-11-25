@@ -68,7 +68,7 @@ func (h *Hub) handlePersonDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.lookAgain()
 	h.waiters.notifyAll()
-	go h.eraseDeletedFiles(context.Background())
+	h.attachmentDrive.signal() // its worker erases their files, Drive copies first
 	h.cfg.Logf("person %s deleted their account (%d devices)", req.Person, len(addresses))
 	writeJSON(w, http.StatusOK, protocol.DeletePersonResponse{Deleted: addresses})
 }
@@ -193,7 +193,8 @@ func (s *store) deletePerson(caller, person string) ([]string, []string, error) 
 			return nil, nil, err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE invites SET expires_at=0 WHERE person=? AND used_by IS NULL`, person); err != nil {
+	// Unused invitations go: their device links and any they created.
+	if _, err := tx.Exec(`UPDATE invites SET expires_at=0 WHERE used_by IS NULL AND (person=? OR created_by IN `+in+`)`, append([]any{person}, args...)...); err != nil {
 		return nil, nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM google_people WHERE person=?`, person); err != nil {
@@ -287,8 +288,8 @@ const blobDeleted = "deleted"
 
 // eraseDeletedFiles removes deleted persons' stored files: the Drive copy
 // first when the relay offloaded one, then the local files, then the row. A
-// file that cannot be removed yet stays marked for the next pass, at the
-// next start or deletion.
+// file that cannot be removed yet stays marked for the next pass: the Drive
+// worker runs this on every wake (start, account deletion, new upload).
 func (h *Hub) eraseDeletedFiles(ctx context.Context) {
 	rows, err := h.store.db.QueryContext(ctx, `SELECT b.id,b.sha256,b.size,coalesce(d.file_id,'') FROM blobs b LEFT JOIN relay_drive_blobs d ON d.blob_id=b.id WHERE b.state=?`, blobDeleted)
 	if err != nil {

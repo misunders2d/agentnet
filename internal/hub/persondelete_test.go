@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/drivecontract"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -25,6 +26,9 @@ func TestPersonDeleteErasesOwnAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := h.store.db.Exec(`INSERT INTO google_people(email,subject,person) VALUES('owner@example.test','s',?)`, person.Person); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.db.Exec(`INSERT INTO invites(secret_hash,label,admin,expires_at,created_by) VALUES('owner-made','guest',0,?,?)`, time.Now().Add(time.Hour).Unix(), owner.addr); err != nil {
 		t.Fatal(err)
 	}
 	if code, body := owner.call(t, h, "POST", "/v1/person/delete", protocol.DeletePersonRequest{Person: protocol.NewID()}); code != 403 {
@@ -57,6 +61,10 @@ func TestPersonDeleteErasesOwnAccount(t *testing.T) {
 	var google int
 	if err := h.store.db.QueryRow(`SELECT count(*) FROM google_people WHERE person=?`, person.Person).Scan(&google); err != nil || google != 0 {
 		t.Fatalf("Google mapping kept: %d %v", google, err)
+	}
+	var invite int64
+	if err := h.store.db.QueryRow(`SELECT expires_at FROM invites WHERE secret_hash='owner-made'`).Scan(&invite); err != nil || invite != 0 {
+		t.Fatalf("an unused invitation they created stays valid: %d %v", invite, err)
 	}
 	if _, ok, err := personHeadIn(h.store.db, person.Person); err != nil || !ok {
 		t.Fatalf("the signed chain must stay: %v %v", ok, err)
@@ -146,6 +154,60 @@ func TestPersonDeleteDuringDriveUploadLeavesNoCopy(t *testing.T) {
 	defer p.mu.Unlock()
 	for fid := range p.files {
 		if fid != "fixture-folder" {
+			t.Fatalf("Drive copy %s of an erased file remains", fid)
+		}
+	}
+}
+
+// With the Drive worker running, a file erased mid-upload neither pauses
+// Drive nor stops other people's transfers, and its copy does not remain.
+func TestPersonDeleteMidUploadKeepsDriveRunning(t *testing.T) {
+	p := newRelayDriveProvider(t)
+	h, a, b, _ := attachmentDriveHub(t, p, false)
+	connectRelayDriveFixture(t, h, a)
+	p.mu.Lock()
+	p.blockPath = "/files"
+	p.blocked = make(chan struct{}, 1)
+	p.release = make(chan struct{})
+	blocked, release := p.blocked, p.release
+	p.mu.Unlock()
+	erased := a.upload(t, h, b.addr, []byte("a file whose owner deletes the account mid-upload"))
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not reach the provider")
+	}
+	if _, err := h.store.db.Exec(`UPDATE blobs SET state=? WHERE id=?`, blobDeleted, erased); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.blockPath = ""
+	p.mu.Unlock()
+	close(release)
+	other := b.upload(t, h, a.addr, []byte("someone else's file"))
+	awaitAttachmentState(t, h, other, "remote")
+	status := awaitRelayDriveStatus(t, h, func(s drivecontract.RelayStorageStatus) bool { return !s.Migration.Running })
+	if status.State != "connected" || status.Notice != "" {
+		t.Fatalf("an erased file paused Drive: %+v", status)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := h.store.blob(erased); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the erased file was not erased")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	var otherID string
+	if err := h.store.db.QueryRow(`SELECT file_id FROM relay_drive_blobs WHERE blob_id=?`, other).Scan(&otherID); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for fid := range p.files {
+		if fid != "fixture-folder" && fid != otherID {
 			t.Fatalf("Drive copy %s of an erased file remains", fid)
 		}
 	}

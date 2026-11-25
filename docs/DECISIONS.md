@@ -1130,8 +1130,10 @@ All were read on November 25.
   device of the person (agent hosts included) with reason `deleted`,
   expires their custody, empties the stored ciphertext of every message to
   or from them, and marks their files `deleted` (never served again).
-  The relay erases those files in the background, the Drive copy first, and
-  retries after a failure or restart.
+  The Drive worker erases those files, the Drive copy first, on every wake
+  (start, deletion, new upload), so a failure is retried then. Unused
+  invitations go too: the person's device links and any member invitations
+  their devices created.
 - An upload to Drive that finishes after the deletion commits nothing and
   deletes its own Drive copy. Known limit: if that delete fails, the copy
   stays on Drive untracked and only the log names it.

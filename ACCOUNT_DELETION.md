@@ -27,11 +27,12 @@ not run workspace relays and cannot reach them.
 
 ## What is deleted
 
-On the relay, at once:
+On the relay:
 
 - your profile picture;
-- files you sent, including copies the relay keeps in its operator's cloud
-  storage, such as Google Drive;
+- files you sent. They stop being available at once. The relay then erases
+  them in the background, including copies it keeps in its operator's cloud
+  storage such as Google Drive, and tries again later if that fails;
 - messages you sent or were sent that were not yet delivered, and the
   encrypted copies of every message to or from you;
 - your link to Google sign-in, invitations you created that were not used,
@@ -46,8 +47,12 @@ On the relay, at once:
   public keys. Other members' apps use this record to verify messages you
   sent before, and the relay uses it to refuse the deleted devices. It is
   kept for security for as long as the workspace exists.
-- **Delivery records without content**: who sent a message to whom, when,
-  and its size. The relay needs these for delivery receipts.
+- **Delivery records without content**: who sent a message to whom, and
+  when it was sent and delivered. The relay needs these for delivery
+  receipts.
+- **The workspace's Google access list**: if your workspace admits people
+  by Google email address, your address stays on the admin's list until an
+  admin removes it.
 - **Copies already delivered**: messages and files you sent stay on the
   devices of the people who received them. Your own devices keep their
   copies until you remove the app or its data.

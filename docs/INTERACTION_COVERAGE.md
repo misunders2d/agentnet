@@ -59,11 +59,14 @@ choice; checking a counterpart remains open.
 dark with touch. Click to DOM: sheet opens 117-200 ms, "Deleting…" 53-79 ms,
 failure 5-31 ms after release, deleted state 46-51 ms. Relay:
 `TestPersonDeleteErasesOwnAccount`, `TestPersonDeleteRefusesLastAdmin`,
-`TestPersonDeleteDuringDriveUploadLeavesNoCopy`, `TestUpgradeBackupsAgeOut`.
+`TestPersonDeleteDuringDriveUploadLeavesNoCopy`,
+`TestPersonDeleteMidUploadKeepsDriveRunning`, `TestUpgradeBackupsAgeOut`.
+Go client against a test relay: `TestDeleteAccountRevokesOwnDevices`.
 
 **Not covered.** Comic styling (the fixture has no theme), the real Profile
-page and a real relay round trip from the app. The browser engine's
-`/api/person/delete` route has no engine test yet.
+page, the desktop host handler (`liveaccountdelete.go`) and the browser
+engine's `/api/person/delete` route. What the app shows after its own device
+is revoked is not checked.
 
 ## MEL-612 Block a person — covered, November 25, 2026
 
