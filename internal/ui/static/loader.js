@@ -206,6 +206,24 @@
   // The release serving this page, as its overviews say (host.api below), and
   // the gallery's release comparison once its module has loaded.
   let runningVersion = "", newerRelease = null, updateGallerySkins = () => {};
+  // galleryUpdated: what the open skin does once this page's gallery update
+  // stored new versions (set after the skin mounts; MEL-819).
+  let galleryUpdated = () => {}, galleryStored = [];
+  // Writes this page has under way through any workspace's host: API
+  // requests with a body, staged uploads, video preparation and Drive
+  // uploads. A skin update waits for none of them to be running.
+  let writing = 0;
+  const writeSettled = new Set();
+  const tracked = (fn) => (...args) => {
+    writing++;
+    let done = false;
+    const settle = () => { if (done) return; done = true; writing--; for (const f of [...writeSettled]) { try { f(); } catch (_) { /* its own */ } } };
+    try {
+      const r = fn(...args);
+      if (r && typeof r.then === "function") { r.then(settle, settle); return r; }
+      settle(); return r;
+    } catch (e) { settle(); throw e; }
+  };
   const { browserBackNavigation } = await import("/assets/browser-back.mjs");
   const onBack = window.__agentnetPlatform === "android" ? window.__agentnetOnBack : !nativeAppJSON ? browserBackNavigation() : undefined;
   const common = {
@@ -270,7 +288,7 @@
     updateGallerySkins = () => {
       if (started || !runningVersion) return;
       started = true; // once per page; the next open checks again
-      updateInstalled(common.gallery).catch(() => { /* offline or unsupported: next open */ });
+      updateInstalled(common.gallery).then((ids) => { if (ids.length) { galleryStored = ids; galleryUpdated(ids); } }).catch(() => { /* offline or unsupported: next open */ });
     };
   } catch (_) { /* a program without it: import still works */ }
 
@@ -325,8 +343,9 @@
   const hostFor = (id) => {
     const bound = shell ? shell.bind(id) : single;
     const wid = bound.workspace.id;
+    const write = tracked((path, body) => bound.api(path, body));
     const api = async (path, body) => {
-      const r = await bound.api(path, body);
+      const r = await (body === undefined ? bound.api(path, body) : write(path, body));
       // Any overview read (with or without query) proves this membership's
       // identity for reconnect and names it in the switcher.
       if (body === undefined && path.split("?")[0] === "/api/overview" && r) {
@@ -338,7 +357,10 @@
     };
     const controls = { open(trigger) { if (window.agentnet === host) bar?.open(trigger); },
       claim(root) { return window.agentnet === host && root === controlsRoot && root.isConnected ? bar.claim() : () => {}; } };
-    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, nativeFileDrop && bound.platform === "daemon" ? { onFileDrop: handler => nativeFileDrop(drop => window.agentnet === host && handler(drop)) } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
+    const writes = { ...(typeof bound.stage === "function" ? { stage: tracked((...a) => bound.stage(...a)) } : {}),
+      ...(typeof bound.prepareVideo === "function" ? { prepareVideo: tracked((...a) => bound.prepareVideo(...a)) } : {}),
+      ...(bound.drive && typeof bound.drive.driveUpload === "function" ? { drive: Object.freeze({ ...bound.drive, driveUpload: tracked((...a) => bound.drive.driveUpload(...a)) }) } : {}) };
+    const host = Object.freeze(Object.assign({}, bound, common, writes, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, nativeFileDrop && bound.platform === "daemon" ? { onFileDrop: handler => nativeFileDrop(drop => window.agentnet === host && handler(drop)) } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
     return host;
   };
   // rebind: this computer's program restarted and retired the membership's
@@ -369,7 +391,7 @@
   const button = (label, fn, cls) => { const b = text("button", label, "btn" + (cls ? " " + cls : "")); b.type = "button"; b.onclick = fn; return b; };
   const link = (href, into) => new Promise((resolve, reject) => {
     const l = document.createElement("link"); l.rel = "stylesheet"; l.href = href;
-    l.onload = resolve; l.onerror = () => reject(new Error("Could not load " + href));
+    l.onload = () => resolve(l); l.onerror = () => reject(new Error("Could not load " + href));
     into.append(l);
   });
   const card = (into, { title, lines, actions, mark, alert }) => {
@@ -481,7 +503,7 @@
     if (selected.local) await localSkins.activate();
     // Versions a gallery update replaced, except the one this page opens.
     if (localSkins) localSkins.prune(selected.local ? [selected.digest] : []).catch(() => { /* next open */ });
-    const base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
+    let base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
     if (selected.document) {
       // A failure seen before the skin mounts stops it, as always; the rules
       // arriving after DOCUMENT_WAIT are adopted then, and a late failure
@@ -494,24 +516,25 @@
     surface = page.attachShadow({ mode: "open" });
     // The host's base sheet (core.css, lowest layer), then the package's own.
     await link("/assets/skin-base.css", surface);
-    if (selected.style) await link(base + selected.style, surface);
-    const module = await import(base + selected.entry);
+    let sheet = selected.style ? await link(base + selected.style, surface) : null;
+    let module = await import(base + selected.entry);
     if (typeof module.mount !== "function") throw new Error("This skin has no mount function");
 
     // mountSkin gives the skin a fresh root over the host of the workspace
     // shown now. On a workspace switch (or a rebind) it is mounted again:
     // unmount first, and what it held for the old membership goes out with
     // its root; operations it started keep the host they started with.
-    let root = null, mounting = Promise.resolve();
+    let root = null, rootModule = null, mounting = Promise.resolve();
     const mountSkin = async () => {
       bar?.reset(); controlsRoot = null;
       openHandler = null; openKinds = new Set();
-      if (root) { if (typeof module.unmount === "function") { try { await module.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
+      if (root) { if (rootModule && typeof rootModule.unmount === "function") { try { await rootModule.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
       root = document.createElement("div");
       root.id = "skin";
       root.className = "skin-root";
       surface.append(root);
       controlsRoot = root;
+      rootModule = module; // the package that draws this root, whose unmount it gets
       await module.mount(root, window.agentnet);
       if (!openHandler) throw new Error("This skin must register notification handling with host.onOpen");
     };
@@ -526,6 +549,86 @@
     remount = () => (mounting = mounting.then(mountSkin).catch(failed));
     await mountSkin();
     if (shell) shell.onChange(() => { remount(); });
+
+    // ---- a gallery update of the skin shown now (MEL-819)
+    //
+    // This open's gallery check (updateGallerySkins) can store a newer
+    // version of the very skin on screen. That version opens here, with the
+    // same skin selected, instead of only at the next open: only when its
+    // exact digest is trusted (an update keeps the trust given to the version
+    // it replaced; anything else asks at the next open as before) and this
+    // AgentNet is new enough for it. It is mounted again the way a workspace
+    // switch mounts it, so the skin keeps its open chat, drafts and attached
+    // files in its workspace's state. It waits while that would interrupt
+    // anything: a write or upload under way, a pressed pointer, a dialog or
+    // menu open, or typing in a field of a visible page; each of those
+    // ending tries again (events, never a timer). Without a workspace to keep
+    // that state in, the next open shows it. If the new version cannot load
+    // or mount, the version that was running is mounted again; nothing is
+    // retried and nothing stored is removed until a later open.
+    if (selected.local && workspaces && workspaces.state) {
+      let pending = null, pressed = false, finished = false;
+      const editing = () => { const a = surface.activeElement; return !!a && (a.isContentEditable || !!a.matches?.('input, textarea, select, [role="textbox"]')); };
+      const foreground = () => !!root && [...root.querySelectorAll('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')].some((el) => el.getClientRects().length > 0);
+      const busy = () => writing > 0 || !!rebinding || pressed || foreground() || (document.visibilityState === "visible" && editing());
+      const listen = [["pointerdown", () => { pressed = true; }], ["pointerup", () => { pressed = false; attempt(); }], ["pointercancel", () => { pressed = false; attempt(); }],
+        ["focusout", () => setTimeout(attempt)], ["keyup", () => attempt()], ["visibilitychange", () => attempt()]];
+      const inside = [["animationend", () => attempt()], ["transitionend", () => attempt()]];
+      const stop = () => {
+        finished = true; pending = null;
+        for (const [k, f] of listen) document.removeEventListener(k, f, true);
+        for (const [k, f] of inside) surface.removeEventListener(k, f, true);
+        writeSettled.delete(attempt);
+      };
+      // attempt runs on those events; it swaps at most once per page.
+      const attempt = () => {
+        if (!pending || finished || busy()) return;
+        const { next, nextBase, nextSheet, nextModule } = pending;
+        stop();
+        mounting = mounting.then(async () => {
+          const was = { module, sheet, base, selected };
+          if (was.sheet) was.sheet.media = "not all";
+          if (nextSheet) nextSheet.media = "";
+          module = nextModule; sheet = nextSheet; base = nextBase; selected = next;
+          try {
+            await mountSkin();
+            was.sheet?.remove();
+          } catch (_) {
+            module = was.module; sheet = was.sheet; base = was.base; selected = was.selected;
+            nextSheet?.remove();
+            if (was.sheet) was.sheet.media = "";
+            await mountSkin();
+          }
+        }).catch(failed);
+      };
+      galleryUpdated = async () => {
+        if (finished || pending) return;
+        const next = common.skins.find((s) => s.id === selected.id && s.local);
+        if (!next || next.digest === selected.digest || next.api !== 1) return;
+        if (next.agentnet && newerRelease && newerRelease(next.agentnet, runningVersion)) return;
+        let stored = null;
+        try { stored = localStorage.getItem("agentnet.skin.trusted." + next.id); } catch (_) { /* asks at the next open */ }
+        if (!isTrusted(next, stored)) return;
+        finished = true; // one try per page, whatever happens next
+        const nextBase = "/local-skins/" + next.digest + "/";
+        let nextSheet = null;
+        try {
+          if (next.document) { const rules = adoptDocument(nextBase + next.document, nextBase); rules.catch(() => {}); await within(rules, DOCUMENT_WAIT); }
+          // Loaded now, applied only when it opens: the running version keeps its look.
+          if (next.style) { nextSheet = document.createElement("link"); nextSheet.rel = "stylesheet"; nextSheet.media = "not all"; nextSheet.href = nextBase + next.style;
+            await new Promise((resolve, reject) => { nextSheet.onload = resolve; nextSheet.onerror = () => reject(new Error("Could not load " + nextSheet.href)); surface.append(nextSheet); }); }
+          const nextModule = await import(nextBase + next.entry);
+          if (typeof nextModule.mount !== "function") throw new Error("This skin has no mount function");
+          finished = false;
+          pending = { next, nextBase, nextSheet, nextModule };
+          for (const [k, f] of listen) document.addEventListener(k, f, true);
+          for (const [k, f] of inside) surface.addEventListener(k, f, true);
+          writeSettled.add(attempt);
+          attempt();
+        } catch (_) { nextSheet?.remove(); /* the running version stays; the next open opens the stored one */ }
+      };
+      if (galleryStored.length) galleryUpdated(galleryStored); // stored while the skin was mounting
+    }
 
     // A notification's destination: #conv=<64 hex>, #msg=<32 hex>[&conv=…][&dir=in|out]
     // or #review, each with an optional &workspace=<id>. The workspace must

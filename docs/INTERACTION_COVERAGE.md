@@ -1,5 +1,38 @@
 # Next-release interaction coverage and responsiveness
 
+## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
+
+### MEL-819 gallery update of the skin on screen opens in place
+
+Owner report: after an update, the selected Office or Pulp still looked like
+the old version until a switch to Comic and back. The once-per-open gallery
+update stored the new package after the page had mounted the old digest.
+Reused: the host's own workspace remount (unmount, fresh root, mount over the
+same host), which Comic already uses to keep its open chat, drafts and File
+objects in `workspaces.state`; Comic's own "reload once nothing unsent would be
+lost" rule for new AgentNet versions, here as host-level event-driven waits.
+Trust, digest and version checks are the open's own (`skin-choice.mjs`
+`trusted`, `skin-gallery.mjs` `newer`).
+
+`TestGallerySkinUpdateActivatesRendered` (`skin_gallery_activate_rendered.cjs`,
+Chromium, WorkspaceHandler fixture, desktop light 1440 and Android-width dark
+412 with touch) installs Comic's real package as gallery "Pulp" v1, trusts and
+selects it, and holds the gallery's answer for v2 until a chat is open with a
+draft and an attached file and the field has focus:
+- v2 is stored and trusted while v1 stays on screen; typing during the pending
+  update shows in 7–10 ms;
+- leaving the field with a held `host.api` write keeps v1 until the write
+  settles; v2 then opens 72–133 ms later, Pulp still selected, only v2's
+  stylesheet applied, the same chat open, draft text and file kept, no page
+  error;
+- bad bytes, gallery offline (503), a version needing v99, a stored version
+  whose digest the person never trusted, and a version whose mount throws
+  each keep the running version with no failure card; only the last two are
+  stored.
+Before the change the same script fails at "v2 prepared beside v1" (the old
+loader never opens the stored version). Not yet run: the real Android
+WebView and the WebKitGTK app; Office/Pulp gallery builds need no change.
+
 ## MEL-777 remote follow-up before a running status arrives
 
 Two ordinary tagged asks from the same requester reach a disposable group
