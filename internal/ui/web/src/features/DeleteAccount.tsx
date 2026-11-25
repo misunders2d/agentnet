@@ -34,7 +34,7 @@ export function DeleteAccount({ person }: { person: T.PersonView }) {
         <p>This workspace’s server erased you. All your devices are signed out of it.</p>
         <Hint>Messages and files on this device stay until you remove the workspace or the app. Copies other people already received stay with them.</Hint>
       </div> : <form onSubmit={submit} className="space-y-3">
-        <p>The server erases your picture, your files, your messages that were not delivered yet, your Google sign-in link and your invitations. All your devices and assistants lose access.</p>
+        <p>The server erases your picture, your files, its encrypted copies of your messages, your Google sign-in link and your invitations. All your devices and assistants lose access.</p>
         <p>Your name stays in the signed record that keeps past group history verifiable, marked deleted. Copies people already received stay with them.</p>
         <Hint><a href={accountDeletionURL} target="_blank" rel="noreferrer" className="underline">What is deleted and what is kept</a></Hint>
         <label className="block font-semibold">Type DELETE to confirm

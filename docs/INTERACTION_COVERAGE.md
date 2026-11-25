@@ -35,6 +35,37 @@ real Store, `ReportSheet` and `Toasts` with a fixture host, in Chromium at
 **Not covered.** The fixture page has no skin styling. The real menu items,
 Comic styling and a real relay are not covered by this test.
 
+## MEL-612 Delete account — covered, November 25, 2026
+
+**Entry point.** Settings → Profile → "Delete account…", on every engine.
+
+**What happens.**
+- The sheet says what the server erases and what stays, links
+  ACCOUNT_DELETION.md and enables "Delete my account" only after DELETE is
+  typed (any case).
+- Delete shows "Deleting your account…" at once. While the relay works the
+  sheet stays open and cannot resubmit.
+- On failure: "Your account was not deleted: …" with Try again. On success:
+  "Your account was deleted", the local-copies note, and the Profile button
+  becomes a disabled "Account deleted".
+
+**Counterpart: observed, not code-inspected.** Telegram (Settings → Privacy
+→ Delete my account) and WhatsApp (Settings → Account → Delete account) ask
+for a typed or entered confirmation, warn that it cannot be undone and show
+the result. AgentNet does the same; the relay erase itself is AgentNet's.
+
+**Evidence.** `TestDeleteAccountRendered`
+(`testdata/delete_account_rendered.cjs`) uses the real Store and
+`DeleteAccount` with a fixture host, in Chromium at 1280 px light and 390 px
+dark with touch. Click to DOM: sheet opens 117-200 ms, "Deleting…" 53-79 ms,
+failure 5-31 ms after release, deleted state 46-51 ms. Relay:
+`TestPersonDeleteErasesOwnAccount`, `TestPersonDeleteRefusesLastAdmin`,
+`TestPersonDeleteDuringDriveUploadLeavesNoCopy`, `TestUpgradeBackupsAgeOut`.
+
+**Not covered.** Comic styling (the fixture has no theme), the real Profile
+page and a real relay round trip from the app. The browser engine's
+`/api/person/delete` route has no engine test yet.
+
 ## MEL-612 Block a person — covered, November 25, 2026
 
 **Entry points.** "Block <name>…" (or "Unblock <name>") sits in a direct
