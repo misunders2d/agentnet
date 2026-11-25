@@ -267,7 +267,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapReminderSync, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSyncV2, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
+var ownCaps = []string{protocol.CapMentionReaction, protocol.CapProactiveAgent, protocol.CapAgentOrganization, protocol.CapConversationAudience, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapDirectTopicSync, protocol.CapEnv2, protocol.CapRequestSteer, protocol.CapGroupInvitationManage, protocol.CapGuestAgent, protocol.CapHistoryArchive, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSyncV2, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSyncV2, protocol.CapReminderSyncV2, protocol.CapConversationResources, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTopicStateSyncV2, protocol.CapSharedTopicTitle, protocol.CapTyping} // apx1 and aid1 are already implied by rm1.
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -1322,7 +1322,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			// reactions, version 1 progress, deletions) have no person gate:
 			// only what the reader's signed capabilities read.
 			case w.conv == "",
-				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync || w.required == protocol.CapTopicStateSyncV2 || w.required == protocol.CapReminderSync,
+				w.required == protocol.CapModelSync || w.required == protocol.CapModelSyncV2 || w.required == protocol.CapReadSync || w.required == protocol.CapReadSyncV2 || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3 || w.required == protocol.CapDirectTopicSync || w.required == protocol.CapTopicStateSync || w.required == protocol.CapTopicStateSyncV2 || w.required == protocol.CapReminderSync || w.required == protocol.CapReminderSyncV2,
 				w.required == protocol.CapProgress:
 				ok = a.readerCheck(ctx, to, key, n) == nil
 			default:
@@ -1704,6 +1704,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if in.Sub == envelope.SubReminderSync {
 		return a.admitReminderSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
+	if in.Sub == envelope.SubBlockSync {
+		return a.admitBlockSync(ctx, env, in, sender, fromQuarantine, hold)
+	}
 	if in.Sub == envelope.SubTopicStateSync {
 		return a.admitTopicStateSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
@@ -1789,6 +1792,13 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if root.Kind == protocol.ConvKindGroup {
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
+	}
+	if sp.info.Person != "" && sp.info.Person != me.info.Person {
+		if blocked, e := personBlocked(a.store.db, me.info.Person, sp.info.Person); e != nil {
+			return e
+		} else if blocked {
+			return a.holdBlocked(ctx, env, in, sender)
+		}
 	}
 	if in.Human != nil {
 		return a.admitHumanTurn(ctx, env, in, root, sp, sender, fromQuarantine, hold)
@@ -2301,6 +2311,11 @@ func (a *Agent) historyTurn(ctx context.Context) {
 		a.Logf("copying reminders: %v", reminderErr)
 		a.convWork.due(convHistory)
 	}
+	blocks, blockErr := a.syncBlocks()
+	if blockErr != nil {
+		a.Logf("copying blocks: %v", blockErr)
+		a.convWork.due(convHistory)
+	}
 	placements, placementErr := a.syncDirectTopics()
 	if placementErr != nil {
 		a.Logf("copying direct topic placements: %v", placementErr)
@@ -2317,7 +2332,7 @@ func (a *Agent) historyTurn(ctx context.Context) {
 		a.Logf("copying direct history: %v", directErr)
 	}
 	rest := a.convWork.historyRest(time.Since(started), a.pacedSync())
-	if roots || reads || invites || titles || locations || marks || reminders || placements || models || more || direct {
+	if roots || reads || invites || titles || locations || marks || reminders || blocks || placements || models || more || direct {
 		a.convWork.due(convHistory) // one page per sync; the next follows after its rest
 		if rest > 0 {
 			a.kickAfter(rest)

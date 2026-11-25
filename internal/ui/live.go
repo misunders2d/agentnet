@@ -248,6 +248,9 @@ func (l *Live) buildOverview(listArchived bool, unread *[]UnreadRow) (Overview, 
 	if rs, err := l.reminders(); err == nil {
 		o.Reminders, o.Remind = rs, true
 	}
+	if bs, err := l.a.BlockedPersons(); err == nil {
+		o.Blocked, o.Block = bs, true
+	}
 	o.Files = l.fileLimits()
 	if err := l.dmOverview(&o, unread, mutes); err != nil {
 		return o, err
