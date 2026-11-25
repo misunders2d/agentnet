@@ -192,16 +192,19 @@ func TestGroupStopRefusalNamesLogicalRequest(t *testing.T) {
 		p, err := w.bob.Participation(part.PID)
 		return err == nil && p.Claimable()
 	})
-	q, err := w.bob.AskAgent(WithQueuedSend(tctx(t), protocol.NewID()), part.PID, envelope.KindTask, "Retained group request")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Queue the original only after stopping delivery. This fixture injects
+	// the legacy copy below and must be its only source on the host.
 	stopPhone()
 	for _, stop := range stops {
 		stop()
 	}
+	w.bob.stopBackgroundPosts()
 	host.stopBackgroundPosts()
 	phone.stopBackgroundPosts()
+	q, err := w.bob.AskAgent(WithQueuedSend(tctx(t), protocol.NewID()), part.PID, envelope.KindTask, "Retained group request")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Current producers make the executable copy's ID equal its LID. Older
 	// signed requests can retain a distinct physical ID, which admission and
 	// the linked history/Stop route still support. Keep the producer's exact
@@ -234,8 +237,8 @@ func TestGroupStopRefusalNamesLogicalRequest(t *testing.T) {
 	if err = host.store.db.QueryRow(`SELECT id FROM inbox WHERE lid=? AND replica=0`, q.LID).Scan(&actual); err != nil {
 		t.Fatal(err)
 	}
-	if actual == q.LID {
-		t.Fatalf("fixture needs a physical job distinct from its logical turn: physical=%s logical=%s", actual, q.LID)
+	if actual != legacy.ID || actual == q.LID {
+		t.Fatalf("fixture needs the legacy physical job: got=%s want=%s logical=%s", actual, legacy.ID, q.LID)
 	}
 	if _, err = host.historyPageFor(phone.Self(), historyPos{}); err != nil {
 		t.Fatal(err)
