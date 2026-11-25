@@ -769,8 +769,9 @@ try {
    if(isolateDrafts){const field=active('[data-part="composer-field"] textarea');assert(field?.value===''&&!root.textContent.includes('Topic unavailable'),'other synthetic workspace draft contaminated this fresh mount');reports.workspaceIsolation.cleanComposerVerified=true;}
   };
   const text=()=>active('[data-part="composer-field"] textarea');
-  const more=()=>control('Add to message');
-  const plus=async id=>{await retire();await tap(id,more(),()=>!!control(/^Photo or file/),'composer menu choices visible');};
+  // Schedule: the desktop Send menu's chevron; on a phone, the clock button itself.
+  const wideComposer=innerWidth>=1024,more=()=>control('More send options');
+  const plus=async id=>{await retire();if(wideComposer)await tap(id,more(),()=>!!control(/^Schedule…/),'send menu choices visible');};
   if(suite==='topics'&&['direct','personal','bulk'].includes(p1)){
    await chat();
    const all=()=>sheet('All topics'),openAll=async(id,complete=()=>!!all())=>tap(id,control(/^All topics/),()=>!!all(),'All topics dialog visible',complete);
@@ -848,13 +849,15 @@ try {
    const mobile=host.platform==='android',scheduleWrites=()=>reports.apiCalls.filter(c=>c.method==='write'&&c.path.startsWith('/api/schedule/')),ordinarySends=()=>reports.apiCalls.filter(c=>c.method==='write'&&['/api/send','/api/dm/send'].includes(c.path));
    if(mobile){
     const reason='File scheduling is unavailable in this mobile interface. Remove the files to schedule text.';
-    await retire();await tap('compose.portable-file-schedule-denial',more(),()=>{const item=control(/^Schedule…/),note=item&&[...item.querySelectorAll('span')].find(s=>s.textContent===reason);return onScreen(item)&&item.getAttribute('aria-disabled')==='true'&&onScreen(note);},'selected-file scheduling reason visible and menu action disabled');
-    const denied=control(/^Schedule…/);denied.click();await frame();await frame();
+    await retire();
+    if(wideComposer){await tap('compose.portable-file-schedule-denial',more(),()=>{const item=control(/^Schedule…/),note=item&&[...item.querySelectorAll('span')].find(s=>s.textContent===reason);return onScreen(item)&&item.getAttribute('aria-disabled')==='true'&&onScreen(note);},'selected-file scheduling reason visible and menu action disabled');
+     const denied=control(/^Schedule…/);denied.click();await frame();await frame();}
+    else await tap('compose.portable-file-schedule-denial',control('Schedule…'),()=>control('Schedule…')?.getAttribute('aria-disabled')==='true'&&visibleText(reason),'refused clock says why in the status line');
     assert(!sheet('Schedule message')&&!active('section[aria-label="Outbox"]')&&scheduleWrites().length===0&&ordinarySends().length===0&&staged.length===0&&portable.scheduleCreates.length===0,'disabled mobile file schedule must not dispatch, stage, navigate or create a save');
     assert(retainedField().value===body&&!!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&!!control('Cancel reply')&&!!root.querySelector('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]'),'mobile denial retains exact topic, reply, draft and selected file');
     assert(await fileHash(file)===fileDigest,'denied original selected File bytes changed');
     reports.portableMobileFileScheduleDenial={reason,disabled:true,fileDigest,selectedFile:file.name,draftFileReplyTopicRetained:true,scheduleWrites:0,ordinarySends:0,stages:0,fileSchedulingExecuted:false};
-    await tap('compose.portable-file-denial-close',more(),()=>!control(/^Schedule…/),'disabled file scheduling menu closes normally');await retire();
+    if(wideComposer){await tap('compose.portable-file-denial-close',more(),()=>!control(/^Schedule…/),'disabled file scheduling menu closes normally');await retire();}
     await tap('compose.portable-file-remove-for-text',control('Remove portable-proof.txt'),()=>!root.querySelector('[aria-label="Remove portable-proof.txt"]')&&retainedField().value===body&&!!control('Cancel reply'),'only the selected file is explicitly removed; captured text/reply retained');
    }
    const expectedFileRetained=()=>!!root.querySelector('[aria-label="Remove portable-proof.txt"]')===!mobile;
@@ -970,9 +973,11 @@ try {
    await chat();await fill('compose.draft-text',text(),'Fixture draft');
    if(host.platform==='android'){
     const field=text();
-    await measure('compose.android-format-selection',()=>field.setSelectionRange(0,7),()=>!!control('Formatting'),'selection shows the touch Formatting button');
-    await tap('compose.android-format-open',control('Formatting'),()=>!!control('Bold'),'touch formatting choices visible');
+    // Aa ("Formatting") swaps the phone tools for the strip; the selection stays.
+    await measure('compose.android-format-selection',()=>field.setSelectionRange(0,7),()=>control('Formatting')?.getAttribute('aria-expanded')==='false'&&field.selectionEnd===7,'selection kept beside the Formatting toggle');
+    await tap('compose.android-format-open',control('Formatting'),()=>!!control('Bold')&&field.selectionStart===0&&field.selectionEnd===7,'formatting strip visible, selection kept');
     await tap('compose.android-format-apply',control('Bold'),()=>field.value==='**Fixture** draft','formatted selection visible in the draft');
+    await tap('compose.android-format-close',control('Formatting'),()=>control('Formatting')?.getAttribute('aria-expanded')==='false'&&!!control('Attach a file'),'tools back in place of the strip');
     await retire();await fill('compose.android-format-reset',field,'Fixture draft');
    }
    await tap('compose.mention-open',control('Mention someone'),()=>!!active('[role="listbox"]'),'mention choices visible');

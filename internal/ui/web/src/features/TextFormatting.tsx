@@ -30,7 +30,7 @@ export function useTextFormatting(
   useEffect(() => { setLink(null); setMenu(null); setHasSelection(false); restore.current = null; }, [scope]);
   useEffect(() => {
     const element = field.current;
-    if (!touch || !element) return;
+    if (!element) return;
     // Chromium's native textarea selection events can stay inside the
     // skin's shadow root, outside React's delegated selection listener.
     const read = () => setHasSelection(!!fieldSelection(element));
@@ -40,7 +40,7 @@ export function useTextFormatting(
       element.removeEventListener("select", read);
       element.removeEventListener("selectionchange", read);
     };
-  }, [field, scope, touch]);
+  }, [field, scope]);
 
   useLayoutEffect(() => {
     const change = restore.current;
@@ -51,7 +51,7 @@ export function useTextFormatting(
   }, [text, field]);
 
   function select(element: HTMLTextAreaElement) {
-    if (touch) setHasSelection(!!fieldSelection(element));
+    setHasSelection(!!fieldSelection(element));
   }
 
   function commit(style: Format, selection: Selection, href = "") {
@@ -109,14 +109,16 @@ export function useTextFormatting(
     setMenu({ anchor: { getBoundingClientRect: () => new DOMRect(x, y, 0, 0) } });
   }
 
-  function controls(children: ReactNode, { disabled = false, className = "", floating = true } = {}) {
+  // menu: false leaves out the touch "Formatting" button that follows a
+  // selection (the composer has its own Aa Formatting toggle and strip).
+  function controls(children: ReactNode, { disabled = false, className = "", floating = true, menu: selectionButton = true } = {}) {
     const selected = hasSelection && !disabled;
     const position = "z-50 outline-none";
     const validURL = /^(https?:\/\/|mailto:)[^<>\s]+$/i.test(url);
     return <div className={"relative min-w-0 " + className} onContextMenu={event => context(event, disabled)}>
       {children}
       <Menu.Root open={!!menu} triggerId={trigger} modal={false} onOpenChange={open => setMenu(current => open ? current || {} : null)}>
-        <Menu.Trigger id={trigger} hidden={!selected || !touch} onMouseDown={event => event.preventDefault()}
+        <Menu.Trigger id={trigger} hidden={!selected || !touch || !selectionButton} onMouseDown={event => event.preventDefault()}
           className={"min-h-11 rounded-full bg-surface px-3 text-sm font-semibold text-ink stroke shadow-pop " +
             (floating ? "absolute right-2 bottom-full z-30 mb-1" : "mt-1")}>Formatting</Menu.Trigger>
         <Menu.Portal container={portal}>
@@ -159,5 +161,7 @@ export function useTextFormatting(
     </div>;
   }
 
-  return { select, key, controls };
+  // run and selected serve the composer's formatting strip: its buttons act
+  // only on a selection, like the menu, and say so while there is none.
+  return { select, key, controls, run, selected: hasSelection };
 }

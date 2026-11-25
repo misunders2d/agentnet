@@ -3710,6 +3710,60 @@ main, not diagnosed here: `TestComicReviewHistoryRendered`,
 `TestComicOutboxRendered`, `TestAndroidComicRendered` (waits for "Message
 saved on this phone…").
 
+## Composer redesign: one frame, Aa formatting, schedule clock (November 25, 2026)
+
+Approved redesign (reference mockup supplied by the parent task). The draft
+spans one frame; a flat tools row sits below it: Aa ("Formatting"), the
+paperclip ("Attach a file", opens the file picker directly), @, emoji, then
+the schedule clock ("Schedule…", phone) and Send, plus a chevron ("More send
+options": Schedule…) beside Send from `lg`. The "+" menu is gone from the
+open composer: Bring in stays in the conversation header (same member
+condition), files use the paperclip, Schedule uses the clock or the Send
+menu. The closed (read-only) composer keeps its existing Schedule-only menu.
+
+Counterpart: Slack's composer (closed source), as captured in the parent's
+approved mockup: an "Aa" formatting toggle, file/@/emoji below the draft,
+a Send button with a chevron for scheduling. No Slack documentation or app
+was opened for this change, so Slack's own behavior (mobile toolbar swap,
+per-device memory of the desktop toggle) is unverified. Reused, not
+rebuilt: the existing `useTextFormatting` actions (`run`, `formats`, link
+dialog, shortcuts, context menu), the existing schedule eligibility
+(`scheduleReason`), dialogs and saved-schedule list, the existing Base UI
+menu (`PlusMenu` with a different trigger), file picker, mention list and
+emoji popover, and the existing send path and SendButton slot
+(`{ready,busy,label}`, `data-part="send"`). AgentNet adaptations: phone Aa
+replaces the tools in the same row (Send and the clock do not move) and the
+touch selection "Formatting" button is not shown in the composer (the
+message editor keeps it); desktop strip open by default, choice kept in
+`<skin storage>.composer-formatting`; refused file and schedule tools stay
+focusable (`aria-disabled`) and say why in the status line; formatting
+buttons are dimmed and titled until text is selected. New stable parts:
+`composer-format`, `composer-tools`, `send-menu`; `composer-field` is now the
+whole frame (skin/README.md, Composer layout). A window at most 560 px tall
+swaps the strip into the tools row (as on a phone) and lets the reply/files/
+recipients area above the frame scroll within 24dvh, so the draft and Send
+stay on screen (`TestCompactAudienceComposerRendered`, 1280 and 390 at 420
+px tall, failed before this). The emoji picker's grid keeps
+room for a sticky heading plus one full 44 px row (the taller composer left
+a 45 px grid at 390×400 where the heading covered the row).
+
+| Inventory | Intended local feedback | Completion/recovery | Executed evidence |
+|---|---|---|---|
+| phone Aa toggles strip | strip replaces tools in place; Send, clock and draft selection/focus unchanged (`phone Aa 320` 15 ms, `390` 16 ms) | strip Bold formats the kept selection, field stays focused (16–32 ms) | `TestMessageFormattingRendered` (320/390 touch) |
+| phone formatting strip actions | all nine styles via strip buttons (menu Bold 14–15 ms) | link dialog, cancel and invalid URL as before | `TestMessageFormattingRendered` |
+| desktop Aa / strip | strip above draft, open by default; close 30 ms; strip Italic 45 ms keeps selection | open/closed choice survives remount (page reload) | `TestMessageFormattingRendered` (1440) |
+| desktop Send menu → Schedule… | menu visible 47–77 ms; latency `compose.plus-schedule` 20.5 ms | schedule review 11.7–19.1 ms | `TestMessageFormattingRendered`, `TestScheduleLiveRendered`, `TestComposerScheduleRendered`, latency compose (diagnostic) |
+| phone clock → Schedule… | review opens directly (latency `compose.portable-schedule-open` 5.8–15.9 ms) | refused: status line reason (`phone refused clock`), draft kept, nothing staged | `TestComposerScheduleRendered` (390), `TestMessageFormattingRendered`, latency fixture (Android denial path updated, not executed here) |
+| paperclip | multi-file picker opens on click; refused: `aria-disabled`, click shows "Files can’t be sent here." | drop/paste refusal unchanged | `TestFileDropRendered` |
+| delayed send | pending row 27–44 ms | confirmed 1,222–1,240 ms (held 1.2 s) | `TestMessageFormattingRendered`, `TestAndroidSendPendingRendered` |
+
+Width: draft spans the frame (field 294 px at 320, 364 at 390, 954 at
+1440), no horizontal page scroll. Not run: native Android/WebView2/WebKitGTK
+(parent-owned native qualifier), the held-write latency pass and full
+coverage gate, overlay skins (gallery work). `TestAgentChatStarterRendered`
+and `TestComicDraftDestinationsRendered` fail identically on unchanged
+`5d02bcb9` on this machine.
+
 ## MEL-814 — Windows notification sound (November 24, 2026)
 
 Telegram Desktop `0e79d7a47c3e1876576e62d760d53e1f3f14c2dc` separates preview,

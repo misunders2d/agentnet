@@ -23,7 +23,7 @@ const operations = [
   try {
     for (const count of [40, 400]) for (const phone of [false, true]) {
       const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900},
-        hasTouch: phone, isMobile: phone, reducedMotion: 'reduce'});
+        hasTouch: phone, isMobile: phone, deviceScaleFactor: phone ? 3 : 1, reducedMotion: 'reduce'});
       const page = await context.newPage();
       const errors = [];
       page.on('pageerror', error => errors.push(String(error)));
@@ -66,8 +66,111 @@ const operations = [
         if (start === 0 && end === undefined) await target.press('Control+a');
         else await target.evaluate((el, [from, to]) => el.setSelectionRange(from, to), [start, end]);
       };
-      const menus = async target => {
-        const submenu = page.getByRole(phone ? 'button' : 'menuitem', {name: 'Formatting', exact: true});
+      const composerAa = page.locator('form[data-part="composer"]').getByRole('button', {name: 'Formatting', exact: true});
+      const composerStrip = page.getByRole('group', {name: 'Formatting options', exact: true});
+      // Composer layout: one frame with the draft full width above flat tools;
+      // Aa swaps the phone tools for the formatting strip without moving Send
+      // or losing the field's focus and selection; the desktop strip shows by
+      // default and its closed/open choice survives a remount on this device.
+      if (!base && count === 40) {
+        const frame = page.locator('[data-part="composer-field"]');
+        const aa = composerAa;
+        const strip = page.getByRole('group', {name: 'Formatting options', exact: true});
+        const send = page.locator('[data-part="send"]');
+        const box = async l => { const b = await l.boundingBox(); return b && [b.x, b.y, b.width, b.height].map(Math.round).join(','); };
+        const state = () => field.evaluate(el => ({from: el.selectionStart, to: el.selectionEnd, focused: el.getRootNode().activeElement === el}));
+        const noSideScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+        const layout = async () => {
+          const [f, t] = await Promise.all([frame.boundingBox(), field.boundingBox()]);
+          assert(t.width >= f.width - 4, 'draft spans the frame: field ' + t.width + ' of ' + f.width);
+          assert(await noSideScroll(), 'no horizontal page scroll');
+          return Math.round(t.width);
+        };
+        report.layout = {field: await layout()};
+        await field.fill('sample');
+        await select(field, 0);
+        if (phone) {
+          for (const width of [320, 390]) {
+            await page.setViewportSize({width, height: 844});
+            await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+            report.layout['field ' + width] = await layout();
+            await field.focus();
+            await field.evaluate(el => el.setSelectionRange(0, 6));
+            const before = await box(send), clock = await box(page.getByRole('button', {name: 'Schedule…', exact: true}));
+            // Closed: every tool fits left of the clock, nothing overlaps (3x DPR).
+            const [emoji, clockBox] = await Promise.all([page.locator('form[data-part="composer"]').getByRole('button', {name: 'Emoji', exact: true}).boundingBox(),
+              page.getByRole('button', {name: 'Schedule…', exact: true}).boundingBox()]);
+            assert(emoji.x + emoji.width <= clockBox.x + 0.5, 'tools stay left of the clock at ' + width + ': ' + JSON.stringify([emoji, clockBox]));
+            assert.equal(await aa.getAttribute('aria-expanded'), 'false');
+            await measure('phone Aa ' + width, () => aa.tap(), strip);
+            assert.equal(await aa.getAttribute('aria-expanded'), 'true');
+            assert.equal(await page.getByRole('button', {name: 'Attach a file', exact: true}).isVisible(), false, 'strip replaces the tools');
+            assert.equal(await box(send), before, 'Send stays in place');
+            assert.equal(await box(page.getByRole('button', {name: 'Schedule…', exact: true})), clock, 'clock stays in place');
+            assert.deepEqual(await state(), {from: 0, to: 6, focused: true}, 'Aa keeps focus and selection');
+            const s = await strip.boundingBox(), sb = await send.boundingBox();
+            assert(s.x + s.width <= sb.x, 'strip stays left of Send');
+            assert(Math.abs(s.y + s.height / 2 - (sb.y + sb.height / 2)) < 2, 'strip sits in the tools row');
+            assert(await noSideScroll(), 'strip scrolls inside the row, not the page');
+            if (screenshots) {
+              fs.mkdirSync(screenshots, {recursive: true, mode: 0o700});
+              await page.screenshot({path: path.join(screenshots, 'composer-phone-' + width + '-format.png')});
+            }
+            await mark();
+            await strip.getByRole('button', {name: 'Bold', exact: true}).tap();
+            assert.equal(await field.inputValue(), '**sample**', 'strip formats the selection');
+            assert.equal((await state()).focused, true, 'strip keeps the field focused');
+            await record('phone strip Bold ' + width, field);
+            await aa.tap();
+            assert.equal(await page.getByRole('button', {name: 'Attach a file', exact: true}).isVisible(), true);
+            assert.equal(await box(send), before, 'Send stays in place after closing');
+            assert.equal((await state()).focused, true);
+            await field.fill('sample');
+          }
+          // A refused clock (this fixture's host has no scheduling) says why.
+          const refusedClock = page.getByRole('button', {name: 'Schedule…', exact: true});
+          assert.equal(await refusedClock.getAttribute('aria-disabled'), 'true');
+          await measure('phone refused clock', () => refusedClock.tap({force: true}), page.getByRole('alert').filter({hasText: 'Scheduled sending is unavailable on this host.'}));
+          assert.equal(await field.inputValue(), 'sample', 'refused clock keeps the draft');
+        } else {
+          const above = async () => (await strip.boundingBox()).y < (await field.boundingBox()).y;
+          assert.equal(await aa.getAttribute('aria-expanded'), 'true', 'desktop formatting open by default');
+          assert(await above(), 'strip sits above the draft');
+          await select(field, 0);
+          await mark();
+          await strip.getByRole('button', {name: 'Italic', exact: true}).click();
+          assert.equal(await field.inputValue(), '*sample*');
+          assert.deepEqual(await state(), {from: 1, to: 7, focused: true}, 'strip keeps focus and selection');
+          await record('desktop strip Italic', field);
+          const remount = async () => { await page.reload(); await chat.click(); await field.waitFor(); };
+          await measure('desktop Aa close', () => aa.click(), page.locator('form[data-part="composer"] [aria-label="Formatting"][aria-expanded="false"]'));
+          assert.equal(await strip.count(), 0);
+          await remount();
+          assert.equal(await aa.getAttribute('aria-expanded'), 'false', 'closed choice survives a remount');
+          assert.equal(await strip.count(), 0);
+          await aa.click();
+          await remount();
+          assert.equal(await aa.getAttribute('aria-expanded'), 'true', 'open choice survives a remount');
+          assert(await above());
+          const options = page.getByRole('button', {name: 'More send options', exact: true});
+          const [sb, ob] = await Promise.all([send.boundingBox(), options.boundingBox()]);
+          assert(sb.x + sb.width <= ob.x + 0.1 && sb.width >= 52, 'Send and its menu stay separate');
+          await measure('desktop Send menu', () => options.click(), page.getByRole('menuitem', {name: /^Schedule…/}));
+          await page.keyboard.press('Escape');
+          await field.fill('');
+        }
+      }
+      // Returns the chosen formatting action: a menu item, or on a phone's
+      // composer a button in the Aa strip (Aa replaced the selection button).
+      const menus = async (target, scope = page) => {
+        if (phone && scope === page) {
+          if (await composerAa.getAttribute('aria-expanded') !== 'true')
+            await measure('touch formatting strip', () => composerAa.tap(), composerStrip.getByRole('button', {name: 'Bold', exact: true}));
+          assert.equal(await composerAa.getAttribute('aria-expanded'), 'true');
+          assert.equal(await page.getByRole('menuitem', {name: 'Bold', exact: true}).count(), 0, 'no selection menu beside the strip');
+          return name => composerStrip.getByRole('button', {name, exact: true});
+        }
+        const submenu = phone ? scope.getByRole('button', {name: 'Formatting', exact: true}) : page.getByRole('menuitem', {name: 'Formatting', exact: true});
         if (!phone) {
           await measure('context menu', () => target.click({button: 'right'}), submenu);
           await measure('formatting submenu', () => submenu.click(), page.getByRole('menuitem', {name: 'Bold', exact: true}));
@@ -75,6 +178,7 @@ const operations = [
           await submenu.waitFor();
           await measure('touch formatting menu', () => submenu.tap(), page.getByRole('menuitem', {name: 'Bold', exact: true}));
         }
+        return name => page.getByRole('menuitem', {name, exact: true});
       };
       const old = page.locator('[data-mid="history-' + (count - 2) + '"]');
       assert.equal(await old.locator('strong').textContent(), 'old bold');
@@ -131,12 +235,12 @@ const operations = [
             await record(name === 'Link' ? label + ' apply' : label, field);
           };
           await prepare();
-          await menus(field);
+          const pick = await menus(field);
           if (screenshots && count === 40 && name === 'Bold') {
             fs.mkdirSync(screenshots, {recursive: true, mode: 0o700});
             await page.screenshot({path: path.join(screenshots, 'formatting-' + (phone ? 'touch' : 'desktop') + '.png')});
           }
-          const choice = page.getByRole('menuitem', {name, exact: true});
+          const choice = pick(name);
           await mark();
           if (phone) await choice.tap(); else await choice.click();
           await finish('menu ' + name);
@@ -156,8 +260,8 @@ const operations = [
         }
         await field.fill('cancel link');
         await select(field, 0);
-        await menus(field);
-        await page.getByRole('menuitem', {name: 'Link', exact: true}).click();
+        const link = (await menus(field))('Link');
+        await (phone ? link.tap() : link.click());
         const dialog = page.getByRole('dialog', {name: 'Add link'});
         await dialog.getByRole('textbox', {name: 'Link URL'}).fill('javascript:alert(1)');
         assert.equal(await dialog.getByRole('button', {name: 'Apply link'}).isDisabled(), true);
@@ -211,8 +315,7 @@ const operations = [
             const [q, f] = await Promise.all([quote.boundingBox(), trigger.boundingBox()]);
             assert(q && f && f.y >= q.y + q.height - 1, 'touch formatting keeps the quoted reply unobstructed');
           }
-          await menus(editor);
-          const underline = page.getByRole('menuitem', {name: 'Underline', exact: true});
+          const underline = (await menus(editor, row))('Underline');
           await (phone ? underline.tap() : underline.click());
           assert.equal(await editor.inputValue(), updated);
         }

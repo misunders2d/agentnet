@@ -1,10 +1,12 @@
-// The composer's pieces: the "+" menu, the reply chip, the addressed-agent
-// row, the send button, and the text field that shows mentions as chips.
+// The composer's pieces: the "+" menu (also the desktop Send menu), the
+// reply chip, the addressed-agent row, the send button, the tools row's
+// buttons, the formatting strip, and the text field that shows mentions as chips.
 // Colors and type sizes sit on inner elements, not on buttons themselves:
 // the page's base sheet resets a button's font and color.
 import { forwardRef, type CSSProperties, type ReactNode, type Ref, type MouseEvent as ReactMouseEvent, type TextareaHTMLAttributes } from "react";
 import { Menu } from "@base-ui/react/menu";
-import { IconClock, IconCornerUpLeft, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
+import { IconBold, IconClearFormatting, IconClock, IconCode, IconCornerUpLeft, IconEyeOff, IconItalic, IconLink, IconPaperclip, IconPlus, IconQuote, IconStrikethrough, IconUnderline, IconUserPlus, IconX } from "@tabler/icons-react";
+import { formats, type Format } from "./TextFormatting.model";
 import { AgentAvatar } from "../ui/Avatar";
 import type { Span } from "./Composer.mentions";
 import { usePortal } from "../owned";
@@ -24,16 +26,20 @@ export const menuIcons = {
 /** Opening visibility follows menu state, without waiting for animation frames.
  *  PlusMenu: the composer's "+" menu. finalFocus says whether closing it
  *  returns focus to "+" (not when an action hands focus to what it opened). */
-export function PlusMenu({ actions, disabled, onOpenChange, onClosed, finalFocus }: { actions: MenuAction[]; disabled?: boolean; onOpenChange?: (open: boolean) => void; onClosed?: () => void; finalFocus?: () => boolean }) {
+export function PlusMenu({ actions, disabled, onOpenChange, onClosed, finalFocus, trigger }: { actions: MenuAction[]; disabled?: boolean; onOpenChange?: (open: boolean) => void; onClosed?: () => void; finalFocus?: () => boolean;
+  /** Another trigger for the same menu (the desktop Send menu's chevron). */
+  trigger?: { label: string; icon: ReactNode; className: string } }) {
   const portal = usePortal();
   return (
     <Menu.Root modal={false} onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
-      <Menu.Trigger disabled={disabled} aria-label="Add to message" title="Add to message"
+      {trigger
+        ? <Menu.Trigger disabled={disabled} aria-label={trigger.label} title={trigger.label} data-part="send-menu" onMouseDown={e => e.preventDefault()} className={trigger.className}>{trigger.icon}</Menu.Trigger>
+        : <Menu.Trigger disabled={disabled} aria-label="Add to message" title="Add to message"
         className={"group data-[popup-open]:bg-ink " + sideButton}>
         <IconPlus size={22} stroke={2.4} className="text-ink transition-transform duration-200 ease-out-soft group-data-[popup-open]:rotate-45 group-data-[popup-open]:text-canvas motion-reduce:transition-none" />
-      </Menu.Trigger>
+      </Menu.Trigger>}
       <Menu.Portal container={portal}>
-        <Menu.Positioner side="top" align="start" sideOffset={10} collisionPadding={12} className="z-40 outline-none">
+        <Menu.Positioner side="top" align={trigger ? "end" : "start"} sideOffset={10} collisionPadding={12} className="z-40 outline-none">
           <Menu.Popup finalFocus={finalFocus} className="w-64 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
             {actions.map((a) => (
               <Menu.Item key={a.label} disabled={a.disabled} onClick={a.run}
@@ -88,19 +94,47 @@ export function IntentRow({ name, seed, onStop, note }: {
  </div>;
 }
 
+/** toolButton: the flat buttons in the composer's tools row (Aa, file, @,
+ *  emoji, schedule, formatting). 44px square on a phone, 40px from lg; a
+ *  refused one stays focusable (aria-disabled) and says why when pressed. */
+export const toolButton = "grid size-11 shrink-0 place-items-center rounded-xl text-ink hover:bg-sunken aria-disabled:opacity-45 aria-expanded:bg-sunken data-[popup-open]:bg-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-agent-ink lg:size-10";
+
+const formatIcons: Record<Format, ReactNode> = {
+  bold: <IconBold size={20} stroke={2.2} />, italic: <IconItalic size={20} stroke={2.2} />, underline: <IconUnderline size={20} stroke={2.2} />,
+  strike: <IconStrikethrough size={20} stroke={2.2} />, code: <IconCode size={20} stroke={2.2} />, quote: <IconQuote size={20} stroke={2.2} />,
+  spoiler: <IconEyeOff size={20} stroke={2.2} />, link: <IconLink size={20} stroke={2.2} />, clear: <IconClearFormatting size={20} stroke={2.2} />,
+};
+
+/** FormatStrip: the formatting actions as buttons, in the same order and
+ *  with the same names and shortcuts as the formatting menu. They keep the
+ *  field's focus and selection (mousedown kept) and act on the live
+ *  selection; without one they are dimmed and titled "Select text…". */
+export function FormatStrip({ id, selected, shortcut, run, className }: { id: string; selected: boolean; shortcut: (f: typeof formats[number]) => string; run: (f: Format) => void; className: string }) {
+  return (
+    <div id={id} role="group" aria-label="Formatting options" data-part="composer-format" className={className}>
+      {formats.map(f => (
+        <button key={f.id} type="button" aria-label={f.label} title={selected ? f.label + " (" + shortcut(f) + ")" : "Select text to format: " + f.label}
+          aria-disabled={!selected} onMouseDown={keep} onClick={() => run(f.id)} className={toolButton}>
+          <span aria-hidden="true">{formatIcons[f.id]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export { SendButton } from "../skin/SendButton";
 
-/** Field: a textarea over a mirror that draws the same text, with exact
+/** Field: the full-width draft inside the composer's frame: a textarea over a mirror that draws the same text, with exact
  *  mentions as chips. The textarea keeps the caret, selection, IME and
  *  spelling; its own glyphs are transparent, so what shows is the mirror.
  *  Selection tints the mirror without painting a second copy of the text.
  *  Both take their type metrics from one inline style, so no sheet can
  *  pull them apart. */
 export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & {
-  text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>; trailing?: ReactNode;
-}>(function Field({ text, spans, wide, mirror, trailing, placeholder, className = "", ...rest }, ref) {
+  text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>;
+}>(function Field({ text, spans, wide, mirror, placeholder, className = "", ...rest }, ref) {
   const metrics: CSSProperties = { fontFamily: "var(--font-sans)", fontSize: wide ? 15 : 16, lineHeight: "22px", fontWeight: 400, letterSpacing: "normal" };
-  const box = "py-[10.5px] pl-4 whitespace-pre-wrap break-words lg:py-3 " + (trailing ? "pr-12" : "pr-4");
+  const box = "pt-3 pb-1.5 px-3.5 whitespace-pre-wrap break-words";
   const parts: ReactNode[] = [];
   let last = 0;
   for (const s of [...spans].sort((a, b) => a.start - b.start)) {
@@ -113,7 +147,7 @@ export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTML
   }
   parts.push(text.slice(last) + "​"); // a trailing newline still gets its line
   return (
-    <div data-part="composer-field" className={"relative min-w-0 flex-1 overflow-hidden rounded-[23px] bg-canvas stroke transition-shadow duration-200 focus-within:[box-shadow:0_0_0_3px_color-mix(in_srgb,var(--an-agent-ink)_30%,transparent)] lg:rounded-2xl " + className}>
+    <div className={"relative min-w-0 overflow-hidden " + className}>
       <div ref={mirror} aria-hidden="true" className={"pointer-events-none absolute inset-0 overflow-hidden text-ink " + box} style={metrics}>
         <div data-composer-measure>{parts}</div>
         {/* The mirror draws the hint too: a textarea's own placeholder wraps or
@@ -122,7 +156,6 @@ export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTML
       </div>
       <textarea ref={ref} rows={1} placeholder={placeholder} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
         className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:text-transparent selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />
-      {trailing}
     </div>
   );
 });
