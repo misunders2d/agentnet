@@ -49,10 +49,9 @@ Comic styling and a real relay are not covered by this test.
   "Your account was deleted", the local-copies note, and the Profile button
   becomes a disabled "Account deleted".
 
-**Counterpart: observed, not code-inspected.** Telegram (Settings → Privacy
-→ Delete my account) and WhatsApp (Settings → Account → Delete account) ask
-for a typed or entered confirmation, warn that it cannot be undone and show
-the result. AgentNet does the same; the relay erase itself is AgentNet's.
+**Counterpart: not inspected.** No Telegram or WhatsApp deletion flow was
+observed or read for this change. The typed confirmation is AgentNet's own
+choice; checking a counterpart remains open.
 
 **Evidence.** `TestDeleteAccountRendered`
 (`testdata/delete_account_rendered.cjs`) uses the real Store and
