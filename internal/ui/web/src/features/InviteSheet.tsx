@@ -122,6 +122,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const sinceSel = sinceShared(list, since, cap);
   const shared = mode === "recent" ? list.slice(list.length - count) : mode === "since" ? sinceSel.shared : picked;
   const tooMany = mode === "selected" && picked.length > cap;
+  // An invalid or future cutoff shares nothing and blocks the invitation: never a different slice.
+  const sinceBad = mode === "since" && !!sinceSel.problem;
   const files = shared.reduce((n, m) => n + (m.attachments?.length || 0), 0);
   const filesKey = shared.filter((m) => m.attachments?.length).map((m) => m.id).join(",");
   const needFiles = files > 0 && filesOk !== filesKey;
@@ -175,7 +177,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     else void submit([{ ...who, route, input: { conv: t.id, person: c.person!.person!, history: shared.length ? { refs: shared.map(m => m.group_ref!) } : {} } }]);
   }
   function bringTeamPeople() {
-    if (topic !== undefined || !t || t.kind !== "group" || !allowed || busy || offline || teamPeoplePending || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
+    if (topic !== undefined || !t || t.kind !== "group" || !allowed || busy || offline || teamPeoplePending || !teamPeople.length || teamHistory && (tooMany || needFiles || sinceBad)) return;
     void submit(teamPeople.map(who => ({ key: "p:" + who.id, name: o?.people?.find(p => p.person === who.id)?.label || "Person " + who.id.slice(0, 8), route: "group",
       input: { conv: t.id, person: who.id, history: teamHistory && shared.length ? { refs: shared.map(m => m.group_ref!) } : {} } })));
   }
@@ -225,7 +227,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           <label className="flex min-h-11 items-center gap-2 font-semibold"><input type="checkbox" checked={teamHistory} onChange={(e) => setTeamHistory(e.target.checked)} />Share reviewed history with these people</label>
           {teamHistory && <>
             <ContextChoice mode={mode} onMode={setMode} recent={count} max={max} onRecent={setRecent} picked={picked.length} label={selection} available={list.length}
-              since={since} onSince={setSince} sinceCount={sinceSel.total} cap={cap} />
+              since={since} onSince={setSince} sinceCount={sinceSel.total} sinceProblem={sinceSel.problem} cap={cap} />
             {mode === "selected" && <Checklist list={list} t={t} o={o} names={names} selected={selected} onClear={() => setSelected(new Set())} onToggle={(id) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; })} />}
             <Preview who="These people" shared={shared} after="Once they accept, they see all new group messages." t={t} o={o} names={names} gapless={gapless}
               limit={mode === "since" && sinceSel.over ? "Only the newest " + cap + " since " + dueText(since) + " are shared: that’s the most one invitation carries." : undefined} />
@@ -233,7 +235,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           </>}
           <HintForTeams count={teamPeople.length} />
           {teamHistory && tooMany && <p role="alert" className="text-sm text-danger">Choose at most {cap} history messages for each invitation.</p>}
-          <Button variant="act" disabled={busy || offline || teamPeoplePending || teamHistory && (tooMany || needFiles)} onClick={() => void bringTeamPeople()}>Invite selected team people</Button>
+          {teamHistory && <SharedSummary shared={shared} total={mode === "since" ? sinceSel.total : shared.length} problem={sinceBad ? sinceSel.problem : undefined} />}
+          <Button variant="act" disabled={busy || offline || teamPeoplePending || teamHistory && (tooMany || needFiles || sinceBad)} onClick={() => void bringTeamPeople()}>Invite selected team people</Button>
         </>}
       </section>}
       <label className="relative mt-1 block">
@@ -264,7 +267,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           ) : (
           <div className="mt-2.5">
             <ContextChoice mode={mode} onMode={setMode} recent={count} max={max} onRecent={setRecent} picked={picked.length} label={selection} available={list.length}
-              since={since} onSince={setSince} sinceCount={sinceSel.total} cap={cap} />
+              since={since} onSince={setSince} sinceCount={sinceSel.total} sinceProblem={sinceSel.problem} cap={cap} />
           </div>
           )}
           {mode === "selected" && (
@@ -301,7 +304,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   );
 
   const groupGuestBlocked = route === "guest" && t?.kind === "group" && guestCheck && !guestCheck.ready;
-  const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck) && !groupGuestBlocked;
+  const sinceBlocks = sinceBad && list.length > 0;
+  const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !sinceBlocks && !offline && !busy && (route !== "guest" || !!guestCheck) && !groupGuestBlocked;
   const footer = !submission && contentReady && t && allowed ? (
     <div>
       {sent.length > 0 && !error && (
@@ -313,6 +317,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       {route === "guest" && <p role="status" className="text-sm text-muted">{checkError || (groupGuestBlocked ? "Update the guest’s app and all group members’ devices before inviting a guest. Nothing has been sent." : guestCheck?.text) || (!guestCheck ? "Checking their app…" : "")}</p>}
       {error && <p role="alert" className="mb-2 rounded-xl bg-danger-bg px-3 py-2 text-[14px] font-semibold text-danger">{error}</p>}
       {offline && <p role="status" className="mb-2 text-[13px] font-semibold text-guest-ink">You’re offline. Invitations go out once you’re connected again.</p>}
+      {c && route && list.length > 0 && <SharedSummary shared={shared} total={mode === "since" ? sinceSel.total : shared.length} problem={sinceBlocks ? sinceSel.problem : undefined} />}
       {needFiles && !offline && <p role="status" className="mb-2 text-[13px] font-semibold text-text-2">These messages carry {plural(files, "file")}: tick “Also share” above, or pick messages without files.</p>}
       {!c && sent.length > 0 ? (
         <Button variant="outline" size="lg" onClick={() => store.closeInvite()} className="min-h-14 text-[17px]">Done</Button>
@@ -351,6 +356,19 @@ function InvitationProgress({ pending: p, reveal, offline, retry, finish, close 
       {(p.done || p.error) && <Button variant="ghost" onClick={finish}>{p.done ? "Choose someone else" : "Stop remaining invitations"}</Button>}
     </div>
   </section>;
+}
+
+/** SharedSummary: beside the invite action, exactly what it shares: how many
+ *  earlier messages (of how many, when capped) and when the first one is from. */
+function SharedSummary({ shared, total, problem }: { shared: T.DMMessage[]; total: number; problem?: string }) {
+  const first = shared[0];
+  return (
+    <p data-invite-summary role={problem ? "alert" : "status"} className={"mb-2 text-[14px] font-semibold tnum " + (problem ? "text-danger" : "text-text-2")}>
+      {problem ? problem + " The invitation waits until the date and time are fixed."
+        : !first ? "Shares no earlier messages."
+        : "Shares " + (total > shared.length ? "the newest " + shared.length + " of " + total + " messages" : plural(shared.length, "earlier message")) + ", from " + new Date(first.at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + "."}
+    </p>
+  );
 }
 
 function HintForTeams({ count }: { count: number }) {

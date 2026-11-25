@@ -2,6 +2,33 @@
 
 ## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
 
+### MEL-820 invite history: Share messages since
+
+The combined `datetime-local` field became **Share messages since** with
+separate labelled **Date** (typed YYYY-MM-DD, a calendar only on request) and
+**Time** fields, the reminder sheet's existing pattern (`Reminders.tsx`), plus
+the local time zone ("Your time zone: Europe/Kiev (UTC+02:00)") and **Last
+hour**, **Today** and **Yesterday** shortcuts (`aria-pressed` while they match).
+The wall-clock value must round-trip exactly (`sinceAt`, as `scheduleDue`): an
+impossible day, a DST-gap time, a partial value or a future cutoff shares
+nothing, explains itself in the card and beside the invite action, and
+disables the invite (both the guest/agent and team-member branches). A live
+summary beside the invite action names the exact count (newest N of M when
+capped) and the first included message's date and time. Submission sends the
+same `shared` array the preview and summary are computed from; permissions,
+scope and caps are unchanged.
+
+`TestUIResponsivenessRendered` groups suite (Chromium, 1440×960 mouse and
+390×844 touch) taps the mode, each shortcut, a manual time edit, a future date,
+an impossible date (2026-02-30) and a fix: local feedback 3–11 ms each, every
+assertion on fields, summary, alert role and disabled invite. Desktop light
+1366 and phone dark 390 screenshots inspected (scratch, not committed); the
+error text inside the selected yellow card first used the danger colour and
+failed contrast in dark mode, so it now uses the card's ink in bold. Not yet
+run: the same fixture in the installed WebKitGTK shell
+(`AGENTNET_NATIVE_SHELL`), and a submitted invitation compared byte for byte
+with the preview (code shares one array).
+
 ### MEL-819 gallery update of the skin on screen opens in place
 
 Owner report: after an update, the selected Office or Pulp still looked like
