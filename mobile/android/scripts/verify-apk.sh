@@ -5,7 +5,7 @@ apk=$1
 version=$2
 : "${ANDROID_HOME:=${ANDROID_SDK_ROOT:-}}"
 : "${ANDROID_HOME:?Set ANDROID_HOME to the pinned SDK.}"
-build_tools="$ANDROID_HOME/build-tools/35.0.0"
+build_tools="$ANDROID_HOME/build-tools/36.0.0"
 certificate=e1d06246fc1e49d5cc24dddb4dea618c2410cc35e3a98efa28daa8ae450b0659
 verified=$("$build_tools/apksigner" verify --verbose --print-certs "$apk")
 printf '%s\n' "$verified"
