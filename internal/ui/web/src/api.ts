@@ -158,6 +158,7 @@ export function api(host: Host) {
     setPersonPicture: (png: string) => post<T.PersonView>("/api/person/picture", { png }),
     serviceRole: () => post<{ note: string }>("/api/device/service", {}),
     renamePerson: (label: string) => post<T.PersonView>("/api/person/label", { label }),
+    deleteAccount: (person: string) => post<{ note: string; deleted: string[] }>("/api/person/delete", { person }),
     setBlocked: (person: string, blocked: boolean) => post<{ note: string; person: string; blocked: boolean }>("/api/person/block", { person, blocked }),
 	googleAccess: () => get<T.GoogleAccess>("/api/google/access"),
 	changeGoogleAccess: (c: T.GoogleAccessChange) => post<unknown>("/api/google/access", c),

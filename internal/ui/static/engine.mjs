@@ -13335,6 +13335,13 @@ export class Engine {
     case "/api/person/picture":
       if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>k!=="png") || typeof body.png !== "string") throw Error("Choose a picture.");
       return this.setPersonPicture(body.png);
+    case "/api/person/delete": {
+      // Account deletion (hub/persondelete.go): the relay erases this person;
+      // what this browser holds stays until the workspace is removed here.
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>k!=="person") || !this.me?.person || body.person !== this.me.person) throw Error("Name your own person to delete it.");
+      const out = await this.call("POST", "/v1/person/delete", JSON.stringify({ person: body.person }));
+      return { note: "Your account was deleted.", deleted: out?.deleted || [] };
+    }
     case "/api/person/block":
       if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>!["person","blocked"].includes(k)) || !wire.validID(body.person) || typeof body.blocked !== "boolean") throw Error("Choose a person to block or unblock.");
       return this.setBlocked(body.person, body.blocked);

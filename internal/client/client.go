@@ -1395,6 +1395,23 @@ func (a *Agent) RevokePerson(ctx context.Context, person string) ([]string, erro
 	return out.Revoked, err
 }
 
+// DeleteAccount erases this installation's person from the relay (account
+// deletion; hub/persondelete.go). person must be this installation's own,
+// named again as confirmation. Afterwards every device of the person is
+// revoked; what is on this device stays until the app or workspace is removed.
+func (a *Agent) DeleteAccount(ctx context.Context, person string) ([]string, error) {
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || person == "" || person != me.info.Person {
+		return nil, errors.New("delete account: name your own person")
+	}
+	var out protocol.DeletePersonResponse
+	err = a.hub.do(ctx, "POST", "/v1/person/delete", protocol.DeletePersonRequest{Person: person}, &out)
+	return out.Deleted, err
+}
+
 // wakeWorkerNow is wakeWorker for a wake a person or a job waits on: a job
 // stored or finished, a received request, answer or result
 // (waitedOnKind), a command from another process.

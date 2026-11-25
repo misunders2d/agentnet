@@ -18,6 +18,7 @@ import { openPictureEditor } from "../pictures.mjs";
 import { QrCode } from "./Settings.qr";
 import { Confirm } from "./Message.actions";
 import { DeviceDecisions } from "./DeviceDecisions";
+import { DeleteAccount } from "./DeleteAccount";
 
 /** The words for this device's own request to join a person (Overview.link). */
 const ownLinkText: Record<string, string> = {
@@ -48,7 +49,7 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   const creation = useStore(store, s => s.personCreation);
   if (!o) return <><PageHead title="Profile" titleRef={titleRef} /><Skeleton /></>;
   const p = o.person;
-  if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename key={p.person} person={p} /></>;
+  if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename key={p.person} person={p} /><DeleteAccount key={"delete-" + p.person} person={p} /></>;
 
   const own = o.role !== "service" && o.link && ownLinkText[o.link.state];
   const approver = o.link?.state === "pending" && o.link.approver;
