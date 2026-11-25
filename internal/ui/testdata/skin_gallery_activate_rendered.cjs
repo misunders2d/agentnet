@@ -34,12 +34,12 @@ function comicAs(mark, agentnet = 'v0.8.25') {
   return files;
 }
 // A small package for the failure cases.
-function tiny(word, { agentnet = 'v0.8.25', throws = false } = {}) {
+function tiny(word, { agentnet = 'v0.8.25', throws = false, track = false } = {}) {
   const m = { api: 1, id: 'pulp', name: 'Pulp', entry: 'entry.mjs', style: 'style.css', document: 'document.css', files: ['entry.mjs', 'style.css', 'document.css'], agentnet };
   return {
     'skin.json': Buffer.from(JSON.stringify(m)),
     'entry.mjs': Buffer.from(throws ? 'export function mount(){throw new Error("broken")}'
-      : `export function mount(root,host){const h=document.createElement('h1');h.textContent=${JSON.stringify(word)};root.append(h);host.onOpen(()=>{});}export function unmount(root){root.replaceChildren();}`),
+      : `export function mount(root,host){${track ? 'window.galleryMounted = true;' : ''}const h=document.createElement('h1');h.textContent=${JSON.stringify(word)};root.append(h);host.onOpen(()=>{});}export function unmount(root){root.replaceChildren();}`),
     'style.css': Buffer.from('h1 { font: 700 32px serif; } /* ' + word + ' */'),
     'document.css': Buffer.from(documentRule(word.startsWith('v2') ? 2 : 1)),
   };
@@ -209,7 +209,7 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: JSO
       assert.equal(now.card, false, name + ': no failure card');
       assert.deepEqual(now.documentRules, ["1"], name + ": old document rules retained");
       const kept = await page.evaluate(async () => (await caches.keys()).filter((k) => k.startsWith('agentnet-skin-package-v1-')));
-      assert.equal(kept.includes('agentnet-skin-package-v1-' + digest(next)), name === 'untrusted' || name === 'fails to mount', name + ': v2 stored only when verified and compatible');
+      assert.equal(kept.includes('agentnet-skin-package-v1-' + digest(next)), false, name + ': no unused update snapshot remains');
       if (name === 'fails to mount') {
         assert.deepEqual(await installed(page), { digest: digest(v1), trust: digest(v1) }, name + ': v1 is still installed and trusted');
         state.down = true;
@@ -221,7 +221,30 @@ const entry = (files, version, agentnet = 'v0.8.25') => ({ id: 'pulp', name: JSO
       await ctx.close();
       console.log('failure case ' + name + ': running version kept');
     }
-    console.log('gallery skin activate rendered PASS: desktop light and Android-width dark — in-place update with same skin, chat, draft and file; deferred while typing and while a write runs; bad bytes, offline, newer-AgentNet, untrusted and failed mount keep the running version');
+    for (const operation of ['remove', 'import']) {
+      const v1 = tiny('v1 running'), v2 = tiny('v2 update', { track: true }), manual = tiny('v3 imported');
+      const releases = { v1: [{ catalog: 1, skins: [entry(v1, '1.0.0')] }, v1], v2: [{ catalog: 1, skins: [entry(v2, '1.1.0')] }, v2] };
+      const { ctx, page, errors, state } = await run(desk, releases);
+      let release; state.hold = new Promise((r) => { release = r; }); state.published = 'v2';
+      await page.goto(origin + '/');
+      await until(async () => (await applied(page)).h1 === 'v1 running', operation + ': v1 mounted');
+      await page.evaluate(() => window.agentnet.controls.open());
+      release(); state.hold = null;
+      await until(async () => (await applied(page)).sheets.length === 2, operation + ': update prepared while controls open');
+      await page.evaluate(async (files) => {
+        const local = await import('/assets/local-skins.mjs');
+        if (files) await local.install(files.map(([name, content]) => new File([content], name)));
+        else await local.remove('local:pulp');
+      }, operation === 'import' ? Object.entries(manual).map(([name, content]) => [name, content.toString()]) : null);
+      await page.keyboard.press('Escape');
+      await until(async () => (await applied(page)).sheets.length === 1, operation + ': pending update cancelled');
+      assert.equal((await applied(page)).h1, 'v1 running', operation + ': no unnecessary remount');
+      assert.equal(await page.evaluate(() => !!window.galleryMounted), false, operation + ': superseded update never mounted');
+      assert.equal((await installed(page)).digest, operation === 'import' ? digest(manual) : undefined);
+      assert.deepEqual(errors, [], operation + ': page errors');
+      await ctx.close();
+    }
+    console.log('gallery skin activate rendered PASS: desktop light and Android-width dark — chat, draft and file kept; failures clean up staged bytes; explicit removal and import cancel the pending update');
   } catch (e) {
     if (shots && lastPage) await lastPage.screenshot({ path: path.join(shots, 'gallery-activate-failure.png') }).catch(() => {});
     throw e;

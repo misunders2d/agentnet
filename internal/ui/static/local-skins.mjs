@@ -6,6 +6,7 @@
 import { RESERVED as reserved, takenName } from './skin-choice.mjs';
 const catalogName = 'agentnet-skin-catalog-v1';
 const prefix = 'agentnet-skin-package-v1-';
+const stagedLifetime = 24*60*60*1000;
 const types = {js:'text/javascript; charset=utf-8',mjs:'text/javascript; charset=utf-8',css:'text/css; charset=utf-8',json:'application/json',png:'image/png',webp:'image/webp',svg:'image/svg+xml',woff2:'font/woff2'};
 const enc = new TextEncoder(), decode = new TextDecoder('utf-8',{fatal:true});
 // Capture the app's bounded explicit chooser before any skin runs. Browser
@@ -55,7 +56,7 @@ export async function catalog() {
   if (!supported()) return [];
   try {
     const out=[];
-    for(const {staged, ...item} of await readCatalog()){
+    for(const {staged, stagedAt, ...item} of await readCatalog()){
       const meta=await snapshotReady(prefix+item.digest);
       if(!meta||meta.id!==item.id||meta.size!==item.size||!Array.isArray(item.files)||!item.files.length||item.files.length>32||!item.files.includes(item.entry)||!item.files.every(pathOK))continue;
       // One bounded key listing detects incomplete snapshots without reading
@@ -100,6 +101,8 @@ export async function prepare(files) {
 }
 export async function install(files, {stageFrom}={}) {
   if(!supported())fail('This browser cannot store skins.');
+  const staging=stageFrom!==undefined;
+  if(staging&&(typeof stageFrom!=='string'||!/^[0-9a-f]{64}$/.test(stageFrom)))fail('The installed skin version is invalid.');
   const prepared=await prepare(files); // declared local File bytes only
   return navigator.locks.request('agentnet-local-skins',async()=>{
     try {
@@ -109,7 +112,7 @@ export async function install(files, {stageFrom}={}) {
       list=[];repairCatalog=true;
     }
     const current=list.find(x=>x.id===item.id);
-    if(stageFrom&&current?.digest!==stageFrom)fail('The installed skin changed while the update was downloading.');
+    if(staging&&(current?.digest!==stageFrom||item.digest===stageFrom))fail('The installed skin changed while the update was downloading.');
     if(!current&&list.length>=32)fail('Remove a skin before importing another (limit 32).');
     const name=prefix+item.digest, names=(await caches.keys()).filter(packageName), checked=repairCatalog?new Map():null;let total=0, existing=null, existingSize=0;
     // Old ready metadata has no manifest. Never erase a catalog that might
@@ -151,19 +154,39 @@ export async function install(files, {stageFrom}={}) {
     // Nothing was usable through this catalog; only the explicit verified
     // incoming digest can be republished. Unrelated unavailable bytes remain.
     if(repairCatalog&&!await caches.delete(catalogName))throw storageFailed();
-    await (await caches.open(catalogName)).put(url(item.id),Response.json(stageFrom?{...current,staged:item}:item));
+    await (await caches.open(catalogName)).put(url(item.id),Response.json(staging?{...current,staged:item,stagedAt:Date.now()}:item));
+    if(current?.staged&&current.staged.digest!==item.digest&&current.staged.digest!==current.digest&&packageName(prefix+current.staged.digest)){
+      await caches.delete(prefix+current.staged.digest).catch(()=>{});
+    }
     return item;
     }catch(e){if(e instanceof DOMException||e instanceof TypeError)throw storageFailed();throw e;}
   });
+}
+async function findUpdate(id, previous, digest) {
+  const current=(await readCatalog()).find(x=>x.id===id);
+  return current?.digest===previous&&current?.staged?.digest===digest ? current : null;
+}
+export async function hasUpdate(id, previous, digest) {
+  return !!await findUpdate(id,previous,digest);
 }
 // Keep opening the previously usable package until its exact replacement
 // has mounted. A concurrent explicit install or removal wins over the swap.
 export async function commitUpdate(id, previous, digest, canCommit) {
   return navigator.locks.request('agentnet-local-skins',async()=>{
-    const current=(await readCatalog()).find(x=>x.id===id), staged=current?.staged;
-    if(current?.digest!==previous||staged?.digest!==digest||!canCommit())return false;
-    await (await caches.open(catalogName)).put(url(id),Response.json(staged));
+    const current=await findUpdate(id,previous,digest);
+    if(!current||!canCommit())return false;
+    await (await caches.open(catalogName)).put(url(id),Response.json(current.staged));
     return true;
+  });
+}
+async function clearUpdate({staged, stagedAt, ...current}) {
+  await (await caches.open(catalogName)).put(url(current.id),Response.json(current));
+  if(staged.digest!==current.digest&&packageName(prefix+staged.digest))await caches.delete(prefix+staged.digest);
+}
+export async function discardUpdate(id, previous, digest) {
+  return navigator.locks.request('agentnet-local-skins',async()=>{
+    const current=await findUpdate(id,previous,digest);
+    if(current)await clearUpdate(current);
   });
 }
 export async function remove(id) {
@@ -171,6 +194,7 @@ export async function remove(id) {
     try {
       const listed=(await readCatalog()).find(x=>x.id===id), names=new Set();
       if(listed)names.add(prefix+listed.digest); // exact catalog binding survives unreadable package data
+      if(listed?.staged&&packageName(prefix+listed.staged.digest))names.add(prefix+listed.staged.digest);
       // Old usable versions still name their package in their ready metadata.
       // Unreadable unrelated snapshots grant no binding to this removal.
       for(const name of (await caches.keys()).filter(packageName)){
@@ -191,7 +215,13 @@ export async function prune(keep=[]) {
   if(!supported())return;
   return navigator.locks.request('agentnet-local-skins',async()=>{
     try {
-      const listed=new Map((await readCatalog()).map(x=>[x.id,[x.digest,x.staged?.digest]]));
+      const listed=new Map(), tooOld=Date.now()-stagedLifetime;
+      for(const item of await readCatalog()){
+        if(item.staged&&!(item.stagedAt>tooOld)){
+          await clearUpdate(item);
+          listed.set(item.id,[item.digest]);
+        }else listed.set(item.id,[item.digest,item.staged?.digest]);
+      }
       for(const name of (await caches.keys()).filter(packageName)){
         const digest=name.slice(prefix.length);let meta=null;
         if(keep.includes(digest))continue;

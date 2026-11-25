@@ -290,7 +290,8 @@
       started = true; // once per page; the next open checks again
       updateInstalled(common.gallery, localSkins, (id) => {
         if (id !== selected?.id || !selected.local || !workspaces?.state) return;
-        return { from: selected.digest, ready: (next) => { galleryStored = next; galleryUpdated(next); } };
+        const from = selected.digest;
+        return { from, ready: (next) => { galleryStored = { next, from }; galleryUpdated(next, from); } };
       }).catch(() => { /* offline or unsupported: next open */ });
     };
   } catch (_) { /* a program without it: import still works */ }
@@ -583,6 +584,7 @@
       const trustedDigest = (skin) => {
         try { return isTrusted(skin, localStorage.getItem(trustKey)); } catch (_) { return false; }
       };
+      const discard = (next, from) => localSkins.discardUpdate(next.id, from, next.digest).catch(() => { /* prune on a later open */ });
       const surfaces = [surface, bar?.element.shadowRoot].filter(Boolean);
       const editing = () => surfaces.some(({ activeElement: a }) => a && (a.isContentEditable || a.matches('input, textarea, select, [role="textbox"]')));
       const foreground = () => !!root && [...root.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')].some((el) => el.getClientRects().length > 0);
@@ -601,12 +603,16 @@
         if (!pending || finished || queued || busy()) return;
         queued = true;
         mounting = mounting.then(async () => {
+          if (!pending || finished || busy()) { queued = false; return; }
+          const { next, from, nextBase, nextSheet, nextModule, nextDocument } = pending;
+          const current = await localSkins.hasUpdate(next.id, from, next.digest).catch(() => false);
           queued = false;
-          if (!pending || finished || busy()) return;
-          const { next, nextBase, nextSheet, nextModule, nextDocument } = pending;
+          if (!current || !trustedDigest(selected)) {
+            stop(); nextSheet?.remove(); await discard(next, from); return;
+          }
+          if (busy()) return;
           stop();
           const was = { module, sheet, base, selected, documentSheet };
-          if (!trustedDigest(was.selected)) { nextSheet?.remove(); return; }
           if (was.sheet) was.sheet.media = "not all";
           if (nextSheet) nextSheet.media = "";
           useDocumentRules(nextDocument);
@@ -625,15 +631,16 @@
             nextSheet?.remove();
             useDocumentRules(was.documentSheet);
             if (was.sheet) was.sheet.media = "";
-            await mountSkin();
+            try { await mountSkin(); } finally { await discard(next, from); }
           }
         }).catch(failed);
       };
-      galleryUpdated = async (next) => {
+      galleryUpdated = async (next, from) => {
         if (finished || pending) return;
-        if (next.id !== selected.id || next.digest === selected.digest || next.api !== 1) return;
-        if (next.agentnet && newerRelease && newerRelease(next.agentnet, runningVersion)) return;
-        if (!trustedDigest(selected)) return;
+        if (next.id !== selected.id || selected.digest !== from || next.api !== 1 ||
+            (next.agentnet && newerRelease && newerRelease(next.agentnet, runningVersion)) || !trustedDigest(selected)) {
+          await discard(next, from); return;
+        }
         finished = true; // one try per page, whatever happens next
         const nextBase = "/local-skins/" + next.digest + "/";
         let nextSheet = null;
@@ -645,14 +652,14 @@
           const nextModule = await import(nextBase + next.entry);
           if (typeof nextModule.mount !== "function") throw new Error("This skin has no mount function");
           finished = false;
-          pending = { next, nextBase, nextSheet, nextModule, nextDocument };
+          pending = { next, from, nextBase, nextSheet, nextModule, nextDocument };
           for (const [k, f] of listen) document.addEventListener(k, f, true);
           for (const target of surfaces) for (const [k, f] of inside) target.addEventListener(k, f, true);
           writeSettled.add(attempt);
           attempt();
-        } catch (_) { nextSheet?.remove(); /* the installed version stays */ }
+        } catch (_) { nextSheet?.remove(); await discard(next, from); /* the installed version stays */ }
       };
-      if (galleryStored) galleryUpdated(galleryStored); // stored while the skin was mounting
+      if (galleryStored) galleryUpdated(galleryStored.next, galleryStored.from); // stored while the skin was mounting
     }
 
     // A notification's destination: #conv=<64 hex>, #msg=<32 hex>[&conv=…][&dir=in|out]

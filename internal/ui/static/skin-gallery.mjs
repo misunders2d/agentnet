@@ -19,6 +19,7 @@ const RUNNING = /^v(\d{1,6})\.(\d{1,6})\.(\d{1,6})(?:-\d{1,9}-g[0-9a-f]{4,40}|\+
 const LIMITS = { latest: 256 << 10, catalog: 512 << 10, file: 4 << 20, preview: 1 << 20, package: 16 << 20 };
 const enc = new TextEncoder();
 const fail = (text) => { throw new Error(text); };
+const installs = new WeakMap();
 const hex = (bytes) => [...new Uint8Array(bytes)].map((x) => x.toString(16).padStart(2, '0')).join('');
 const segment = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const pathOK = (p) => typeof p === 'string' && p.length <= 200 && p.split('/').every((s) => segment.test(s) && s !== '..');
@@ -107,7 +108,34 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
     return { release, skin };
   };
   const compatible = (s) => s.api === 1 && !newer(s.agentnet, running());
-  return Object.freeze({
+  async function install(id, stage) {
+    if (!supported()) fail('This browser cannot store skins.');
+    const { release, skin } = await find(id);
+    if (!compatible(skin)) fail(skin.agentnet ? 'This skin needs AgentNet ' + skin.agentnet + ' or newer. Update AgentNet first.' : 'This skin needs a newer AgentNet.');
+    const files = [];
+    for (const f of skin.files) {
+      const bytes = await get(RAW + release + '/published/' + skin.id + '/' + f.path, LIMITS.file, fetcher);
+      if (bytes.length !== f.size || await sha(bytes) !== f.sha256) fail('A file of ' + skin.name + ' did not match the gallery. Nothing was installed.');
+      // The package manager reads these like chosen files (local-skins.mjs prepare).
+      files.push({ name: f.path, webkitRelativePath: f.path, size: bytes.length, arrayBuffer: async () => bytes.slice().buffer });
+    }
+    const { item } = await prepare(files);
+    if (item.package_id !== skin.id || item.digest !== skin.digest) fail(skin.name + ' did not match the gallery. Nothing was installed.');
+    if (stage) {
+      const saved = await store(files, { stageFrom: stage.from });
+      stage.ready(saved);
+      return saved.id;
+    }
+    let held = null;
+    try { held = (await stored()).find((x) => x.package_id === skin.id) || null; } catch (_) { /* no usable earlier version */ }
+    const saved = await store(files);
+    // Owner decision (October 31): a gallery update keeps trust given to the
+    // exact version it replaces. Anything else asks as for any stored skin.
+    try { if (trust && held && held.digest !== saved.digest && trust.get(saved.id) === held.digest) trust.set(saved.id, saved.digest); } catch (_) { /* asks again */ }
+    await changed();
+    return saved.id;
+  }
+  const hostGallery = Object.freeze({
     /** The latest published release's skins, with what this browser holds. */
     async list({ fresh = false } = {}) {
       if (!supported()) fail('This browser cannot store skins.');
@@ -136,34 +164,10 @@ export function gallery({ running = () => '', changed = async () => {}, fetcher 
     },
     /** Stores the package in this browser; resolves its catalog id for
      *  host.selectSkin, which asks for trust. Never selects it itself. */
-    async install(id, stage) {
-      if (!supported()) fail('This browser cannot store skins.');
-      const { release, skin } = await find(id);
-      if (!compatible(skin)) fail(skin.agentnet ? 'This skin needs AgentNet ' + skin.agentnet + ' or newer. Update AgentNet first.' : 'This skin needs a newer AgentNet.');
-      const files = [];
-      for (const f of skin.files) {
-        const bytes = await get(RAW + release + '/published/' + skin.id + '/' + f.path, LIMITS.file, fetcher);
-        if (bytes.length !== f.size || await sha(bytes) !== f.sha256) fail('A file of ' + skin.name + ' did not match the gallery. Nothing was installed.');
-        // The package manager reads these like chosen files (local-skins.mjs prepare).
-        files.push({ name: f.path, webkitRelativePath: f.path, size: bytes.length, arrayBuffer: async () => bytes.slice().buffer });
-      }
-      const { item } = await prepare(files);
-      if (item.package_id !== skin.id || item.digest !== skin.digest) fail(skin.name + ' did not match the gallery. Nothing was installed.');
-      if (stage) {
-        const saved = await store(files, { stageFrom: stage.from });
-        stage.ready(saved);
-        return saved.id;
-      }
-      let held = null;
-      try { held = (await stored()).find((x) => x.package_id === skin.id) || null; } catch (_) { /* no usable earlier version */ }
-      const saved = await store(files);
-      // Owner decision (October 31): a gallery update keeps trust given to the
-      // exact version it replaces. Anything else asks as for any stored skin.
-      try { if (trust && held && held.digest !== saved.digest && trust.get(saved.id) === held.digest) trust.set(saved.id, saved.digest); } catch (_) { /* asks again */ }
-      await changed();
-      return saved.id;
-    },
+    install: (id) => install(id),
   });
+  installs.set(hostGallery, install);
+  return hostGallery;
 }
 
 /** Installs the published version of every gallery skin stored here that
@@ -174,7 +178,12 @@ export async function updateInstalled(g, local = localSkins, stage) {
   if (!local.supported() || !(await local.catalog()).length) return updated;
   for (const s of (await g.list()).skins) {
     if (s.state !== 'update') continue;
-    try { await g.install(s.id, stage?.(s.installed)); updated.push(s.id); } catch (_) { /* the gallery offers it again */ }
+    try {
+      const next = stage?.(s.installed);
+      if (next) await installs.get(g)(s.id, next);
+      else await g.install(s.id);
+      updated.push(s.id);
+    } catch (_) { /* the gallery offers it again */ }
   }
   return updated;
 }
