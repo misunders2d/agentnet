@@ -33,8 +33,27 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
  for(const width of [1440,390]){
   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));page.setDefaultTimeout(5000);
   await page.goto('http://127.0.0.1:'+server.address().port);const add=page.getByRole('button',{name:'Add a device',exact:true});await add.waitFor();
-  const started=Date.now();await add.click();const dialog=page.getByRole('dialog',{name:'Add a device',exact:true});
-  await dialog.waitFor({timeout:500});const openMs=Date.now()-started;assert(openMs<500,'dialog must open before the held native link reply');
+  const feedback=async(button,copy=false)=>{
+   await button.evaluate((button,copy)=>{
+    window.fixture.feedback=null;
+    button.addEventListener('click',event=>{
+     if(!event.isTrusted)return;
+     const start=performance.now();
+     requestAnimationFrame(function measure(){
+      const dialog=document.querySelector('[role="dialog"]');
+      const visible=copy?[...dialog?.querySelectorAll('button')||[]].find(button=>button.textContent.trim()==='Copying…'):dialog;
+      const elapsed=performance.now()-start;
+      if(visible?.getClientRects().length){window.fixture.feedback=elapsed;return;}
+      if(elapsed<5000)requestAnimationFrame(measure);
+     });
+    },{capture:true,once:true});
+   },copy);
+   await button.click();
+   await page.waitForFunction(()=>fixture.feedback!==null);
+   return page.evaluate(()=>fixture.feedback);
+  };
+  const openMs=await feedback(add);assert(openMs<500,'dialog must open before the held native link reply: '+openMs+' ms');
+  const dialog=page.getByRole('dialog',{name:'Add a device',exact:true});await dialog.waitFor();
   await dialog.getByText('Making a one-use link…',{exact:true}).waitFor();assert.equal(await dialog.locator('code').count(),0,'pending state never invents a usable link');
   assert.equal(await page.evaluate(()=>fixture.writes.length),1);
   if(process.env.AGENTNET_DEVICE_LINK_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_DEVICE_LINK_EVIDENCE+'-pending-'+width+'.png',fullPage:true});
@@ -45,9 +64,9 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   await page.evaluate(()=>fixture.finish(0));await page.waitForTimeout(50);assert.equal(await dialog.count(),0,'late completion cannot reopen a dismissed dialog');
   await add.click();await dialog.locator('code[aria-label="Link"]').waitFor();assert.equal(await page.evaluate(()=>fixture.writes.length),1,'completed pending link remains available on deliberate reopening');
   assert.equal(await dialog.locator('code').textContent(),'https://fixture.invalid/one-use-0');
-  await page.evaluate(()=>{fixture.clipboardHold=true});const copyStarted=Date.now();
-  await dialog.getByRole('button',{name:'Copy link',exact:true}).click();await dialog.getByRole('button',{name:'Copying…',exact:true}).waitFor({timeout:500});
-  const copyMs=Date.now()-copyStarted;assert(copyMs<500,'held clipboard work needs immediate visible feedback');
+  await page.evaluate(()=>{fixture.clipboardHold=true});
+  const copyMs=await feedback(dialog.getByRole('button',{name:'Copy link',exact:true}),true);
+  assert(copyMs<500,'held clipboard work needs immediate visible feedback: '+copyMs+' ms');
   assert.equal(await dialog.getByRole('button',{name:'Copied',exact:true}).count(),0,'pending clipboard work cannot claim copied');
   await dialog.getByRole('button',{name:'Copying…',exact:true}).evaluate(b=>b.click());assert.equal(await page.evaluate(()=>fixture.copies.length),1,'duplicate input cannot repeat pending copy');
   await page.evaluate(()=>{fixture.clipboardHold=false;fixture.clipboardRelease()});
