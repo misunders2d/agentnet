@@ -20,7 +20,9 @@ services.
 ## What stays on your device
 
 - Your device's private keys, which only this installation holds.
-- Your messages, files, drafts, reminders and settings.
+- Your messages, files, drafts, reminders, the people you blocked and
+  settings. Reminders and blocks are shared, encrypted, with your other
+  devices.
 
 Uninstalling the app or clearing its data removes this information from
 the device. Other devices you linked keep their own copies.
@@ -43,6 +45,20 @@ the device. Other devices you linked keep their own copies.
   relay sends a content-free alert through your browser's push service
   (for example Google, Apple, Mozilla or Microsoft). The Android app does
   not use a push service.
+
+## Reports
+
+A report is an ordinary encrypted message from you to your workspace's
+admins. It contains only what you choose to include.
+
+## Deleting your account
+
+You can delete your account in the app under Settings → Profile. The relay
+then erases your picture, files, undelivered messages and the encrypted
+copies of messages to or from you. It keeps your signed member record (name,
+Google email if used, device public keys) and delivery records without
+content, for security. See [ACCOUNT_DELETION.md](ACCOUNT_DELETION.md) for
+the full list.
 
 ## AI assistants
 
