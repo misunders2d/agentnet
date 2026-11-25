@@ -1090,6 +1090,13 @@ All were read on November 25.
   - The relay deletes its own schema-upgrade database copies
     (`hub.db.vN.bak`) older than 30 days, so the page's 30-day backup
     statement is true for relays on that release.
+- **Owner answers (November 25, evening):** TERMS.md softens the child
+  abuse line to "Workspace admins remove anyone who posts it, and it may be
+  reported to the authorities" (the developer cannot see encrypted chats or
+  other relays, so no promise to report). Deleting an account erases the
+  relay only; the device keeps its copy until the app or workspace is
+  removed. People who cannot open the app ask their workspace admin; the
+  page says so.
 - **Data safety** declares name, email (Google sign-in only), photos (the
   profile picture), user IDs, device IDs and message routing metadata.
   Message content and files are not declared, because they are end-to-end
@@ -1138,8 +1145,7 @@ All were read on November 25.
   deletes its own Drive copy. Known limit: if that delete fails, the copy
   stays on Drive untracked and only the log names it.
 - In-app deletion erases the relay only. The device keeps its local copy
-  until the app or workspace is removed; the page says so. Whether deletion
-  should also wipe the device is an open question for the owner.
+  until the app or workspace is removed; the page says so (owner choice).
 - Google sign-in with the same email after deletion is not verified.
 
 **Implementation note (not an owner decision):** the first build gates only

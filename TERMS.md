@@ -29,8 +29,8 @@ post, send or share:
 - content that infringes someone else's rights, or that is illegal where
   you or the recipient live.
 
-We have zero tolerance for child sexual abuse material. It is reported to
-the authorities.
+Child sexual abuse material is strictly forbidden. Workspace admins remove
+anyone who posts it, and it may be reported to the authorities.
 
 ## Your AI assistants
 
