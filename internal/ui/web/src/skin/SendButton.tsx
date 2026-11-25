@@ -16,10 +16,10 @@ export function SendButton({ ready, busy, label }: { ready: boolean; busy: boole
   const dots = <span aria-hidden="true" className={"flex gap-0.5 text-lg leading-none " + ink}><span className="working-dot">•</span><span className="working-dot">•</span><span className="working-dot">•</span></span>;
   return (
     <button type="submit" data-part="send" onMouseDown={keep} aria-disabled={!ready || busy} aria-label={label} title={label}
-      className={"flex h-11 min-w-[52px] max-w-44 shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 transition-colors duration-200 lg:h-10 " + look}>
+      className={"flex h-11 min-w-[52px] shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 transition-colors duration-200 lg:h-10 " + look}>
       {busy ? dots : <>
         <IconArrowUp size={21} stroke={2.6} aria-hidden="true" className={"shrink-0 " + ink} />
-        <span aria-hidden="true" className={"hidden truncate text-sm font-semibold lg:block " + ink}>{label}</span>
+        <span aria-hidden="true" className={"hidden truncate text-base font-semibold lg:block " + ink}>{label}</span>
       </>}
     </button>
   );

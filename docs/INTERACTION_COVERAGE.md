@@ -3758,7 +3758,18 @@ a 45 px grid at 390×400 where the heading covered the row).
 | delayed send | pending row 27–44 ms | confirmed 1,222–1,240 ms (held 1.2 s) | `TestMessageFormattingRendered`, `TestAndroidSendPendingRendered` |
 
 Width: draft spans the frame (field 294 px at 320, 364 at 390, 954 at
-1440), no horizontal page scroll. Not run: native Android/WebView2/WebKitGTK
+1440), no horizontal page scroll. Typography (typography skill, measured in
+`TestMessageFormattingRendered`): draft text 16 px with a 24 px (1.5) line
+height on phone and desktop (desktop was 15/22), textarea and mirror metrics
+identical (Onest stack, 400, normal spacing); draft contrast 16.62:1,
+placeholder 6.03:1, desktop Send label 16 px (was 14) and never capped in
+width: idle 5.68:1, ready 15.66:1, unclipped. "Asking <agent>" wraps instead
+of truncating. 640×450 (200% of 1280×900) and the WCAG 1.4.12 text-spacing
+override at 1440 keep the draft, tools row and page free of overflow. The
+skill's `typo-audit.mjs` cannot read Comic (shadow root, textarea value), so
+it was not used; long agent/device names in the intent row, placeholders
+longer than the field (kept one line with "…", owner decision of November
+20), browser zoom itself and real devices were not measured. Not run: native Android/WebView2/WebKitGTK
 (parent-owned native qualifier), the held-write latency pass and full
 coverage gate, overlay skins (gallery work). `TestAgentChatStarterRendered`
 and `TestComicDraftDestinationsRendered` fail identically on unchanged

@@ -234,7 +234,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       }, 0);
       const remaining = container.clientHeight - fixed - (composer.offsetHeight - ta.offsetHeight);
       // At least one line: the draft spans the frame above the tools row.
-      const floor = 22 + parseFloat(padding.paddingTop) + parseFloat(padding.paddingBottom);
+      const floor = parseFloat(padding.lineHeight) + parseFloat(padding.paddingTop) + parseFloat(padding.paddingBottom);
       const height = Math.max(floor, Math.min(natural, wide ? 240 : 140, remaining)) + "px";
       const scroll = ta.scrollTop;
       if (ta.style.height !== height) ta.style.height = height;

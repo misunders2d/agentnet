@@ -87,7 +87,7 @@ export function IntentRow({ name, seed, onStop, note }: {
 }) {
  return <div className="mb-1 fade-in">
   <div className="flex items-center gap-1.5 text-[13px] font-bold text-text-2">
-   <AgentAvatar seed={seed} size={24}/><span className="truncate">Asking {name}</span>
+   <AgentAvatar seed={seed} size={24}/><span className="min-w-0 [overflow-wrap:anywhere]">Asking {name}</span>
    {onStop && <button type="button" onMouseDown={keep} onClick={onStop} aria-label={"Don’t ask " + name} className="grid size-11 place-items-center rounded-full hover:bg-sunken"><IconX size={18}/></button>}
   </div>
   {note && <p className="pb-1.5 text-[13px] leading-snug text-text-2">{note}</p>}
@@ -133,7 +133,8 @@ export { SendButton } from "../skin/SendButton";
 export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & {
   text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>;
 }>(function Field({ text, spans, wide, mirror, placeholder, className = "", ...rest }, ref) {
-  const metrics: CSSProperties = { fontFamily: "var(--font-sans)", fontSize: wide ? 15 : 16, lineHeight: "22px", fontWeight: 400, letterSpacing: "normal" };
+  // 16px draft text on every width with a 1.5 line height (24px).
+  const metrics: CSSProperties = { fontFamily: "var(--font-sans)", fontSize: 16, lineHeight: "24px", fontWeight: 400, letterSpacing: "normal" };
   const box = "pt-3 pb-1.5 px-3.5 whitespace-pre-wrap break-words";
   const parts: ReactNode[] = [];
   let last = 0;
@@ -152,7 +153,7 @@ export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTML
         <div data-composer-measure>{parts}</div>
         {/* The mirror draws the hint too: a textarea's own placeholder wraps or
             clips mid-letter on a narrow field, never ending in an ellipsis. */}
-        {!text && placeholder && <div className="-mt-[22px] truncate text-muted">{placeholder}</div>}
+        {!text && placeholder && <div className="-mt-[24px] truncate text-muted">{placeholder}</div>}
       </div>
       <textarea ref={ref} rows={1} placeholder={placeholder} {...rest} style={{ ...metrics, color: "transparent", outline: "none" }}
         className={"relative block w-full resize-none bg-transparent caret-ink [scrollbar-width:none] placeholder:text-transparent selection:bg-act/40 selection:text-transparent disabled:cursor-not-allowed " + box} />

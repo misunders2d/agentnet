@@ -87,6 +87,75 @@ const operations = [
           return Math.round(t.width);
         };
         report.layout = {field: await layout()};
+        // Typography (rendered, not tokens): draft text 16px+, textarea and
+        // mirror share every metric, 1.5 line height, readable contrast for
+        // the draft and its placeholder, and an unclipped Send label.
+        const typography = async (where, spacing = false) => {
+          await field.fill('');
+          const t = await field.evaluate((el, spacing) => {
+            const root = el.getRootNode(), form = el.closest('form');
+            if (spacing && !root.querySelector('#typo-spacing')) {
+              const style = document.createElement('style');
+              style.id = 'typo-spacing'; // WCAG 1.4.12 text-spacing override
+              style.textContent = 'form[data-part="composer"] *{line-height:1.5!important;letter-spacing:.12em!important;word-spacing:.16em!important}';
+              root.append(style);
+            }
+            const mirror = el.parentElement.querySelector('[aria-hidden="true"]');
+            const hint = mirror.querySelector('.text-muted');
+            const canvas = document.createElement('canvas').getContext('2d', {willReadFrequently: true});
+            const rgb = color => { canvas.clearRect(0, 0, 1, 1); canvas.fillStyle = '#000'; canvas.fillStyle = color; canvas.fillRect(0, 0, 1, 1); return [...canvas.getImageData(0, 0, 1, 1).data]; };
+            const bg = node => { for (let n = node; n; n = n.parentElement || n.getRootNode().host) { const c = rgb(getComputedStyle(n).backgroundColor); if (c[3] === 255) return c; } return [255, 255, 255, 255]; };
+            const lum = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
+            const ratio = (fg, back) => { const a = lum(fg), b = lum(back); return Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100; };
+            const pick = s => ({size: s.fontSize, line: s.lineHeight, family: s.fontFamily, weight: s.fontWeight, spacing: s.letterSpacing});
+            const send = form.querySelector('[data-part="send"]'), label = [...send.querySelectorAll('span')].find(s => getComputedStyle(s).display !== 'none' && s.textContent.trim());
+            return {
+              textarea: pick(getComputedStyle(el)), mirror: pick(getComputedStyle(mirror)),
+              draftContrast: ratio(rgb(getComputedStyle(mirror).color), bg(mirror)),
+              placeholderContrast: hint ? ratio(rgb(getComputedStyle(hint).color), bg(mirror)) : null,
+              placeholderClipped: hint ? hint.scrollWidth > hint.clientWidth : null,
+              sendLabel: label ? {size: getComputedStyle(label).fontSize, clipped: label.scrollWidth > label.clientWidth, contrast: ratio(rgb(getComputedStyle(label).color), bg(send))} : null,
+              rowOverflow: form.querySelector('[data-part="composer-tools"]').scrollWidth > form.querySelector('[data-part="composer-tools"]').clientWidth + 1,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth,
+            };
+          }, spacing);
+          if (!spacing) {
+            assert.deepEqual(t.textarea, t.mirror, where + ': textarea and mirror metrics match');
+            assert(parseFloat(t.textarea.size) >= 16, where + ': draft text ' + t.textarea.size);
+            assert(parseFloat(t.textarea.line) / parseFloat(t.textarea.size) >= 1.45, where + ': draft line height ' + t.textarea.line);
+          }
+          assert(t.draftContrast >= 4.5, where + ': draft contrast ' + t.draftContrast);
+          assert(t.placeholderContrast === null || t.placeholderContrast >= 4.5, where + ': placeholder contrast ' + t.placeholderContrast);
+          if (t.sendLabel) assert(!t.sendLabel.clipped && parseFloat(t.sendLabel.size) >= 16 && t.sendLabel.contrast >= 4.5, where + ': Send label ' + JSON.stringify(t.sendLabel));
+          assert(!t.rowOverflow && !t.pageOverflow, where + ': no overflow ' + JSON.stringify(t));
+          if (t.sendLabel) {
+            // Ready Send (act ink on act) as well as the idle one measured above.
+            await field.fill('ready');
+            t.readySend = await page.locator('form[data-part="composer"] [data-part="send"]').evaluate(send => {
+              const label = [...send.querySelectorAll('span')].find(s => getComputedStyle(s).display !== 'none' && s.textContent.trim());
+              const c = document.createElement('canvas').getContext('2d', {willReadFrequently: true});
+              const rgb = color => { c.clearRect(0, 0, 1, 1); c.fillStyle = color; c.fillRect(0, 0, 1, 1); return [...c.getImageData(0, 0, 1, 1).data]; };
+              const lum = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
+              const a = lum(rgb(getComputedStyle(label).color)), b = lum(rgb(getComputedStyle(send).backgroundColor));
+              return {clipped: label.scrollWidth > label.clientWidth, contrast: Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100};
+            });
+            assert(!t.readySend.clipped && t.readySend.contrast >= 4.5, where + ': ready Send ' + JSON.stringify(t.readySend));
+            await field.fill('');
+          }
+          (report.typography ||= {})[where] = t;
+        };
+        await typography(phone ? 'phone 390' : 'desktop 1440');
+        if (!phone) {
+          // 200% zoom of a 1280x900 window: 640x450 CSS px (phone layout, short window).
+          await page.setViewportSize({width: 640, height: 450});
+          await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+          await typography('200% of 1280x900');
+          await page.setViewportSize({width: 1440, height: 900});
+          await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+          await typography('desktop 1440 text spacing', true);
+          await field.evaluate(el => el.getRootNode().querySelector('#typo-spacing')?.remove());
+        }
+        await field.fill('sample');
         await field.fill('sample');
         await select(field, 0);
         if (phone) {
