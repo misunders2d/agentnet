@@ -3892,6 +3892,13 @@ visible. That fixture adjustment and the navigation and notification-landing
 tests passed three consecutive runs. Physical phone, native webviews and
 integrated skin qualification remain open.
 
+The v0.11.10 fixture measures Working from the actual Save click to a visible
+frame in Chromium. This keeps the 600 ms product timer and the 1,100 ms bound,
+while excluding Playwright dispatch and return time from this measurement. On
+the Play-compliance merge candidate, Working took 646–681 ms across local
+runs of the four cases. A test-only 1,300 ms timer was rejected. macOS CI is
+still needed.
+
 ## MEL-811 — Full-width sent-message edits
 
 At base `aa58315f`, a short own reply with a quote opened a 384 px bubble
