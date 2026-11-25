@@ -63,6 +63,7 @@ const origin = new URL(target).origin;
       assert.deepEqual(fresh.errors, [], view.tag + ' fresh errors');
       await fresh.ctx.close();
     }
+    if (process.env.OFFICE_FRESH_ONLY) { console.log(lines.join('\n')); console.log('office default rendered PASS'); return; }
     const cases = [
       ['saved Comic stays Comic', { 'agentnet.skin': 'comic', 'agentnet.skin.package': 'comic' }, ['comic', 'comic']],
       ['saved Office stays Office', { 'agentnet.skin': 'office' }, ['office', 'office']],

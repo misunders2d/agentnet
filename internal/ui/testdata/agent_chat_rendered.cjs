@@ -407,7 +407,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
     fixture.overview.topic_list=true;fixture.change();
    });
    if(width<1024){await settle(page);await page.getByRole('button',{name:'Back to chats',exact:true}).click();await settle(page);}
-   await nav.getByRole('button',{name:/^Chats/}).click();
+   {const tab=nav.getByRole('button',{name:/^Chats/});if(!(await tab.getAttribute('aria-current')==='page'&&await tab.getAttribute('aria-expanded')==='true'))await tab.click();} /* MEL-824: clicking the open Chats hides its list */
    const chats=page.getByRole('region',{name:'Chats',exact:true});
    await chats.getByText('Saved agent history is available in Search chats.',{exact:true}).waitFor();
    assert.equal(await chats.locator('[data-part="chat-row"][data-kind="agent"]').count(),0,'legacy and retired exchanges never return as active agent cards; Chat with makes no device chats');
