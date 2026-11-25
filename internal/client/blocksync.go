@@ -318,7 +318,7 @@ func (a *Agent) holdBlocked(ctx context.Context, env envelope.Envelope, in envel
 		return err
 	}
 	_, err := a.store.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=? AND reason=?`, env.ID, reasonBlocked)
-	return err
+	return a.store.done(err) // views read the archived notice now, not on a later change
 }
 
 // blockedSender reports whether a control outside a group, or a device-thread

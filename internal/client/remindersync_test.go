@@ -216,7 +216,7 @@ func TestReminderSyncOldReaderRestartAndDelivery(t *testing.T) {
 			}
 		}
 	}
-	publish(time.Now().Unix()+100, slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapReminderSync }))
+	publish(time.Now().Unix()+100, slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapReminderSync || c == protocol.CapReminderSyncV2 }))
 	due := time.Now().Add(time.Hour)
 	if _, err = w.alice.SetReminder(sent.ID, due); err != nil {
 		t.Fatal(err)
