@@ -35,6 +35,45 @@ real Store, `ReportSheet` and `Toasts` with a fixture host, in Chromium at
 **Not covered.** The fixture page has no skin styling. The real menu items,
 Comic styling and a real relay are not covered by this test.
 
+## MEL-612 Block a person — covered, November 25, 2026
+
+**Entry points.** "Block <name>…" (or "Unblock <name>") sits in a direct
+chat's More menu, with a person and a host that can block. In a blocked
+person's chat, "You blocked <name>" with Unblock takes the composer's place.
+
+**What happens.**
+- Block asks once ("Block <name>?"). Groups you share don't change.
+- After Block, the chat shows the blocked bar at once. A stale overview
+  arriving before the host confirms cannot undo it. "Blocked <name>" shows on
+  success.
+- Unblock brings the composer back at once. On failure the blocked bar
+  returns with "Could not unblock <name>: …".
+
+**Counterpart: observed, not code-inspected.** Telegram and WhatsApp replace
+the composer with Unblock in a blocked contact's chat and drop what the
+contact sent while blocked. AgentNet does the same.
+
+**Evidence.** `TestBlockRendered` (`testdata/block_rendered.cjs`) uses the
+real Store, `BlockConfirm`, `BlockedBar` and `Toasts` with a fixture host, in
+Chromium at 1280 px light and 390 px dark with touch. Measured from click to
+DOM:
+
+| Action | Time |
+|---|---|
+| Blocked bar after Block (host held) | 33-35 ms |
+| Unrelated control while held | 22-46 ms |
+| Composer after Unblock (host held) | 34-36 ms |
+| Failure restored after release | 5-6 ms |
+
+Engines: `TestBlockDirectMessagesAcrossOwnDevices` and
+`TestBlockSyncAuthorityAndOrder` (Go client), `TestBrowserBlockSync`
+(browser engine, 21 checks) and `TestBrowserBlockSyncWireMatchesGo` (shared
+parser vectors).
+
+**Not covered.** The real header menu items, Comic styling and a real relay
+are not covered by the rendered test. Group behavior is unchanged by
+construction, not by a group journey test.
+
 ## MEL-612 terms of use on the first-run page — covered, November 25, 2026
 
 The first-run page (`internal/ui/static/setup.mjs`) shows "I agree to the

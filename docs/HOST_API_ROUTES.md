@@ -117,6 +117,7 @@ and catch the error. Failures differ by platform.
 | `app` | D | `true` in the desktop app's or the Android app's window, otherwise absent (never on B). It does not mean the `host.app*` methods are present: they always are. |
 | `topic_list` | D B | Topics are kept here, so use `?topics=1` and `/api/topics`. `false` in the demo. |
 | `remind` | DB | Personal reminders can be set and sync privately across current linked own-human devices. `false` in the demo. |
+| `block` | DB | Blocking can be set here. |
 | `schedules` | D B | Optional local scheduled sending. Offer its controls only when true; absent/false providers refuse the routes below. No schedule records are included in overview. |
 | `persons` | D B | Conversations between people are available. |
 | `agents` | D B | Agents can be invited into conversations. `false` in the demo. |
@@ -138,6 +139,7 @@ and catch the error. Failures differ by platform.
 | `directory`, `agent_devices`, `model_reports` | D B | The relay's member list, the devices that say they run an agent (a hint), and private model reports. Each report carries exact `host`, `host_key`, `agent_id`, `model`, optional `reasoning`, `harness`, `executor`, `at` (Unix seconds), and `revision`. Reports are historical observations for current own-human readers, not current settings; match the exact agent/host/key and show absent reasoning honestly. |
 | `link`, `links`, `history`, `group_invitations` | D B | This device's own join request, new devices asking to join, history copying, and group invitations. |
 | `reminders` | DB | Pending personal reminders, soonest first, resolving exact stored originals on this device. |
+| `blocked` | DB | The persons you blocked. Their direct messages, questions, tasks and controls outside groups are held quietly on every own device, and unblocking does not release them. Private: never sent to anyone else. |
 | `picture_url` (any `PersonView`) | D B | D: `/workspaces/<id>/<handle>/api/picture/<64 hex>`, already qualified by the host. Use it only as `<img src>`, never through `host.api`. B: `""` until the picture loads, then a `blob:` URL that arrives with a later `change`. |
 
 ## Conversations and messages
@@ -302,6 +304,7 @@ assistants. Use your linked agent computer." An unknown verb gives 409
 |---|---|---|---|---|
 | `POST /api/person` | D B | Create this installation's person, once. | `{label}` | `{person: PersonView, note}` |
 | `POST /api/person/label` | D B | Change your own display label. It is a claim, never checked. | `{label}` | person record `{person, label, email?, picture?, address, fingerprint, state, …}` |
+| `POST /api/person/block` | D B | Block or unblock a person's direct messages, on all your own human devices once synchronized. Groups are unchanged. You cannot block yourself. | `{person, blocked}` | `{note, person, blocked}` |
 | `POST /api/person/picture` | D B | Set your picture, or clear it with `""`. The PNG is 64 KiB at most; D caps this body at 90 KiB. | `{png: base64 PNG}` | person record |
 | `GET /api/picture/{hash}` | D | PNG bytes. Use it only as `<img src>` through `picture_url` (see Overview fields), never through `host.api`. B has no route: its `picture_url` is a `blob:` URL. | — | `image/png` |
 | `POST /api/device/service` | D B† | Mark this installation as a service, with no person. B: "A browser is always a person's device: a service joins from a computer with AgentNet." | `{}` | `{note}` |

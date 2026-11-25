@@ -1095,6 +1095,26 @@ All were read on November 25.
   Message content and files are not declared, because they are end-to-end
   encrypted.
 
+**Block implementation (not owner decisions):**
+- Marks travel like reminder marks: private, between current own human
+  devices only, newest revision wins. The reader capability `rem2` replaces
+  `rem1`'s slot (the advertisement list is full) and implies it.
+- Both engines hold a blocked person's direct messages, questions, tasks and
+  controls outside groups (reactions, edits) before any admission, with no
+  review notice, unread count or alert. Unblocking does not release them, as
+  Telegram and WhatsApp drop what a blocked contact sent while blocked
+  (observed product behavior; not code-inspected).
+- Known limit: the sender's copy still gets the true `quarantined` receipt,
+  which an attentive sender could read as a block. Messengers hide this; a
+  later change can send no receipt instead.
+- The owner asked whether the engines should become one shared core with
+  three adapters. Codex and Agy (consulted November 25) both advised against
+  it for now: the browser keeps non-exportable WebCrypto keys and IndexedDB,
+  the Go client depends on SQLite, sockets and subprocesses, and a WASM build
+  risks the under-1100-ms gate. Block was built in both engines with shared
+  Go/browser parser vectors instead. Sharing selected Go rules later remains
+  an option.
+
 **Implementation note (not an owner decision):** the first build gates only
 the app's first-run page, which Play reviews. The browser landing page and
 Comic's add-workspace sheet are not gated yet.
