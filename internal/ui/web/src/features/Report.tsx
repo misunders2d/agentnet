@@ -7,7 +7,6 @@
 import { useRef, useState, type FormEvent } from "react";
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
-import { niceDevice } from "../model";
 import { sendID } from "../optimistic.mjs";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -20,7 +19,7 @@ export interface ReportSubject {
   message?: string;   // the reported message's text; absent when reporting a person
 }
 
-export interface ReportAdmin { key: string; label: string; address: string; person?: string }
+export interface ReportAdmin { key: string; label: string; address: string; person: string }
 
 // reportAdmins lists the admin persons a report goes to: one row per person
 // (or per device without a person), never the reporter or the reported.
@@ -31,10 +30,11 @@ export function reportAdmins(o: T.Overview | undefined, subject: { address: stri
   const out = new Map<string, ReportAdmin>();
   for (const address of admin) {
     if (mine.has(address) || address === subject.address) continue;
+    // The relay's flag only nominates: a report goes only to a verified
+    // person this device already knows, shown by name before sending.
     const p = (o.people || []).find(p => p.address === address || (p.devices || []).some(d => d.address === address));
-    if (p?.person && (p.person === me || p.person === subject.person)) continue;
-    const key = p?.person || address;
-    if (!out.has(key)) out.set(key, { key, label: p?.label || niceDevice(address), address: p?.address || address, person: p?.person });
+    if (!p?.person || p.state === "conflict" || p.person === me || p.person === subject.person) continue;
+    if (!out.has(p.person)) out.set(p.person, { key: p.person, label: p.label, address: p.address, person: p.person });
   }
   return [...out.values()].sort((a, b) => a.label.localeCompare(b.label));
 }

@@ -18,7 +18,7 @@ const overview={seq:1,version:'fixture',me:{address:'bea/phone',fingerprint:'bea
  dms:[{id:'d'.repeat(64),peer:person('ann','Ann','ann/laptop')}],threads:[],needs_you:[],
  directory:{status:'listed',current:true,truncated:false,members:noAdmins?[{address:'dan/laptop'}]:[
   {address:'ann/laptop',admin:true},{address:'ann/phone',admin:true},{address:'carl/laptop',admin:true},{address:'dan/laptop',admin:true},
-  {address:'bea/laptop',admin:true},{address:'eve/laptop'}]}};
+  {address:'bea/laptop',admin:true},{address:'eve/laptop'},{address:'mallory/phone',admin:true}]}};
 const f=window.fixture={sends:[],news:[],hold:false,fail:false,held:[]};
 const host={platform:'daemon',workspace:{id:'report',state:'enrolled'},listen(){return()=>{}},async api(p,b){
  if(p.startsWith('/api/overview'))return structuredClone(overview);
@@ -51,7 +51,7 @@ async function timed(page,label,act,done){const t0=Date.now();await act();await 
   const page=await browser.newPage({viewport:{width,height:860},hasTouch:width<600,colorScheme:width<600?'dark':'light'}),errors=[];page.setDefaultTimeout(5000);page.on('pageerror',e=>errors.push(String(e)));
   const base='http://127.0.0.1:'+server.address().port+'/';
   await page.goto(base);await page.getByRole('button',{name:'Open report'}).waitFor();
-  // Admin persons: one row per person, never the reporter or the reported.
+  // Admin persons: one row per verified person, never the reporter, the reported or an unknown device.
   assert.deepEqual(await page.evaluate(()=>fixture.admins()),['Ann','Carl']);
   const body=await page.evaluate(()=>fixture.body);
   assert.match(body,/Reported: Dan \(dan\/laptop\)/);assert.match(body,/> line one\n> line two/);assert.match(body,/Reason: spam$/);
