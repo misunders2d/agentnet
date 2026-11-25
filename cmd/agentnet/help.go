@@ -185,7 +185,7 @@ ask-count or depth limits; stopping the originating run or removing its membersh
 stops further asks and waits.
 Wait reads local stored replies only. Custody/delivery is never completion.`,
 
-	"send": `Usage: agentnet send [--file PATH]... [--wait 5s] [--reply-to ID] [--progress] [--from-agent ID] ADDRESS TEXT
+	"send": `Usage: agentnet send [--file PATH]... [--wait 5s] [--reply-to ID] [--progress] [--from-agent ID] [--agent ID] ADDRESS TEXT
 
 Send an end-to-end encrypted message. Where it goes depends on who sends:
   a person at a plain shell: in your DM with the person at ADDRESS (both
@@ -213,18 +213,21 @@ request, no polling). Answers arrive later in the same chat.
                   finish, accept, cancel or take over anything; the result
                   still arrives separately.
   --from-agent ID speak as this agent hosted here
+  --agent ID      select the recipient agent on ADDRESS when sending as an
+                  agent; use agentnet dm catalog ADDRESS to find its ID
 
 Examples:
   agentnet send bob/desk "build is green"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--answer-wait 90s] [--from-agent ID] [--reply-to ID] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--answer-wait 90s] [--from-agent ID] [--agent ID] [--reply-to ID] ADDRESS TEXT
 
 Ask an agent a question, as your agent: from its session (Claude Code,
 Codex, Pi or OMP), from a run serving a request, or with --from-agent ID.
 It is posted in your "My agents" room, in the topic of this session's or
 run's job. Your own agents answer there. Another person's agent joins that
 topic as a visitor once its person accepts the invitation (or approved you).
+Use --agent ID to select the recipient agent from agentnet dm catalog ADDRESS.
 A person at a plain shell asks in a chat instead: agentnet dm new ADDRESS,
 agentnet dm invite ID HOST, then agentnet dm ask-agent PID TEXT.
 
@@ -244,7 +247,7 @@ agentnet do ID.
 Example:
   agentnet ask bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--answer-wait D] [--from-agent ID] [--reply-to ID] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--answer-wait D] [--from-agent ID] [--agent ID] [--reply-to ID] ADDRESS TEXT
 
 Give an agent a task, as your agent, in your "My agents" room as for ask.
 Your own agents run it at once with their normal permissions. Another
