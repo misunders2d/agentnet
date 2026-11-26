@@ -1,0 +1,76 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/misunders2d/agentnet/internal/client"
+)
+
+// claudeChatPersonOnly refuses a connect that is not the person at a
+// terminal: from a Claude or Codex session, an AgentNet run, or a pipe.
+func claudeChatPersonOnly() error {
+	for _, name := range []string{"CLAUDECODE", client.ClaudeSessionEnv, client.CodexThreadEnv, "AGENTNET_REPLY_SESSION"} {
+		if os.Getenv(name) != "" {
+			return fmt.Errorf("connect a Claude chat from your own terminal, not from an agent session (%s is set)", name)
+		}
+	}
+	if inRun() {
+		return errors.New("connect a Claude chat from your own terminal, not from an AgentNet run")
+	}
+	if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return errors.New("connect a Claude chat from your own terminal (stdin is not a terminal)")
+	}
+	return nil
+}
+
+func runClaudeChatCmd(a *client.Agent, args []string, out io.Writer) error {
+	usage := errors.New("usage: claude-chat list | claude-chat connect SESSION_ID NAME")
+	if len(args) == 0 {
+		return usage
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return usage
+		}
+		list, err := a.ClaudeChatCandidates()
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			fmt.Fprintln(out, "No open Claude chat is registered here.")
+		}
+		for _, c := range list {
+			inbox := "inbox ready"
+			if !c.Inbox {
+				inbox = "no inbox"
+			}
+			fmt.Fprintf(out, "%s  %s  %s\n", c.SessionID, c.Dir, inbox)
+		}
+		return nil
+	case "connect":
+		if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+			return usage
+		}
+		if err := claudeChatPersonOnly(); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Requests that name this agent will be sent into Claude chat %s, as messages it answers with its own settings and approvals. Type yes to connect: ", args[1])
+		var answer string
+		fmt.Fscanln(os.Stdin, &answer)
+		if answer != "yes" {
+			return errors.New("not connected")
+		}
+		id, err := a.ConnectClaudeChat(args[1], strings.TrimSpace(args[2]))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Connected as agent %s. It ends when that chat closes or restarts; disable it in Agents to stop sooner.\n", id)
+		return nil
+	}
+	return usage
+}

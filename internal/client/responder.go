@@ -22,6 +22,9 @@ type Responder struct {
 	Dir     string        `json:"dir"`               // working directory; the harness's own instructions for it apply
 	Context []string      `json:"context,omitempty"` // files whose text is given with every question
 	Timeout time.Duration `json:"timeout"`           // the person's own wall-clock limit per question or task; 0: none
+	// Chat is the exact opted-in Claude chat of a ClaudeChatHarness agent
+	// (claudechat.go); set only by ConnectClaudeChat.
+	Chat *ClaudeChat `json:"claude_chat,omitempty"`
 }
 
 // harness starts a separate background session with the owner's native setup.
@@ -237,7 +240,13 @@ func (s *store) clearOldDefaultLimit() error {
 // validateResponder is shared by the default and host-local named agents.
 // It validates/normalizes local configuration only, never a received choice.
 func validateResponder(r *Responder) error {
-	if _, ok := Harnesses[r.Harness]; !ok {
+	if (r.Harness == ClaudeChatHarness) != (r.Chat != nil) {
+		return errors.New("a Claude chat agent is connected only with agentnet claude-chat connect")
+	}
+	if r.Chat != nil && (r.Chat.Handle == "" || r.Chat.SessionID == "" || r.Chat.PID < 1) {
+		return errors.New("invalid Claude chat target")
+	}
+	if _, ok := Harnesses[r.Harness]; !ok && r.Chat == nil {
 		return fmt.Errorf("unsupported responder %q (supported: %v)", r.Harness, HarnessNames())
 	}
 	dir, err := filepath.Abs(r.Dir)

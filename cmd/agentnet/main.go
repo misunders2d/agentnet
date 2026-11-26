@@ -293,6 +293,8 @@ func run(args []string) error {
 		return runDM(ctx, a, rest, os.Stdout)
 	case "receivers":
 		return runReceivers(a, rest, os.Stdout)
+	case "claude-chat":
+		return runClaudeChatCmd(a, rest, os.Stdout)
 	case "sessions":
 		if len(rest) != 1 {
 			return errors.New("usage: sessions ADDRESS")

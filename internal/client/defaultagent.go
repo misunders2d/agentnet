@@ -69,6 +69,9 @@ func (a *Agent) saveDefaultIn(tx *sql.Tx, r *Responder, selectID string) error {
 	if selectID != "" && selected < 0 {
 		return ErrUnknownAgent
 	}
+	if selected >= 0 && entries[selected].Responder != nil && entries[selected].Responder.Chat != nil {
+		return errors.New("a Claude chat answers only requests that name it; it cannot be the default agent")
+	}
 	if selected < 0 && selectID == "" {
 		// A harness has one active identity on this device, regardless of name
 		// or working folder. Never mint a parallel default identity.
@@ -145,7 +148,7 @@ func (a *Agent) ensureDefaultAgent() error {
 	if err != nil {
 		return err
 	}
-	if enabledHarnessCount(entries, r.Harness) == 1 {
+	if enabledHarnessCount(entries, *r) == 1 {
 		want, _ := json.Marshal(r)
 		for _, entry := range entries {
 			if entry.Record.ID == id && entry.Record.Harness == r.Harness {

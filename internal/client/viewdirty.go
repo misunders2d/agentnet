@@ -151,8 +151,9 @@ func (a *Agent) SetViewCachesOff(off bool) { a.topicCache.off.Store(off) }
 // Each table names its chat, or marks everything: a missed key would show old
 // state, an extra one only reads again. viewCoverSkip are the tables no view
 // reads: copies queued for this person's other devices (their carriers mark
-// "h" through outbox), the Hub's routes, sent reports, and the dirty tables.
-var viewCoverSkip = []string{"sqlite_sequence", "unread_dirty", "view_dirty", "routes", "reported",
+// "h" through outbox), the Hub's routes, sent reports, the dirty tables, and
+// the Claude chat delivery ledger (its request's own row shows its state).
+var viewCoverSkip = []string{"sqlite_sequence", "unread_dirty", "view_dirty", "routes", "reported", "claude_chat_deliveries",
 	"agent_model_copies", "attention_mark_copies", "direct_topic_copies", "group_invitation_copies", "own_invitation_copies",
 	"person_block_copies", "read_mark_copies", "reminder_mark_copies", "topic_location_copies", "topic_mark_copies", "topic_title_copies"}
 

@@ -66,6 +66,7 @@ Questions and tasks sent to you:
   review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
   receivers  inspect local selected reply receiver obligations and input state
+  claude-chat  connect an open Claude Code or Claude Desktop chat as a named agent
 
 Identity and trust:
   join, whoami, fingerprint, trust
@@ -430,6 +431,26 @@ custody (the Hub has it), delivered (the recipient stored it), quarantined
 path (relay or direct). For a conversation message, ID may be its logical
 id (the lid dm show prints): each copy, one per device, is shown with the
 device it went to.`,
+
+	"claude-chat": `Usage: agentnet claude-chat list
+       agentnet claude-chat connect SESSION_ID NAME
+
+Make one open Claude chat on this computer (Claude Code, or a Claude Desktop
+Code chat) a named agent of yours. list shows the open chats AgentNet's
+hooks registered here, with their folder and whether their inbox works.
+connect asks you to type yes, from your own terminal only, never from an
+agent session or run.
+
+A request that names this agent is delivered once into that chat as a
+cross-session message, the way another Claude session would send one. The
+chat answers with its own settings, tools and approvals; AgentNet sends no
+permission mode or bypass. Its answer is the chat turn that message starts,
+recorded by the chat's own Stop hook. A message the chat reads during a
+turn already running, a turn stopped or replaced first, a refused or expired
+message, or a chat that closes ends as "not captured", for you to look at;
+it is never sent twice. Files are not passed. The agent stops working when
+the chat closes or restarts; connect it again then. Disable it in Agents.
+Linux only; it needs AgentNet's Claude hooks (agentnet hooks install claude).`,
 
 	"sessions": `Usage: agentnet sessions ADDRESS
 

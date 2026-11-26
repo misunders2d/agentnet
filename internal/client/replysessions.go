@@ -56,6 +56,9 @@ type replySessionRecord struct {
 	// started draining this registration (claudeReplyChannelOwner): only
 	// then is the session a receiver a question may name (nativeorigin.go).
 	ChannelGeneration int64  `json:"channel_generation,omitempty"`
+	// ClaudeInbox is the session's documented cross-session inbox socket,
+	// as its own SessionStart hook saw it (claudechat.go).
+	ClaudeInbox string `json:"claude_inbox,omitempty"`
 	Key               string `json:"key"`
 	Realm             string `json:"realm"`
 }
