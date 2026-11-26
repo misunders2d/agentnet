@@ -4084,6 +4084,12 @@ remains 16 px on a 24 px line. `TestOfficeDefaultWorkspaceRendered` checks both
 layouts. `TestMessageFormattingRendered` also passed on Office with 40 and
 400 messages, including Aa, selection, formatting and the Send menu.
 
+Office uses quieter tool colors, a plain arrow for Send, and one composer
+outline on desktop. The desktop and touch fixtures measure composited colors
+inside the skin's shadow tree. Lowest sampled text ratio: 5.15:1 (selected
+chat timestamp, dark). Lowest sampled icon ratio: 3.68:1 (inactive formatting,
+light). The draft and placeholder also pass in both themes.
+
 | Inventory | Intended local feedback | Completion/recovery | Executed evidence |
 |---|---|---|---|
 | phone Aa toggles strip | strip replaces tools in place; Send, clock and draft selection/focus unchanged (`phone Aa 320` 15 ms, `390` 16 ms) | strip Bold formats the kept selection, field stays focused (16–32 ms) | `TestMessageFormattingRendered` (320/390 touch) |
@@ -4306,3 +4312,16 @@ mise x go@1.26.8 -- go test ./internal/client ./internal/ui ./internal/ui/static
 AGENTNET_FORMATTING_BASE="$base_comic_dir" taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
 taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
 ```
+
+## Browse photos in one message (November 26, 2026)
+
+Telegram Web A's [MediaViewerSlides](https://github.com/Ajaxy/telegram-tt/blob/4566a14adb6287867f21ed6c51449292581c8653/src/components/mediaViewer/MediaViewerSlides.tsx)
+uses adjacent slides, arrow keys at fit zoom, and separates swiping from
+zooming and panning. AgentNet reuses its current modal and verified image
+cache, limiting navigation to openable photos attached to the same message.
+Download and Open in default app still address the displayed attachment.
+
+`TestImageViewerRendered` exercised the navigation buttons, keyboard and
+touch swipe at 1440 and 390 CSS px in Chromium. Switching shows the next
+image title within 1100 ms, keeps the same dialog open, and preserves
+original bytes, zoom, pinch, Back, Escape and exact opener focus restoration.

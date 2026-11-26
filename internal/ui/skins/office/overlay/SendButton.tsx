@@ -1,5 +1,5 @@
 // Office's send control (Comic kit slot, skin/README.md): a plain square
-// button, green when the message can go, grey otherwise. It stays a submit
+// button, green when the message can go, quiet otherwise. It stays a submit
 // button named by `label`, refuses while not ready or busy (aria-disabled, so
 // the field keeps focus) and keeps focus in the field on a tap.
 import { IconSend } from "@tabler/icons-react";
@@ -16,7 +16,7 @@ export function SendButton({ ready, busy, label }: { ready: boolean; busy: boole
       className={"office-send grid h-11 min-w-[52px] shrink-0 grid-flow-col place-items-center gap-1.5 px-3 transition-colors duration-150 lg:h-10 " + look}>
       {busy ? dots : <>
         <IconSend size={20} stroke={2} aria-hidden="true" />
-        <span aria-hidden="true" className="hidden text-base font-semibold lg:block">{label}</span>
+        {label !== "Send" && <span aria-hidden="true" className="hidden text-base font-semibold lg:block">{label}</span>}
       </>}
     </button>
   );

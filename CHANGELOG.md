@@ -6,6 +6,14 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Photos attached to the same message can be browsed in one viewer. Use
+  Previous and Next, the arrow keys, or swipe at fit zoom.
+- Office gives long messages more room and uses smaller, quieter desktop
+  composer controls. The draft stays full width. Plain Send uses an icon,
+  while an Ask button still names its agent.
+- The web app and browser tab use the same Open Exchange logo as the
+  desktop launcher.
+
 - Messages send faster when you send many at once. Queued messages of one
   chat now go out in batches, with one round of checks and one save for many
   messages, in the order you sent them. 1000 queued messages finish in about
