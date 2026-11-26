@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -118,11 +119,15 @@ func chatUUID() string {
 
 func chatSHA(s string) string { sum := sha256.Sum256([]byte(s)); return hex.EncodeToString(sum[:]) }
 
+// chatTagLike is any opening or closing envelope tag, in any case or
+// spacing: the body can neither close the envelope nor open a second one.
+var chatTagLike = regexp.MustCompile(`(?i)<(\s*/?\s*cross-session-message)`)
+
 // claudeChatContent is the exact message content: the documented peer
 // envelope with a per-request sender session token. The body cannot close
 // the envelope early.
 func claudeChatContent(sender, token, body string) string {
-	body = strings.ReplaceAll(body, "</cross-session-message", `<\/cross-session-message`)
+	body = chatTagLike.ReplaceAllString(body, "&lt;$1")
 	return `<cross-session-message from="` + sender + `" from-session="` + token + `" from-name="AgentNet">` + "\n" + body + "\n</cross-session-message>"
 }
 
@@ -270,9 +275,24 @@ type chatOutcome struct{ state, detail, answer string }
 
 func chatEnd(state, detail string) chatOutcome { return chatOutcome{state: state, detail: detail} }
 
+// claudeChatAsker reports whether j comes from this person: asked here, or
+// from a current verified human device of this computer's own person. The
+// chat takes it as a message from the person's own other session, so no
+// one else's request goes in.
+func (a *Agent) claudeChatAsker(j job) bool {
+	if j.Local {
+		return true
+	}
+	var ok bool
+	return a.store.db.QueryRow(`SELECT `+ownHumanQuestionHolds("?", "?"), j.From, j.Key, j.From, j.Key).Scan(&ok) == nil && ok
+}
+
 // runClaudeChat delivers prompt once and waits for its exact answer.
 func (a *Agent) runClaudeChat(runCtx context.Context, j job, r *Responder, prompt string, activity *runActivity) chatOutcome {
 	c := r.Chat
+	if !a.claudeChatAsker(j) {
+		return chatEnd(stateNotRun, "A Claude chat agent takes requests only from your own devices. Nothing was sent.")
+	}
 	row, exists, err := chatRowIn(a.store.db, j.ID)
 	if err != nil {
 		return chatEnd(stateJobFailed, err.Error())
@@ -297,6 +317,8 @@ func (a *Agent) runClaudeChat(runCtx context.Context, j job, r *Responder, promp
 		if row, why = a.deliverClaudeChat(j, *c, prompt, listener.address); why != "" {
 			return chatEnd(stateJobFailed, "not sent to the Claude chat: "+why)
 		}
+	} else if row.PID != c.PID || row.Ticks != c.Ticks || row.Handle != c.Handle {
+		return chatEnd(stateNeedHuman, "This was delivered to an earlier Claude chat process; it is not sent again.")
 	} else if row.State == chatSending {
 		// A run stopped between committing the row and recording the write:
 		// the chat's transcript says whether the frame arrived. It is never
@@ -444,7 +466,9 @@ func (a *Agent) waitClaudeChat(runCtx context.Context, j job, c ClaudeChat, limi
 		case s := <-statuses:
 			switch s {
 			case "refused", "denied", "expired", "dropped":
-				a.setChatState(j.ID, row.State, chatRefused, s)
+				for _, from := range []string{chatSending, chatWritten, chatStarted} {
+					a.setChatState(j.ID, from, chatRefused, s)
+				}
 			case "held":
 				a.Logf("%s %s: the Claude chat holds it for approval", j.Kind, j.ID)
 			}

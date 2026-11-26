@@ -438,19 +438,21 @@ device it went to.`,
 Make one open Claude chat on this computer (Claude Code, or a Claude Desktop
 Code chat) a named agent of yours. list shows the open chats AgentNet's
 hooks registered here, with their folder and whether their inbox works.
-connect asks you to type yes, from your own terminal only, never from an
-agent session or run.
+connect asks you to type yes in your own terminal; it refuses when it can
+tell it runs inside an agent session or an AgentNet run.
 
-A request that names this agent is delivered once into that chat as a
-cross-session message, the way another Claude session would send one. The
-chat answers with its own settings, tools and approvals; AgentNet sends no
-permission mode or bypass. Its answer is the chat turn that message starts,
-recorded by the chat's own Stop hook. A message the chat reads during a
-turn already running, a turn stopped or replaced first, a refused or expired
-message, or a chat that closes ends as "not captured", for you to look at;
-it is never sent twice. Files are not passed. The agent stops working when
-the chat closes or restarts; connect it again then. Disable it in Agents.
-Linux only; it needs AgentNet's Claude hooks (agentnet hooks install claude).`,
+Requests from your own devices that name this agent are delivered once into
+that chat as a cross-session message, the way another Claude session would
+send one; requests from other people are not sent. The chat answers with its
+own settings, tools and approvals; AgentNet sends no permission mode or
+bypass. Its answer is the chat turn that message starts, recorded by the
+chat's own Stop hook. A message the chat reads during a turn already
+running, a turn stopped or replaced first, a refused or expired message, or
+a chat that closes ends as "not captured", for you to look at; AgentNet does
+not send it again. Files are not passed, and agents named in its answer are
+not asked. The agent stops working when the chat closes or restarts; connect
+it again then. Disable it in Agents. Linux only; it needs AgentNet's Claude
+hooks (agentnet hooks install claude).`,
 
 	"sessions": `Usage: agentnet sessions ADDRESS
 

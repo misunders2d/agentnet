@@ -1099,8 +1099,10 @@ func (a *Agent) finishRun(ctx context.Context, j job, r *Responder, status, body
 	}
 	// Asks to other agents still out (MEL-540): the request waits for them
 	// and runs again with their results, instead of answering now. A reply
-	// tagging present agents asks them first (agenttags.go).
-	if status == envelope.StatusDone && j.Receiver == nil {
+	// tagging present agents asks them first (agenttags.go). A Claude chat
+	// is never written a second time, so its rerun could not read their
+	// results: its answer is sent as it is.
+	if status == envelope.StatusDone && j.Receiver == nil && r.Chat == nil {
 		a.routeAgentTags(ctx, j, r.Harness, body)
 		if parked, err := a.parkForHelpers(j, body); err != nil {
 			a.Logf("%s %s: could not wait for other agents' results: %v", j.Kind, j.ID, err)
