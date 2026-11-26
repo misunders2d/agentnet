@@ -69,11 +69,12 @@ func hasArg(cmdline []byte, arg string) bool {
 	return false
 }
 
-// rootOwned reports whether path is root's and writable by no one else, as
-// a packaged install is.
+// rootOwned reports whether path, like a packaged install, belongs to
+// someone else (root) and is writable by no one but its owner: this user
+// can neither change it nor its mode.
 func rootOwned(path string) bool {
 	var st unix.Stat_t
-	return unix.Stat(path, &st) == nil && st.Uid == 0 && st.Mode&0o022 == 0
+	return unix.Stat(path, &st) == nil && int(st.Uid) != os.Getuid() && st.Mode&0o022 == 0
 }
 
 // engineCodexEnv is pid's CODEX_* settings other than CODEX_HOME, which
