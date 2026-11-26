@@ -103,8 +103,12 @@ export function MessageFiles({ m }: { m: AnyMsg }) {
         opener={viewer.opener} onClose={() => setViewer(null)}
         navigation={grouped ? {
           index: selected, total: photos.length,
-          step: delta => setViewer(current => current && photos[selected + delta]
-            ? { ...current, index: photos[selected + delta].index } : current),
+          step: delta => setViewer(current => {
+            if (!current) return current;
+            const position = photos.findIndex(photo => photo.index === current.index);
+            const next = position < 0 ? undefined : photos[position + delta];
+            return next ? { ...current, index: next.index } : current;
+          }),
         } : undefined} />}
     </div>
   );

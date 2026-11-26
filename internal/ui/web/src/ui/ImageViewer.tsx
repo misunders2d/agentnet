@@ -9,6 +9,7 @@ import { Button, IconButton } from "./Button";
 
 type Point = { x: number; y: number };
 type View = Point & { zoom: number };
+type OpenState = { pending: true } | { pending: false; text: string; error: boolean };
 const initial: View = { zoom: 1, x: 0, y: 0 };
 
 export type ImageNavigation = { index: number; total: number; step: (delta: -1 | 1) => void };
@@ -27,15 +28,17 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
   const [decodeFailed, setDecodeFailed] = useState(false);
   const failed = loadFailed || decodeFailed;
   const unavailable = !src || failed;
-  const [opening, setOpening] = useState(false);
-  const [openResult, setOpenResult] = useState<{ key: string; text: string; error: boolean } | null>(null);
+  const [openStates, setOpenStates] = useState(() => new Map<string, OpenState>());
+  const openState = openStates.get(imageKey);
+  const setOpenState = (state: OpenState) => {
+    setOpenStates(current => new Map(current).set(imageKey, state));
+  };
   useLayoutEffect(() => {
     swipe.current = null;
     pointers.current.clear();
     setImage({ width: 0, height: 0 });
     setView(initial);
     setDecodeFailed(false);
-    setOpenResult(null);
   }, [imageKey]);
   const fit = image.width && area.width && area.height ? Math.min(1, area.width / image.width, area.height / image.height) : 1;
   const maxZoom = Math.max(8, 1 / fit);
@@ -79,9 +82,7 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
     return b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(b.x - a.x, b.y - a.y) } : { ...a, distance: 0 };
   };
   const step = (delta: -1 | 1) => {
-    if (!navigation) return;
-    const next = navigation.index + delta;
-    if (next >= 0 && next < navigation.total) navigation.step(delta);
+    navigation?.step(delta);
   };
   return (
     <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }} modal="trap-focus">
@@ -177,14 +178,17 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
             <IconButton label="Zoom in" disabled={view.zoom >= maxZoom || unavailable} onClick={() => zoomBy(1.25)}><IconPlus size={20} /></IconButton>
             <Button disabled={unavailable} onClick={() => setView(initial)}>Fit</Button>
             <Button disabled={unavailable} onClick={() => setView({ ...initial, zoom: 1 / fit })}>100%</Button>
-            {openInApp && <Button disabled={opening} onClick={async () => {
-              setOpening(true); setOpenResult(null);
-              try { await openInApp(); setOpenResult({ key: imageKey, text: "Asked your default image app to open it.", error: false }); }
-              catch (e) { setOpenResult({ key: imageKey, text: errorText(e), error: true }); }
-              finally { setOpening(false); }
-            }}>{opening ? "Opening…" : "Open in default app"}</Button>}
+            {openInApp && <Button disabled={openState?.pending} onClick={async () => {
+              setOpenState({ pending: true });
+              try {
+                await openInApp();
+                setOpenState({ pending: false, text: "Asked your default image app to open it.", error: false });
+              } catch (e) {
+                setOpenState({ pending: false, text: errorText(e), error: true });
+              }
+            }}>{openState?.pending ? "Opening…" : "Open in default app"}</Button>}
             {actions}
-            {openResult?.key === imageKey && <p role={openResult.error ? "alert" : "status"} className="w-full text-center text-sm">{openResult.text}</p>}
+            {openState && !openState.pending && <p role={openState.error ? "alert" : "status"} className="w-full text-center text-sm">{openState.text}</p>}
           </div>
         </Dialog.Popup>
       </Dialog.Portal>

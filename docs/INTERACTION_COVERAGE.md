@@ -4326,6 +4326,12 @@ touch swipe at 1440 and 390 CSS px in Chromium. Switching shows the next
 image title within 1100 ms, keeps the same dialog open, and preserves
 original bytes, zoom, pinch, Back, Escape and exact opener focus restoration.
 
+The same rendered fixture also sends two successive Right inputs in one
+browser dispatch and checks that the third image is selected. On desktop it
+holds the first image's native-open response while navigating to the second,
+checks that the second image's Open control is immediately usable, then
+releases the response and checks its result on the first image.
+
 ## MEL-828 — Antigravity in Connect an agent (November 26, 2026)
 
 Sergey reported that agy was missing from his available agents. On base

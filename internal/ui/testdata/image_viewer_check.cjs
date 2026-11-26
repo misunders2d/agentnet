@@ -375,7 +375,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
           await second.waitFor();
           assert(Date.now() - switchedAt < 1100, 'switch gives immediate local feedback');
           assert(await popup.evaluate(el => el.isConnected && el.getAttribute('role') === 'dialog'), 'same dialog stays mounted');
-          assert(await second.getByRole('button', {name: 'Next image', exact: true}).isDisabled(), 'navigation stops at the last attachment');
+          assert(await second.getByRole('button', {name: 'Next image', exact: true}).isEnabled(), 'third attachment follows the second');
           assert.deepEqual(await second.getByRole('img', {name: 'tall.png', exact: true}).evaluate(async im => {
             await im.decode();
             return [im.naturalWidth, im.naturalHeight];
@@ -391,6 +391,40 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
           } else await second.getByRole('region').press('ArrowLeft');
           await dialog.waitFor();
           await image.evaluate(im => im.decode());
+          await stage.evaluate(el => {
+            for (let i = 0; i < 2; i++) {
+              el.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
+            }
+          });
+          const last = p.getByRole('dialog', {name: 'last.png', exact: true});
+          await last.waitFor();
+          assert(await last.getByRole('button', {name: 'Next image', exact: true}).isDisabled(), 'navigation stops at the last attachment');
+          await last.getByRole('region').press('ArrowLeft');
+          await second.getByRole('region').press('ArrowLeft');
+          await dialog.waitFor();
+
+          if (!phone) {
+            let releaseOpen;
+            const openGate = new Promise(resolve => { releaseOpen = resolve; });
+            await p.route('**/api/file/open-image', async route => {
+              await openGate;
+              await route.fulfill({json: {ok: true}});
+            }, {times: 1});
+            try {
+              await dialog.getByRole('button', {name: 'Open in default app', exact: true}).click();
+              await dialog.getByRole('button', {name: 'Opening…', exact: true}).waitFor();
+              await next.click();
+              await second.waitFor();
+              const otherOpen = second.getByRole('button', {name: 'Open in default app', exact: true});
+              await otherOpen.waitFor();
+              assert(await otherOpen.isEnabled(), 'the displayed photo is actionable while another photo opens');
+              assert.equal(await second.getByText('Asked your default image app to open it.').count(), 0);
+            } finally {
+              releaseOpen();
+            }
+            await second.getByRole('region').press('ArrowLeft');
+            await dialog.getByRole('status').filter({hasText: 'Asked your default image app to open it.'}).waitFor();
+          }
         }
         await dialog.getByRole('button', { name: '100%', exact: true }).click();
         assert.equal(await dialog.getByLabel('Zoom level').textContent(), '100%');
