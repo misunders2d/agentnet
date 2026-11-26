@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -159,7 +160,7 @@ func TestAgyWarmTurnGuards(t *testing.T) {
 	}
 	full := agyTestResult(agyTestConversation, "SUCCESS", "ok")
 	broken := newAgyWarmTurn(nil, "")
-	broken.writing.Store(true)
+	broken.state.Store(agyTurnWriting)
 	bs := agyStream{onResult: broken.settle}
 	bs.Write([]byte(full[:len(full)/2] + "\n"))
 	if !bs.damaged || !isClosed(broken.settled) {
@@ -178,11 +179,37 @@ func TestAgyWarmTurnGuards(t *testing.T) {
 	defer w.Close()
 	turn := newAgyWarmTurn(w, strings.Repeat("x", 1<<20))
 	turn.begin() // nobody reads: the write stays unfinished
-	eventually(t, "write begun", turn.writing.Load)
+	eventually(t, "write begun", turn.begun)
 	during := agyStream{onResult: turn.settle}
 	during.Write([]byte(full + "\n"))
 	if during.damaged || !isClosed(turn.settled) || isClosed(turn.sent) {
 		t.Fatal("a result read while the write was finishing was refused")
+	}
+	// A reused process that speaks before its message refuses the turn, and
+	// the message is never written; output after the write starts is its own.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	strict := newAgyWarmTurn(pw, "never sent")
+	strict.strict = true
+	ss := agyStream{onResult: strict.settle, onOutput: strict.early}
+	ss.Write([]byte(`{"event":"step_update","step_update":{}}`))
+	strict.begin()
+	if !ss.damaged || !isClosed(strict.settled) || !isClosed(strict.failed) || strict.err != errAgyEarlyOutput || strict.begun() {
+		t.Fatalf("early output did not refuse the turn: damaged=%v err=%v", ss.damaged, strict.err)
+	}
+	pw.Close()
+	if b, _ := io.ReadAll(pr); len(b) != 0 {
+		t.Fatalf("a refused turn's message was written: %q", b)
+	}
+	dirty := newAgyWarmTurn(nil, "")
+	dirty.strict, dirty.clean = true, func() bool { return false }
+	dirty.begin()
+	if !isClosed(dirty.failed) || dirty.begun() {
+		t.Fatal("output between turns did not refuse the turn")
 	}
 	// A reused process announced its conversation once, on its first turn:
 	// later turns still report the answer as it starts.

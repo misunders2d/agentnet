@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -35,6 +36,7 @@ func agyInput(prompt string) string {
 type agyStream struct {
 	onActivity               func(nativeActivity)
 	onResult                 func() bool // a warm turn's terminal result was read; false: not this turn's
+	onOutput                 func() bool // a warm turn's output arrived; false: not this turn's
 	line                     []byte
 	skipping, damaged        bool
 	denied                   bool // the result lists actions agy auto-denied
@@ -45,6 +47,9 @@ type agyStream struct {
 
 func (s *agyStream) Write(p []byte) (int, error) {
 	n := len(p)
+	if s.onOutput != nil && !s.onOutput() && !s.damaged {
+		s.fail() // not this turn's: the process spoke before its message
+	}
 	for len(p) > 0 {
 		i := bytes.IndexByte(p, '\n')
 		chunk := p
@@ -136,9 +141,22 @@ type agyWarmTurn struct {
 	sent    chan struct{} // the whole event was written
 	failed  chan struct{} // the event could not be written; err says why
 	err     error
-	writing atomic.Bool // the event's write has begun
+	state   atomic.Int32 // agyTurnWaiting, then writing or refused, never both
 	once    sync.Once
+	// A reused process (strict) must stay silent until its message is
+	// written: any output first refuses the turn. clean reports that it
+	// wrote nothing between turns.
+	strict bool
+	clean  func() bool
 }
+
+const (
+	agyTurnWaiting int32 = iota
+	agyTurnWriting
+	agyTurnRefused
+)
+
+var errAgyEarlyOutput = errors.New("the running agy process wrote output before this turn's message; the message was not sent")
 
 func newAgyWarmTurn(in io.WriteCloser, prompt string) *agyWarmTurn {
 	return &agyWarmTurn{in: in, prompt: prompt, settled: make(chan struct{}), sent: make(chan struct{}), failed: make(chan struct{})}
@@ -149,8 +167,15 @@ func newAgyWarmTurn(in io.WriteCloser, prompt string) *agyWarmTurn {
 // the write. A failed or partial write fails the turn; nothing is resent.
 func (t *agyWarmTurn) begin() {
 	input := agyInput(t.prompt)
+	// One transition decides: the write starts, or the turn was refused by
+	// output that came first; never both.
+	if t.clean != nil && !t.clean() || !t.state.CompareAndSwap(agyTurnWaiting, agyTurnWriting) {
+		t.state.CompareAndSwap(agyTurnWaiting, agyTurnRefused)
+		t.err = errAgyEarlyOutput
+		close(t.failed)
+		return
+	}
 	go func() {
-		t.writing.Store(true)
 		if _, err := io.WriteString(t.in, input); err != nil {
 			t.err = err
 			close(t.failed)
@@ -167,7 +192,21 @@ func (t *agyWarmTurn) begin() {
 // event and answer before the writing goroutine resumes.
 func (t *agyWarmTurn) settle() bool {
 	t.once.Do(func() { close(t.settled) })
-	return t.writing.Load()
+	t.state.CompareAndSwap(agyTurnWaiting, agyTurnRefused)
+	return t.begun()
+}
+
+// begun reports that the message's write started.
+func (t *agyWarmTurn) begun() bool { return t.state.Load() == agyTurnWriting }
+
+// early is told of the process's output; for a reused process, output
+// before the write refuses the turn (false).
+func (t *agyWarmTurn) early() bool {
+	if !t.strict {
+		return true
+	}
+	t.state.CompareAndSwap(agyTurnWaiting, agyTurnRefused)
+	return t.begun()
 }
 
 // fail marks the stream unverifiable and, for a warm turn, ends the turn at
@@ -214,6 +253,12 @@ func (d *agyDiagnostics) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func (d *agyDiagnostics) reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.tail, d.permission, d.auth, d.failed = "", false, false, false
+}
+
 // result returns either a terminal answer/status or a local needs-human reason,
 // which is AgentNet's own text and says so.
 // Vendor approval advice and tool diagnostics stay out of the peer's answer.
@@ -225,7 +270,7 @@ func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, atten
 	switch {
 	case d.permission || s.denied:
 		return "", status, nativeStatusPrefix + "Antigravity could not obtain a native tool approval. Review the request in your native setup; AgentNet did not change permissions or retry it."
-	case d.auth || strings.Contains(detail, "authentication required") || strings.Contains(detail, "unauthenticated"):
+	case d.auth || s.complete && !s.damaged && (strings.Contains(detail, "authentication required") || strings.Contains(detail, "unauthenticated")):
 		return "", status, nativeStatusPrefix + "Antigravity requires sign-in. Open agy in its configured directory and sign in, then explicitly retry this request."
 	case s.status == "WAITING" && s.complete && !s.damaged:
 		return "", status, nativeStatusPrefix + "Antigravity is waiting for native input. Open agy in its configured directory to review what it needs; this request was not retried."

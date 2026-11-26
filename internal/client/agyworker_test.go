@@ -67,7 +67,12 @@ func TestAgyProcessHelper(t *testing.T) {
 		fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
 	}
 	if mode == "stray" {
-		time.Sleep(100 * time.Millisecond) // the process is idle by now
+		// Once the test says the process is idle in the pool.
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(log + ".idle"); err == nil {
+				break
+			}
+		}
 		fmt.Println(agyTestResult(id, "SUCCESS", "an event between turns"))
 	}
 	// Later turns of a warm process: each event gets its own result on the
@@ -229,6 +234,9 @@ func TestAgyWorkerStrayEventNotReused(t *testing.T) {
 	q1, a1 := ask(t, w, "")
 	ref := sessionOf(t, w.bob, q1)
 	eventually(t, "agy kept warm", func() bool { return pool.idleCount() == 1 })
+	if err := os.WriteFile(log+".idle", nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "stray event read", pool.idleStray)
 	q2, _ := ask(t, w, a1)
 	if m, ok := findReply(w.alice, q2); !ok || strings.Contains(m.Body, "between turns") {
