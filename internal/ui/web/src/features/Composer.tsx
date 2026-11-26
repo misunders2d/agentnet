@@ -445,10 +445,15 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const ta = field.current;
     const host = store.host;
     const here = () => visible.current === conv && field.current === ta;
+    // The paste goes where the person pasted: a native read can resolve
+    // later, so the text and selection are taken now, and an edit made
+    // meanwhile cancels it with a notice rather than replacing other text.
+    const pastedInto = decode(latest().text).text;
+    const from = ta?.selectionStart ?? 0, to = ta?.selectionEnd ?? 0;
     const insertText = (s: string) => {
       if (!here() || !ta) return;
       const value = decode(latest().text).text;
-      const from = ta.selectionStart, to = ta.selectionEnd;
+      if (value !== pastedInto) { setNotice({ conv, text: "The text changed while pasting. Paste again." }); return; }
       edit(value.slice(0, from) + s + value.slice(to), from + s.length);
     };
     if (pasteTable(e, insertText, plain)) return;

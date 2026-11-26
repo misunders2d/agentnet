@@ -48,7 +48,10 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
     window.__pictureClipboardReads++;if(window.__pictureClipboardMode==='text')return null;
     const c=document.createElement('canvas');c.width=c.height=16;const x=c.getContext('2d');x.fillStyle='#ffd43b';x.fillRect(0,0,16,16);
     return new File([await new Promise(r=>c.toBlob(r,'image/png'))],'image.png',{type:'image/png'});
-   };});
+   };
+   // The desktop shell's clipboard text (WPS cells: the web event carries none).
+   window.__pictureNativeText=null;window.__pictureNativeDelay=0;window.__pictureTextReads=0;
+   window.__agentnetNativeClipboardText=async()=>{window.__pictureTextReads++;await new Promise(r=>setTimeout(r,window.__pictureNativeDelay));return window.__pictureNativeText;};});
    const p=await ctx.newPage(),errors=[];p.on('pageerror',e=>errors.push(String(e)));
    await p.goto(process.argv[2]);await p.goto(new URL(process.argv[2]).origin+'/?skin='+skin);
    const shot=async name=>{if(process.env.AGENTNET_SCREENSHOTS){fs.mkdirSync(process.env.AGENTNET_SCREENSHOTS,{recursive:true});await p.screenshot({path:process.env.AGENTNET_SCREENSHOTS+`/p22-${skin}-${phone?'phone':'desktop'}-${name}.png`});}};
@@ -95,6 +98,19 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
    await p.evaluate(()=>{window.__pictureClipboardMode='text';});
    await field.evaluate(el=>{const dt=new DataTransfer();dt.setData('text/plain','ordinary pasted text');el.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt}));});
    await p.waitForFunction(()=>[...document.querySelector('#skin').shadowRoot.querySelectorAll('textarea')].some(el=>el.value==='ordinary pasted text'));assert.equal(await field.inputValue(),'ordinary pasted text','native text-only paste preserved');await field.fill('');
+   // WPS Office cells (v0.11.12): the event has no text and no file; the
+   // native text goes in, the picture is never read. A paste still pending
+   // when the person edits is cancelled with a notice, never replacing text.
+   const emptyPaste=()=>field.evaluate(el=>{el.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:new DataTransfer()}));});
+   await p.evaluate(()=>{window.__pictureClipboardMode='image';window.__pictureClipboardReads=0;window.__pictureNativeText='SKU-1\r\nSKU-2\r\n';});
+   await emptyPaste();
+   await p.waitForFunction(()=>[...document.querySelector('#skin').shadowRoot.querySelectorAll('textarea')].some(el=>el.value==='SKU-1\nSKU-2'));
+   assert.equal(await p.evaluate(()=>window.__pictureClipboardReads),0,'WPS text: no picture read');await field.fill('');
+   await p.evaluate(()=>{window.__pictureNativeDelay=400;window.__pictureNativeText='late cells';});
+   await emptyPaste();await field.fill('typed meanwhile');
+   await p.getByText('The text changed while pasting. Paste again.').first().waitFor();
+   assert.equal(await field.inputValue(),'typed meanwhile','a pending paste never replaces newer text');
+   await p.evaluate(()=>{window.__pictureNativeDelay=0;window.__pictureNativeText=null;});await field.fill('');
    // Comic exposes an image thumbnail.
    const openPicture=p.getByRole('button',{name:'Open picture avatar.png',exact:true});
    await openPicture.click();

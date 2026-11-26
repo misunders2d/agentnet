@@ -31,11 +31,43 @@ pub async fn agentnet_clipboard_image(window: WebviewWindow) -> Result<Option<Cl
 /// Longest clipboard text a paste takes, as the composer's own limit allows.
 const MAX_CLIPBOARD_TEXT: usize = 1 << 20;
 
+/// A secret of this app run, placed only inside the clipboard init script's
+/// closure: page code that calls the command itself does not know it, so
+/// clipboard text is read only through the script's trusted-paste gate.
+pub fn paste_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        // RandomState is keyed from the operating system's randomness.
+        (0..4u8).map(|i| { let mut h = std::collections::hash_map::RandomState::new().build_hasher(); h.write_u8(i); format!("{:016x}", h.finish()) }).collect()
+    })
+}
+
+/// The clipboard init script, with this run's paste key in its closure.
+pub fn init_script() -> String { include_str!("clipboard.js").replace("__AGENTNET_PASTE_KEY__", paste_key()) }
+
+/// The message for a clipboard with no text at all (arboard's
+/// ContentNotAvailable); any other read failure is an error, never "no text".
+const NO_TEXT: &str = "The clipboard contents were not available in the requested format or the clipboard is empty.";
+
+fn text_reply(text: Result<String, String>) -> Result<Option<String>, String> {
+    match text {
+        Ok(text) if text.len() > MAX_CLIPBOARD_TEXT => Err("This text is too long to paste.".into()),
+        Ok(text) if !text.is_empty() => Ok(Some(text)),
+        Ok(_) => Ok(None),
+        Err(e) if e == NO_TEXT => Ok(None),
+        Err(_) => Err("Could not read the clipboard's text.".into()),
+    }
+}
+
 /// The clipboard's text, for a paste whose web event carried none: WebKitGTK
 /// can offer no text for a spreadsheet copy (WPS Office) that does hold it,
 /// whose picture flavour (BMP) is unreadable, so nothing was pasted.
 #[tauri::command]
-pub async fn agentnet_clipboard_text(window: WebviewWindow) -> Result<Option<String>, String> {
+pub async fn agentnet_clipboard_text(window: WebviewWindow, key: String) -> Result<Option<String>, String> {
+    if key != paste_key() {
+        return Err("Clipboard is unavailable on this page.".into());
+    }
     let actual = window.url().map_err(|_| "Clipboard is unavailable.")?;
     {
         let shell = window.state::<crate::Shell>();
@@ -43,13 +75,9 @@ pub async fn agentnet_clipboard_text(window: WebviewWindow) -> Result<Option<Str
             return Err("Clipboard is unavailable on this page.".into());
         }
     }
-    let text = tauri::async_runtime::spawn_blocking(move || window.clipboard().read_text())
+    let text = tauri::async_runtime::spawn_blocking(move || window.clipboard().read_text().map_err(|e| e.to_string()))
         .await.map_err(|_| "Clipboard is unavailable.")?;
-    match text {
-        Ok(text) if text.len() > MAX_CLIPBOARD_TEXT => Err("This text is too long to paste.".into()),
-        Ok(text) if !text.is_empty() => Ok(Some(text)),
-        _ => Ok(None),
-    }
+    text_reply(text)
 }
 
 #[cfg(test)]
@@ -65,5 +93,17 @@ mod tests {
         for value in ["http://127.0.0.1:17444/", "http://localhost:17443/", "https://127.0.0.1:17443/", "http://evil.example/", "tauri://localhost/"] {
             assert!(!permitted("main", Some(&page), &Url::parse(value).unwrap()), "{value}");
         }
+    }
+    #[test]
+    fn clipboard_text_replies() {
+        assert_eq!(text_reply(Ok("SKU-1".into())), Ok(Some("SKU-1".into())));
+        assert_eq!(text_reply(Ok(String::new())), Ok(None));
+        assert_eq!(text_reply(Err(NO_TEXT.into())), Ok(None));
+        assert!(text_reply(Err("conversion failed".into())).is_err(), "a failed read is not \"no text\"");
+        assert!(text_reply(Ok("x".repeat(MAX_CLIPBOARD_TEXT + 1))).is_err());
+        let key = paste_key();
+        assert_eq!(key.len(), 64);
+        assert_eq!(key, paste_key());
+        assert!(init_script().contains(key) && !init_script().contains("__AGENTNET_PASTE_KEY__"));
     }
 }

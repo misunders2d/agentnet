@@ -3669,15 +3669,21 @@ picture read, so a screenshot still attaches. Browser text keeps the earlier
 order (a browser image copy still attaches). Local feedback is the inserted
 text, immediately after the one native read. The native text read answers
 once per trusted paste event within 2 s (a script's synthetic paste gets
-`null`); that keeps the bridge from widening what page code could already
-read, and is not claimed as more. A text read that fails (too long) shows a
-notice and attaches no picture instead. A box that takes no files still
+`null`), and the native command requires a per-run key held only in the
+shell's own script, so a direct call from page code is refused; code that
+rewrites the page's native bridge is outside that. A text read that fails
+(too long, or text the clipboard could not convert) shows a notice and
+attaches no picture instead. The text goes where the person pasted: an edit
+made while the read is pending cancels it with "The text changed while
+pasting. Paste again." instead of replacing other text. A box that takes no files still
 recovers the text and reads no picture. One trailing row end is dropped,
 other line breaks kept. Checks:
 `internal/ui/testdata/picture_crop_paste_check.mjs` (WPS case, plain paste,
 screenshot, browser image copy, too-long text, no-file box, trailing line
-breaks), agentnet-skins `tests/paste-native-text.test.mjs` (Classic,
-Holonet, Zoom) and the desktop
+breaks), the rendered `picture_rendered_check.cjs` (WPS paste with no
+picture read; an edit during a pending paste keeps the newer text and shows
+the notice), agentnet-skins `tests/paste-native-text.test.mjs` (Classic,
+Holonet, Zoom) and the desktop `clipboard_text_replies` and
 `clipboard_only_from_current_main_page` origin test. Outstanding: a rendered
 paste in the installed app with real WPS cells.
 

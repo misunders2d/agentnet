@@ -91,7 +91,7 @@ fn main() {
             }
             let handle = app.handle().clone();
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .initialization_script(include_str!("clipboard.js"))
+                .initialization_script(clipboard::init_script())
                 .initialization_script(if cfg!(target_os = "linux") { include_str!("droppedfiles.js") } else { "" })
                 .initialization_script(if cfg!(target_os = "linux") { concat!("window.__agentnetLinuxDownloads=true;", include_str!("download.js")) } else { include_str!("download.js") });
             // Windows needs HTML5 handling. Linux WebKit supplies URI strings
