@@ -294,11 +294,11 @@ func TestHeadlessReviewStaysPending(t *testing.T) {
 	stop()
 	n.setFail(nil)
 	runWith(t, w, w.bob, RunOptions{})
-	eventually(t, "attempt after restart", func() bool { return n.count() == 3 })
+	eventually(t, "shown notifications committed after restart", func() bool {
+		ids, total, err := w.bob.store.unnotified()
+		return err == nil && len(ids) == 0 && total == 2 && n.count() == 3
+	})
 	quiet(t, w.bob, n, 3)
-	if ids, _, _ := w.bob.store.unnotified(); len(ids) != 0 {
-		t.Fatalf("still unnotified after a shown notification: %v", ids)
-	}
 }
 
 func TestNeedsHumanMarkerIsExact(t *testing.T) {
