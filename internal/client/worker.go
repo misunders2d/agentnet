@@ -652,6 +652,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				// A running agy must stay silent until this turn's message.
 				agyTurn.strict, agyTurn.clean = true, func() bool { return !wp.out.stray.Load() }
 				agy.onOutput = agyTurn.early
+				agy.onInput = agyTurn.begun
 				if plan.ref != nil && plan.ref.ID != "" {
 					agy.conversation = plan.ref.ID // a running agy announced it once, on its first turn
 				}

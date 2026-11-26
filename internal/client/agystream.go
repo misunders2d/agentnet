@@ -37,6 +37,8 @@ type agyStream struct {
 	onActivity               func(nativeActivity)
 	onResult                 func() bool // a warm turn's terminal result was read; false: not this turn's
 	onOutput                 func() bool // a warm turn's output arrived; false: not this turn's
+	onInput                  func() bool // a reused process read a message; false: not this turn's
+	input                    bool        // agy reported reading this turn's message
 	line                     []byte
 	skipping, damaged        bool
 	denied                   bool // the result lists actions agy auto-denied
@@ -101,6 +103,14 @@ func (s *agyStream) flush() {
 	case "init":
 		s.setConversation(ev.Conversation)
 	case "step_update":
+		// agy reports each message it reads as a user_input step before
+		// answering it (agy 1.5.18, every turn of a warm process).
+		var read struct {
+			Type string `json:"step_type"`
+		}
+		if s.onInput != nil && !s.complete && json.Unmarshal(ev.StepUpdate, &read) == nil && read.Type == "user_input" && s.onInput() {
+			s.input = true
+		}
 		if s.onActivity != nil && !s.complete && !s.damaged && s.conversation != "" && (ev.Conversation == "" || ev.Conversation == s.conversation) {
 			var step struct {
 				Type         string `json:"step_type"`
@@ -120,6 +130,12 @@ func (s *agyStream) flush() {
 		s.status, s.response, s.detail = ev.Result.Status, ev.Result.Response, ev.Result.Error
 		if s.onResult != nil && !s.onResult() {
 			s.damaged = true // a result before this turn's message was sent is not its answer
+		}
+		if s.onInput != nil && !s.input {
+			// A reused process's result counts only after agy reported reading
+			// this turn's message: a late or stray result read while the
+			// message was being written is not its answer.
+			s.damaged = true
 		}
 		// agy lists what it auto-denied beside a SUCCESS status (seen live on
 		// 1.5.16 and 1.5.18), e.g.

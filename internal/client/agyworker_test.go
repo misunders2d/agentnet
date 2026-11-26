@@ -60,6 +60,11 @@ func TestAgyProcessHelper(t *testing.T) {
 		os.Exit(1)
 	}
 	fmt.Printf("{\"event\":\"init\",\"conversation_id\":%q,\"init\":{}}\n", id)
+	// As agy 1.5.18: each message read is reported as a user_input step.
+	readStep := func() {
+		fmt.Printf("{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":%q,\"state\":\"DONE\",\"step_type\":\"user_input\"}}\n", id)
+	}
+	readStep()
 	if mode == "block" {
 		time.Sleep(time.Hour)
 	}
@@ -93,6 +98,7 @@ func TestAgyProcessHelper(t *testing.T) {
 				f.WriteString(line)
 				f.Close()
 			}
+			readStep()
 			fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
 		}
 		if err != nil {

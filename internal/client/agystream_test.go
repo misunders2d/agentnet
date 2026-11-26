@@ -234,3 +234,41 @@ func TestAgyWarmStrayOutputUnfit(t *testing.T) {
 		t.Fatal("agy that wrote between turns was reused")
 	}
 }
+
+// A reused agy's result counts only after agy reported reading this turn's
+// message (its user_input step): a late result read while the message was
+// being written must not become this turn's answer.
+func TestAgyReusedResultNeedsThisTurnsInput(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input bool
+		want  string
+	}{{"stale result", false, envelope.StatusFailed}, {"answer after input", true, envelope.StatusDone}} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, pw, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pr.Close()
+			defer pw.Close()
+			go io.Copy(io.Discard, pr)
+			turn := newAgyWarmTurn(pw, "next question")
+			turn.strict, turn.clean = true, func() bool { return true }
+			s := agyStream{conversation: agyTestConversation, expected: agyTestConversation, onResult: turn.settle, onOutput: turn.early, onInput: turn.begun}
+			turn.begin()
+			if !turn.begun() {
+				t.Fatal("the turn's message was not begun")
+			}
+			if tc.input {
+				s.Write([]byte(`{"event":"step_update","step_update":{"conversation_id":"` + agyTestConversation + `","state":"DONE","step_type":"user_input"}}` + "\n"))
+			}
+			s.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "an answer") + "\n"))
+			if !isClosed(turn.settled) {
+				t.Fatal("the result did not settle the turn")
+			}
+			if _, status, _ := s.result(nil, &agyDiagnostics{}); status != tc.want {
+				t.Fatalf("status %q, want %q (damaged=%v)", status, tc.want, s.damaged)
+			}
+		})
+	}
+}

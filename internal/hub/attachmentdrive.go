@@ -728,8 +728,17 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 			}
 		}
 		delete(inflight, r.id)
-		if errors.Is(r.err, gdrive.ErrRateLimited) && limit > 1 && ctx.Err() == nil {
-			// The file stays pending and is picked again after the pause.
+		// A transfer admitted before the pause (limit was higher) waits for
+		// it too, even when the pause just took the pace to one.
+		if errors.Is(r.err, gdrive.ErrRateLimited) && (limit > 1 || paused != nil) && ctx.Err() == nil {
+			// The file is picked again after the pause. A resumed Drive copy
+			// whose check was refused marked itself retry (copyAttachmentDrive);
+			// it rejoins this pass, which would otherwise end "connected" with
+			// no retry scheduled.
+			if _, err := h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state='pending' WHERE blob_id=? AND state='retry'`, r.id); err != nil {
+				transferErr, stopped = err, true
+				continue
+			}
 			if paused == nil {
 				limit = max(1, limit/2)
 				paused = time.After(slowDown)

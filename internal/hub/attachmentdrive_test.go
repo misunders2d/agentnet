@@ -54,6 +54,7 @@ type relayDriveProvider struct {
 	workerDeadline                      bool
 	deleteFailures                      map[string]bool
 	metadataFailures                    map[string]bool
+	metadataRateLimits                  map[string]int // remaining 429 replies to a file's metadata check
 }
 
 func TestRelayAttachmentDriveOAuthConfiguration(t *testing.T) {
@@ -225,6 +226,11 @@ func newRelayDriveProvider(t *testing.T) *relayDriveProvider {
 			id := strings.TrimPrefix(path, "/files/")
 			if r.Method == "GET" && r.URL.Query().Get("alt") != "media" && p.metadataFailures[id] {
 				http.Error(w, `{"error":{"code":503}}`, 503)
+				return
+			}
+			if r.Method == "GET" && r.URL.Query().Get("alt") != "media" && p.metadataRateLimits[id] > 0 {
+				p.metadataRateLimits[id]--
+				http.Error(w, `{"error":{"code":429}}`, 429)
 				return
 			}
 			file, ok := p.files[id]
