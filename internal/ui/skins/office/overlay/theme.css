@@ -48,10 +48,11 @@
   --office-selection: #BBD6FB;
   /* Layout (skin/README.md, optional layout tokens): a list column a shade
      darker than the conversation; on a laptop the messages use the width
-     instead of leaving empty gutters, with bubbles capped near 80 characters. */
+     instead of leaving empty gutters. Leave room beside long bubbles for
+     the avatar and the desktop actions. */
   --an-sidebar: #F4F5F7;
   --an-timeline-max: 1040px;
-  --an-bubble-max: min(70%, 34rem);
+  --an-bubble-max: min(38rem, max(70%, calc(100% - 12rem)));
   color-scheme: light;
 }
 .an-root[data-theme=dark] {

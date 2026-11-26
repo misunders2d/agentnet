@@ -40,9 +40,19 @@ const origin = new URL(target).origin;
     return page.evaluate(() => {
       const tl = document.getElementById('skin').shadowRoot.querySelector('[data-part=timeline]');
       const a = tl.getBoundingClientRect(), b = tl.parentElement.getBoundingClientRect();
-      const bubble = getComputedStyle(tl.querySelector('[data-part=bubble]').parentElement).maxWidth;
-      return { pane: Math.round(b.width), timeline: Math.round(a.width), left: Math.round(a.left - b.left), bubble };
+      const bubbles = [...tl.querySelectorAll('[data-part=bubble]')];
+      const long = bubbles.filter(el => el.textContent.includes('Это длинное сообщение'));
+      return {
+        pane: Math.round(b.width), timeline: Math.round(a.width), left: Math.round(a.left - b.left),
+        short: Math.round(bubbles.find(el => el.textContent.includes('Got it.')).getBoundingClientRect().width),
+        long: long.map(el => Math.round(el.getBoundingClientRect().width)),
+      };
     });
+  };
+  const assertBubbleWidths = (col, min, max, view) => {
+    assert.equal(col.long.length, 2, view + ' rendered both long messages');
+    assert(col.long.every(width => width >= min && width <= max), view + ' long bubbles fit ' + JSON.stringify(col));
+    assert(col.short < 160, view + ' short message stays snug ' + JSON.stringify(col));
   };
   try {
     for (const view of [{ tag: 'desk-light', width: 1280, height: 800, scheme: 'light' }, { tag: 'phone-dark', width: 390, height: 844, scheme: 'dark', touch: true }]) {
@@ -59,6 +69,15 @@ const origin = new URL(target).origin;
       // MEL-823: no empty side gutters on a laptop; the phone is unchanged.
       const col = await column(fresh.page);
       assert.equal(col.timeline, col.pane, view.tag + ' Office message column fills its pane ' + JSON.stringify(col));
+      assertBubbleWidths(col, view.touch ? 245 : 600, view.touch ? 318 : 608, view.tag);
+      if (!view.touch) {
+        for (const bubble of await fresh.page.locator('[data-part=bubble]').filter({ hasText: 'Это длинное сообщение' }).all()) {
+          await bubble.hover();
+          const actions = bubble.getByRole('button', { name: 'More actions' });
+          const box = await actions.boundingBox();
+          assert(box && box.x >= view.width - col.pane && box.x + box.width <= view.width, 'message actions fit inside the pane');
+        }
+      }
       lines.push(view.tag + ' Office message column ' + JSON.stringify(col));
       if (shots) await fresh.page.screenshot({ path: path.join(shots, 'office-default-' + view.tag + '-chat.png') });
       assert.deepEqual(fresh.errors, [], view.tag + ' fresh errors');
@@ -86,6 +105,8 @@ const origin = new URL(target).origin;
       const big = await open({ width: 1920, height: 1080 });
       const col = await column(big.page);
       assert.deepEqual([col.timeline, col.left], [1040, Math.round((col.pane - 1040) / 2)], 'Office on 1920 ' + JSON.stringify(col));
+      assertBubbleWidths(col, 600, 608, 'Office 1920');
+      if (shots) await big.page.screenshot({ path: path.join(shots, 'office-default-wide-chat.png') });
       await big.ctx.close();
       const comic = await open({ storage: { 'agentnet.skin': 'comic' } });
       const c = await column(comic.page);
