@@ -15,20 +15,23 @@ import (
 
 // claudeChatPersonOnly refuses a connect that is not the person at a
 // terminal: from a Claude or Codex session, an AgentNet run, or a pipe.
-func claudeChatPersonOnly() error {
+func claudeChatPersonOnly() error { return chatPersonOnly("a Claude chat") }
+
+// chatPersonOnly is claudeChatPersonOnly for the chat named what.
+func chatPersonOnly(what string) error {
 	for _, name := range []string{"CLAUDECODE", client.ClaudeSessionEnv, client.CodexThreadEnv, "AGENTNET_REPLY_SESSION"} {
 		if os.Getenv(name) != "" {
-			return fmt.Errorf("connect a Claude chat from your own terminal, not from an agent session (%s is set)", name)
+			return fmt.Errorf("connect %s from your own terminal, not from an agent session (%s is set)", what, name)
 		}
 	}
 	if inRun() {
-		return errors.New("connect a Claude chat from your own terminal, not from an AgentNet run")
+		return errors.New("connect " + what + " from your own terminal, not from an AgentNet run")
 	}
 	if name := agentAncestor(); name != "" {
-		return fmt.Errorf("connect a Claude chat from your own terminal, not from an agent session (started under %s)", name)
+		return fmt.Errorf("connect %s from your own terminal, not from an agent session (started under %s)", what, name)
 	}
 	if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice == 0 {
-		return errors.New("connect a Claude chat from your own terminal (stdin is not a terminal)")
+		return errors.New("connect " + what + " from your own terminal (stdin is not a terminal)")
 	}
 	return nil
 }

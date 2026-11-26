@@ -93,6 +93,12 @@ func (a *Agent) readiness(humanOnly bool) (DaemonReadiness, error) {
 				} else {
 					r.Available = true
 				}
+			} else if chat := entry.Responder.CodexChat; chat != nil {
+				if _, err := codexChatTarget(*chat); err != nil {
+					r.Problem = err.Error()
+				} else {
+					r.Available = true
+				}
 			} else if !ok {
 				r.Problem = "unsupported harness"
 			} else if _, err := resolveNativeLaunch(h.bin); err != nil {

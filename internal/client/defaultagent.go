@@ -69,8 +69,8 @@ func (a *Agent) saveDefaultIn(tx *sql.Tx, r *Responder, selectID string) error {
 	if selectID != "" && selected < 0 {
 		return ErrUnknownAgent
 	}
-	if selected >= 0 && entries[selected].Responder != nil && entries[selected].Responder.Chat != nil {
-		return errors.New("a Claude chat answers only requests that name it; it cannot be the default agent")
+	if selected >= 0 && entries[selected].Responder != nil && entries[selected].Responder.isChat() {
+		return errors.New("a " + entries[selected].Responder.chatName() + " answers only requests that name it; it cannot be the default agent")
 	}
 	if selected < 0 && selectID == "" {
 		// A harness has one active identity on this device, regardless of name

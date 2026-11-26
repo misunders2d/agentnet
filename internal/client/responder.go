@@ -25,6 +25,21 @@ type Responder struct {
 	// Chat is the exact opted-in Claude chat of a ClaudeChatHarness agent
 	// (claudechat.go); set only by ConnectClaudeChat.
 	Chat *ClaudeChat `json:"claude_chat,omitempty"`
+	// CodexChat is the exact opted-in Codex Desktop chat of a
+	// CodexChatHarness agent (codexchat.go); set only by ConnectCodexChat.
+	CodexChat *CodexChat `json:"codex_chat,omitempty"`
+}
+
+// isChat reports whether r is an opted-in Claude or Codex Desktop chat:
+// one plain message in, that chat's own turn out (claudechat.go, codexchat.go).
+func (r *Responder) isChat() bool { return r.Chat != nil || r.CodexChat != nil }
+
+// chatName is how messages name r's chat.
+func (r *Responder) chatName() string {
+	if r.CodexChat != nil {
+		return "Codex Desktop chat"
+	}
+	return "Claude chat"
 }
 
 // harness starts a separate background session with the owner's native setup.
@@ -246,7 +261,13 @@ func validateResponder(r *Responder) error {
 	if r.Chat != nil && (r.Chat.Handle == "" || r.Chat.SessionID == "" || r.Chat.PID < 1) {
 		return errors.New("invalid Claude chat target")
 	}
-	if _, ok := Harnesses[r.Harness]; !ok && r.Chat == nil {
+	if (r.Harness == CodexChatHarness) != (r.CodexChat != nil) || r.Chat != nil && r.CodexChat != nil {
+		return errors.New("a Codex Desktop chat agent is connected only with agentnet codex-chat connect")
+	}
+	if c := r.CodexChat; c != nil && (!validCodexThread(c.Thread) || c.File == "" || c.Home == "") {
+		return errors.New("invalid Codex Desktop chat target")
+	}
+	if _, ok := Harnesses[r.Harness]; !ok && !r.isChat() {
 		return fmt.Errorf("unsupported responder %q (supported: %v)", r.Harness, HarnessNames())
 	}
 	dir, err := filepath.Abs(r.Dir)

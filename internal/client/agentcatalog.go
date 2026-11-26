@@ -27,11 +27,12 @@ var ErrAgentHarnessConflict = errors.New("this harness already has an enabled ag
 var ErrAgentHarnessAmbiguous = errors.New("choose the current agent for this harness before using its legacy configurations")
 
 // enabledHarnessCount counts the enabled agents in r's lane: one per
-// harness, and one per opted-in Claude chat.
+// harness, and one per opted-in Claude or Codex Desktop chat.
 func enabledHarnessCount(entries []LocalAgentInfo, r Responder) int {
 	n := 0
 	for _, entry := range entries {
-		if e := entry.Responder; e != nil && e.Harness == r.Harness && (r.Chat == nil || e.Chat != nil && e.Chat.Handle == r.Chat.Handle) {
+		if e := entry.Responder; e != nil && e.Harness == r.Harness && (r.Chat == nil || e.Chat != nil && e.Chat.Handle == r.Chat.Handle) &&
+			(r.CodexChat == nil || e.CodexChat != nil && e.CodexChat.Thread == r.CodexChat.Thread) {
 			n++
 		}
 	}
@@ -93,6 +94,10 @@ func copyResponder(r Responder) Responder {
 	if r.Chat != nil {
 		chat := *r.Chat
 		r.Chat = &chat
+	}
+	if r.CodexChat != nil {
+		chat := *r.CodexChat
+		r.CodexChat = &chat
 	}
 	return r
 }

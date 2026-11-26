@@ -322,19 +322,21 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		return
 	}
 	h := Harnesses[r.Harness]
-	chat := r.Chat != nil
+	chat := r.isChat()
 	if chat {
-		// An opted-in Claude chat takes one plain message: no files, no
-		// run folder, no edit of a message it already has (claudechat.go).
+		// An opted-in Claude or Codex Desktop chat takes one plain message:
+		// no files, no run folder, no edit of a message it already has
+		// (claudechat.go, codexchat.go).
+		name := r.chatName()
 		switch {
 		case j.Receiver != nil:
-			a.endJob(j.ID, stateNotRun, "a Claude chat agent is not a reply receiver", j.nativeAttempt)
+			a.endJob(j.ID, stateNotRun, "a "+name+" agent is not a reply receiver", j.nativeAttempt)
 			return
 		case j.Attachments > 0:
-			a.endJob(j.ID, stateNeedHuman, "This request has files, which cannot be passed to a Claude chat. Nothing was sent.", j.nativeAttempt)
+			a.endJob(j.ID, stateNeedHuman, "This request has files, which cannot be passed to a "+name+". Nothing was sent.", j.nativeAttempt)
 			return
 		case j.editOf != "":
-			a.endJob(j.ID, stateNotRun, "Edit follow-up did not run: the Claude chat already has the original message", j.nativeAttempt)
+			a.endJob(j.ID, stateNotRun, "Edit follow-up did not run: the "+name+" already has the original message", j.nativeAttempt)
 			return
 		}
 	}
@@ -446,19 +448,30 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}()
 
 	if chat {
-		out := a.runClaudeChat(runCtx, j, r, prompt, activity)
+		name := r.chatName()
+		var out chatOutcome
+		if r.CodexChat != nil {
+			out = a.runCodexChat(runCtx, j, r, prompt, activity)
+		} else {
+			out = a.runClaudeChat(runCtx, j, r, prompt, activity)
+		}
 		cancel()
 		<-watchDone
 		if ctx.Err() == nil && out.answer == "" {
 			// Final either way: the chat's later hooks have nothing to record.
 			// A stopping daemon keeps it live for an exact reconcile.
 			_, _ = a.store.db.Exec(`UPDATE claude_chat_deliveries SET state=? WHERE request=? AND state IN (?,?,?)`, chatSuperseded, j.ID, chatSending, chatWritten, chatStarted)
+			_, _ = a.store.db.Exec(`UPDATE codex_chat_deliveries SET state=? WHERE request=? AND state IN (?,?,?)`, chatSuperseded, j.ID, chatSending, codexQueued, chatStarted)
+		}
+		reached := "It was already delivered to the " + name + "."
+		if a.codexChatRemoved(j.ID) {
+			reached = "Codex Desktop had not started it; it was taken out of the chat's queue."
 		}
 		switch {
 		case ctx.Err() != nil:
-			a.endJob(j.ID, stateInterrupt, "the daemon stopped while waiting for the Claude chat; it is not sent again", j.nativeAttempt)
+			a.endJob(j.ID, stateInterrupt, "the daemon stopped while waiting for the "+name+"; it is not sent again. "+reached, j.nativeAttempt)
 		case stopWhy != "":
-			a.endJob(j.ID, stateNotDelivered, "stopped and not sent: "+stopWhy+". It was already delivered to the Claude chat.", j.nativeAttempt)
+			a.endJob(j.ID, stateNotDelivered, "stopped and not sent: "+stopWhy+". "+reached, j.nativeAttempt)
 		case cancelled.Load():
 			a.finishRun(ctx, j, r, envelope.StatusCancelled, "cancelled by the recipient", "", false, false, func(bool) {})
 		case errors.Is(runCtx.Err(), context.DeadlineExceeded):
@@ -466,7 +479,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		case out.state != "":
 			a.endJob(j.ID, out.state, out.detail, j.nativeAttempt)
 		case strings.TrimSpace(out.answer) == "":
-			a.endJob(j.ID, stateNeedHuman, "The Claude chat's turn ended without an answer.", j.nativeAttempt)
+			a.endJob(j.ID, stateNeedHuman, "The "+name+"'s turn ended without an answer.", j.nativeAttempt)
 		default:
 			a.finishRun(ctx, j, r, envelope.StatusDone, strings.TrimSpace(out.answer), out.answer, false, true, func(bool) {})
 		}
@@ -1102,7 +1115,7 @@ func (a *Agent) finishRun(ctx context.Context, j job, r *Responder, status, body
 	// tagging present agents asks them first (agenttags.go). A Claude chat
 	// is never written a second time, so its rerun could not read their
 	// results: its answer is sent as it is.
-	if status == envelope.StatusDone && j.Receiver == nil && r.Chat == nil {
+	if status == envelope.StatusDone && j.Receiver == nil && !r.isChat() {
 		a.routeAgentTags(ctx, j, r.Harness, body)
 		if parked, err := a.parkForHelpers(j, body); err != nil {
 			a.Logf("%s %s: could not wait for other agents' results: %v", j.Kind, j.ID, err)

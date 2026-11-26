@@ -67,6 +67,7 @@ Questions and tasks sent to you:
   responder  choose the local harness that answers and runs tasks
   receivers  inspect local selected reply receiver obligations and input state
   claude-chat  connect an open Claude Code or Claude Desktop chat as a named agent
+  codex-chat   connect a Codex Desktop chat as a named agent
 
 Identity and trust:
   join, whoami, fingerprint, trust
@@ -453,6 +454,27 @@ not send it again. Files are not passed, and agents named in its answer are
 not asked. The agent stops working when the chat closes or restarts; connect
 it again then. Disable it in Agents. Linux only; it needs AgentNet's Claude
 hooks (agentnet hooks install claude).`,
+
+	"codex-chat": `Usage: agentnet codex-chat list
+       agentnet codex-chat connect THREAD_ID NAME
+
+Make one Codex Desktop chat on this computer a named agent of yours. list
+shows the recent Codex Desktop chats in your Codex home, newest first.
+connect needs Codex Desktop running and asks you to type yes in your own
+terminal; it refuses when it can tell it runs inside an agent session or an
+AgentNet run.
+
+Requests from your own devices that name this agent are added once to that
+chat's own queue, as Codex Desktop's own queued messages are; requests from
+other people are not sent. Codex Desktop runs a queued request only while
+that chat is open in its window, with the chat's own model, settings, tools
+and approvals; AgentNet sends no permission mode or bypass. Its answer is
+the turn that request starts. A request Codex Desktop has not started by the
+deadline, or when it closes, is taken out of the queue and not sent. A turn
+stopped or replaced first, or a Desktop that closes mid-turn, ends as "not
+captured", for you to look at; AgentNet does not send it again. Files are
+not passed, and agents named in its answer are not asked. Disable it in
+Agents. Linux only.`,
 
 	"sessions": `Usage: agentnet sessions ADDRESS
 
