@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
 // A Claude Desktop (or any Claude Code) chat the person opted in, by hand,
@@ -275,23 +277,23 @@ type chatOutcome struct{ state, detail, answer string }
 
 func chatEnd(state, detail string) chatOutcome { return chatOutcome{state: state, detail: detail} }
 
-// claudeChatAsker reports whether j comes from this person: asked here, or
-// from a current verified human device of this computer's own person. The
-// chat takes it as a message from the person's own other session, so no
-// one else's request goes in.
+// claudeChatAsker allows direct requests from the owner's current human
+// devices. Agent-room asks carry the agent origin even when the request
+// was stored locally with the same device key a person uses.
 func (a *Agent) claudeChatAsker(j job) bool {
-	if j.Local {
-		return true
+	var origin string
+	if err := a.store.db.QueryRow(`SELECT coalesce(origin,'') FROM inbox WHERE id=? AND replica=0`, j.ID).Scan(&origin); err != nil || envelope.AgentOrigin(origin) {
+		return false
 	}
-	var ok bool
-	return a.store.db.QueryRow(`SELECT `+ownHumanQuestionHolds("?", "?"), j.From, j.Key, j.From, j.Key).Scan(&ok) == nil && ok
+	own, err := a.ownHumanAuthor(a.store.db, j.From, j.Key)
+	return err == nil && own
 }
 
 // runClaudeChat delivers prompt once and waits for its exact answer.
 func (a *Agent) runClaudeChat(runCtx context.Context, j job, r *Responder, prompt string, activity *runActivity) chatOutcome {
 	c := r.Chat
 	if !a.claudeChatAsker(j) {
-		return chatEnd(stateNotRun, "A Claude chat agent takes requests only from your own devices. Nothing was sent.")
+		return chatEnd(stateNotRun, "A Claude chat agent takes direct requests only from your own devices. Nothing was sent.")
 	}
 	row, exists, err := chatRowIn(a.store.db, j.ID)
 	if err != nil {

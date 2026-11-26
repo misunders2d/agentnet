@@ -437,3 +437,67 @@ func TestClaudeChatTakesOnlyTheOwnersDevices(t *testing.T) {
 	}
 	noMoreFrames(t, f.inbox)
 }
+
+func TestClaudeChatRefusesAnAgentAskingForAnotherPerson(t *testing.T) {
+	stub := installAgentStub(t)
+	f := newChatFixture(t, true)
+	a := f.w.bob
+	persons(t, a)
+	runAgent(t, a)
+	phone := linked(t, a)
+	publishGroupFixtureCaps(t, a, true)
+	publishGroupFixtureCaps(t, phone, true)
+	asker, err := a.CreateLocalAgent("background", Responder{Harness: "agentstub", Dir: stub.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another person's already admitted question is running in a different
+	// chat. Its helper ask is posted with the laptop's own key and local job.
+	cause := protocol.NewID()
+	if _, err = a.store.db.Exec(`INSERT INTO inbox(id,sender,ts,kind,body,received_at,state,verified_by,agent_id,attempts,last_attempt_at)
+		VALUES(?,?,1,?,?,1,?,?,?,1,unixepoch())`, cause, f.w.alice.Address, envelope.KindQuestion, "look up a rate",
+		stateRunning, f.w.alice.Self().Fingerprint(), asker.ID); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := a.RunAgentRoomAsk(tctx(t), cause, AgentRoomAsk{Host: a.Address, AgentID: f.agentID,
+		Kind: envelope.KindQuestion, Body: "ask the connected chat for the rate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id, origin string
+	var local bool
+	if err := a.store.db.QueryRow(`SELECT id,origin,local FROM inbox WHERE conv=? AND lid=? AND replica=0`, sent.Conv, sent.LID).
+		Scan(&id, &origin, &local); err != nil || !local || !envelope.AgentOrigin(origin) {
+		t.Fatalf("expected a locally signed helper job, got local=%v origin=%q: %v", local, origin, err)
+	}
+	eventually(t, "helper blocked before opening the chat inbox", func() bool {
+		select {
+		case <-f.inbox.frames:
+			t.Fatal("another person's helper ask reached the connected chat")
+		default:
+		}
+		state, _ := a.store.jobState(id)
+		return state == stateNotRun
+	})
+	if _, ok, err := chatRowIn(a.store.db, id); ok || err != nil {
+		t.Fatalf("helper ask created a delivery record: %v, %v", ok, err)
+	}
+	noMoreFrames(t, f.inbox)
+
+	// The owner can still ask the same agent directly on this computer.
+	direct, err := a.AskAgentInTopic(tctx(t), sent.To, envelope.KindQuestion, "owner asking directly", sent.Topic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, content := f.frame(t)
+	if !strings.Contains(content, "owner asking directly") {
+		t.Fatalf("wrong request entered the chat: %q", content)
+	}
+	f.hook("UserPromptSubmit", content, "")
+	f.hook("Stop", "", "owner's answer")
+	waitState(t, a, direct.ID, stateAnswered)
+}
