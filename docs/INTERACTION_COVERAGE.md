@@ -4076,6 +4076,14 @@ px tall, failed before this). The emoji picker's grid keeps
 room for a sticky heading plus one full 44 px row (the taller composer left
 a 45 px grid at 390×400 where the heading covered the row).
 
+Office desktop density follows the owner’s annotated composer screenshot.
+At 1280×800 in Chromium with a mouse, the formatting strip went from 49 to
+37 px and the lower tools row from 46 to 36 px. At 390×844 with touch
+emulation, Aa still swaps tools in place with 44 px targets. The draft
+remains 16 px on a 24 px line. `TestOfficeDefaultWorkspaceRendered` checks both
+layouts. `TestMessageFormattingRendered` also passed on Office with 40 and
+400 messages, including Aa, selection, formatting and the Send menu.
+
 | Inventory | Intended local feedback | Completion/recovery | Executed evidence |
 |---|---|---|---|
 | phone Aa toggles strip | strip replaces tools in place; Send, clock and draft selection/focus unchanged (`phone Aa 320` 15 ms, `390` 16 ms) | strip Bold formats the kept selection, field stays focused (16–32 ms) | `TestMessageFormattingRendered` (320/390 touch) |

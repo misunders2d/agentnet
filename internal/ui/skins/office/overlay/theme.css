@@ -139,6 +139,15 @@
   [data-part=composer-field] { border-radius: 8px; background: var(--an-surface); border-color: var(--an-outline); }
   [data-part=composer] { border-top-color: var(--an-hairline); }
 
+  /* Keep the draft roomy on desktop and retain the larger touch targets. */
+  @media (min-width: 64rem) and (pointer: fine) {
+    [data-part=composer-format] { padding-block: 2px; }
+    [data-part=composer-tools] { padding-bottom: 4px; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button { height: 2rem; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send]) { width: 2rem; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button svg { width: 18px; height: 18px; }
+  }
+
 /* ---- Office's own pieces (overlay slots) ------------------------------------ */
   /* The send button: a plain square. */
   .office-send { border-radius: 6px; border: 1px solid transparent; }

@@ -54,6 +54,38 @@ const origin = new URL(target).origin;
     assert(col.long.every(width => width >= min && width <= max), view + ' long bubbles fit ' + JSON.stringify(col));
     assert(col.short < 160, view + ' short message stays snug ' + JSON.stringify(col));
   };
+  const checkComposer = async (page, touch) => {
+    const frame = page.locator('[data-part=composer-field]');
+    const toggle = frame.getByRole('button', { name: 'Formatting', exact: true });
+    const strip = frame.getByRole('group', { name: 'Formatting options' });
+    const measure = () => frame.evaluate(el => {
+      const get = part => el.querySelector('[data-part=' + part + ']');
+      const bar = get('composer-format'), tools = get('composer-tools'), field = el.querySelector('textarea');
+      const height = node => Math.round(node.getBoundingClientRect().height);
+      const target = (row, selector) => height(row.querySelector(selector));
+      return {
+        formatting: height(bar), tools: height(tools), formatTarget: target(bar, 'button'), toolTarget: target(tools, 'button'),
+        send: height(get('send')), icon: height(bar.querySelector('svg')),
+        draft: [getComputedStyle(field).fontSize, getComputedStyle(field).lineHeight],
+      };
+    });
+    const tools = frame.locator('[data-part=composer-tools]');
+    const before = (await tools.boundingBox()).height;
+    if (touch) await toggle.tap();
+    await strip.waitFor();
+    const m = await measure();
+    assert.deepEqual(m.draft, ['16px', '24px'], 'draft text and line height ' + JSON.stringify(m));
+    if (touch) {
+      assert.deepEqual([m.formatTarget, m.toolTarget, m.send, m.tools], [44, 44, 44, before], 'phone Aa keeps targets and row height');
+    } else {
+      assert.deepEqual([m.formatting, m.tools, m.formatTarget, m.toolTarget, m.send, m.icon], [37, 36, 32, 32, 32, 18], 'compact desktop composer ' + JSON.stringify(m));
+      await toggle.click();
+      await strip.waitFor({ state: 'hidden' });
+      await toggle.click();
+      await strip.waitFor();
+    }
+    return m;
+  };
   try {
     for (const view of [{ tag: 'desk-light', width: 1280, height: 800, scheme: 'light' }, { tag: 'phone-dark', width: 390, height: 844, scheme: 'dark', touch: true }]) {
       // A new profile, offline: built-in Office, nothing saved, no host skin bar.
@@ -80,6 +112,8 @@ const origin = new URL(target).origin;
       }
       lines.push(view.tag + ' Office message column ' + JSON.stringify(col));
       if (shots) await fresh.page.screenshot({ path: path.join(shots, 'office-default-' + view.tag + '-chat.png') });
+      lines.push(view.tag + ' Office composer ' + JSON.stringify(await checkComposer(fresh.page, view.touch)));
+      if (shots) await fresh.page.locator('[data-part=composer-field]').screenshot({ path: path.join(shots, 'office-composer-' + view.tag + '.png') });
       assert.deepEqual(fresh.errors, [], view.tag + ' fresh errors');
       await fresh.ctx.close();
     }
