@@ -21,8 +21,13 @@ import (
 	"time"
 )
 
-//go:embed browser-back.mjs conversation-links.mjs android.js pictures.mjs index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs spoilers.mjs chatprojection.mjs directtopics.mjs devicehistory.mjs historyarchive.mjs historywindow.mjs historycontribution.mjs topictransfer.mjs wire.mjs optimistic.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs skin-gallery.mjs teams.mjs workspaces.mjs workspaces.css setup.mjs getapp.json getapp.mjs landing.mjs landing.css google-signin.mjs
+//go:embed browser-back.mjs conversation-links.mjs android.js pictures.mjs index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs spoilers.mjs chatprojection.mjs directtopics.mjs devicehistory.mjs historyarchive.mjs historywindow.mjs historycontribution.mjs topictransfer.mjs wire.mjs optimistic.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs skin-gallery.mjs teams.mjs workspaces.mjs workspaces.css setup.mjs getapp.json getapp.mjs landing.mjs landing.css google-signin.mjs
 var files embed.FS
+
+// Open Exchange artwork, kept byte-for-byte in sync with the desktop icon.
+//
+//go:embed app-icon.png
+var appIconPNG []byte
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
 // browser device the relay serves (the same page and views, started by
@@ -110,18 +115,12 @@ func SetupPage() []byte {
 	return bytes.Replace(page, []byte(daemonScripts), []byte(`<script type="module" src="/assets/setup.mjs"></script>`), 1)
 }
 
-// The app icon is the logo (ant.png: a dark teal ant, the owner's choice)
-// on a light rounded tile, so it reads on dark and light tabs alike. The
-// ant is fitted into the middle 70% of the tile, clear of the edges.
-const (
-	iconTileR, iconTileG, iconTileB = 0xf2, 0xf7, 0xf6 // light, a trace of the ant's teal
-	iconCorner                      = .22              // the tile's corner radius, of its size
-	iconAnt                         = .70              // the ant's longer side, of the tile's size
-)
-
-// AppIcon is the app icon as a size×size PNG (the favicon, the header's
-// mark and the installed app's icon), made once per size.
+// AppIcon returns the Open Exchange logo as a size×size PNG. The 512 px
+// variant is the desktop asset itself; resized variants are made once per size.
 func AppIcon(size int) []byte {
+	if size == 512 {
+		return appIconPNG
+	}
 	iconsMu.Lock()
 	defer iconsMu.Unlock()
 	if b, ok := icons[size]; ok {
@@ -138,38 +137,15 @@ var (
 )
 
 func drawIcon(size int) []byte {
-	src := ant()
-	box := opaqueBounds(src)
-	n := float64(size)
-	// The ant's box, scaled to fit iconAnt of the tile and centred.
-	scale := iconAnt * n / float64(max(box.Dx(), box.Dy()))
-	ox := (n - float64(box.Dx())*scale) / 2
-	oy := (n - float64(box.Dy())*scale) / 2
-	r := iconCorner * n
-	inTile := func(x, y float64) bool {
-		dx := math.Max(math.Max(r-x, x-(n-r)), 0)
-		dy := math.Max(math.Max(r-y, y-(n-r)), 0)
-		return dx*dx+dy*dy <= r*r
-	}
-	const samples = 4 // per pixel side, for the tile's rounded edge
+	src := appIconImage()
+	scale := float64(src.Bounds().Dx()) / float64(size)
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
-	for py := 0; py < size; py++ {
-		for px := 0; px < size; px++ {
-			var cover float64
-			for s := 0; s < samples*samples; s++ {
-				if inTile(float64(px)+(float64(s%samples)+.5)/samples, float64(py)+(float64(s/samples)+.5)/samples) {
-					cover++
-				}
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			r, g, b, a := area(src, float64(x)*scale, float64(y)*scale, float64(x+1)*scale, float64(y+1)*scale)
+			if a > 0 {
+				img.SetNRGBA(x, y, color.NRGBA{uint8(r/a + .5), uint8(g/a + .5), uint8(b/a + .5), uint8(255*a + .5)})
 			}
-			if cover == 0 {
-				continue
-			}
-			// The ant over this pixel: the source area it covers, averaged
-			// (premultiplied), then laid over the tile.
-			x0, y0 := float64(box.Min.X)+(float64(px)-ox)/scale, float64(box.Min.Y)+(float64(py)-oy)/scale
-			ar, ag, ab, aa := area(src, x0, y0, x0+1/scale, y0+1/scale)
-			mix := func(tile float64, c float64) uint8 { return uint8(tile*(1-aa) + c + .5) }
-			img.SetNRGBA(px, py, color.NRGBA{mix(iconTileR, ar), mix(iconTileG, ag), mix(iconTileB, ab), uint8(255*cover/(samples*samples) + .5)})
 		}
 	}
 	var b bytes.Buffer
@@ -179,13 +155,8 @@ func drawIcon(size int) []byte {
 	return b.Bytes()
 }
 
-// ant is the logo, decoded once.
-var ant = sync.OnceValue(func() *image.NRGBA {
-	data, err := fs.ReadFile(files, "ant.png")
-	if err != nil {
-		panic(err) // a build error
-	}
-	m, err := png.Decode(bytes.NewReader(data))
+var appIconImage = sync.OnceValue(func() *image.NRGBA {
+	m, err := png.Decode(bytes.NewReader(appIconPNG))
 	if err != nil {
 		panic(err)
 	}
@@ -197,19 +168,6 @@ var ant = sync.OnceValue(func() *image.NRGBA {
 	}
 	return out
 })
-
-// opaqueBounds is the smallest rectangle holding every visible pixel.
-func opaqueBounds(m *image.NRGBA) image.Rectangle {
-	b := image.Rectangle{Min: m.Bounds().Max, Max: m.Bounds().Min}
-	for y := m.Bounds().Min.Y; y < m.Bounds().Max.Y; y++ {
-		for x := m.Bounds().Min.X; x < m.Bounds().Max.X; x++ {
-			if m.NRGBAAt(x, y).A > 8 {
-				b = b.Union(image.Rect(x, y, x+1, y+1))
-			}
-		}
-	}
-	return b
-}
 
 // area averages m over [x0,x1)×[y0,y1) in its pixels, each weighted by how
 // much of it the area covers: premultiplied colour (0-255) and alpha (0-1).

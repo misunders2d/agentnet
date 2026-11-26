@@ -14,7 +14,7 @@ const server=http.createServer((req,res)=>{
  const p=new URL(req.url,'http://fixture').pathname;let data,type='text/javascript';
  if(p==='/'){type='text/html';data='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/app.css">'+fs.readFileSync(path.join(base,'default.html'),'utf8')+'<script src="/fixture.js"></script><script src="/assets/lenses.js"></script><script src="/assets/app.js"></script>';}
  else if(p==='/fixture.js')data=bootstrap;
- else if(['/assets/app.js','/assets/lenses.js','/assets/app.css','/assets/icon-192.png'].includes(p)){type=p.endsWith('.css')?'text/css':p.endsWith('.png')?'image/png':'text/javascript';data=fs.readFileSync(path.join(base,p.endsWith('.png')?'ant.png':path.basename(p)));}
+ else if(['/assets/app.js','/assets/lenses.js','/assets/app.css','/assets/icon-192.png'].includes(p)){type=p.endsWith('.css')?'text/css':p.endsWith('.png')?'image/png':'text/javascript';data=fs.readFileSync(path.join(base,p.endsWith('.png')?'app-icon.png':path.basename(p)));}
  else{res.writeHead(404).end();return;}
  res.setHeader('Content-Type',type+(type.startsWith('text/')?'; charset=utf-8':''));res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:");res.end(data);
 });

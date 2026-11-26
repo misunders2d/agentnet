@@ -61,7 +61,7 @@ const server = http.createServer(async (req, res) => {
   } else if (u.pathname === '/fixture.js') content = bootstrap;
   else if (['/assets/app.css', '/assets/app.js', '/assets/lenses.js', '/assets/icon-192.png'].includes(u.pathname)) {
     type = u.pathname.endsWith('.css') ? 'text/css' : u.pathname.endsWith('.png') ? 'image/png' : type;
-    content = fs.readFileSync(path.join(base, u.pathname.endsWith('.png') ? 'ant.png' : path.basename(u.pathname)));
+    content = fs.readFileSync(path.join(base, u.pathname.endsWith('.png') ? 'app-icon.png' : path.basename(u.pathname)));
   } else { res.writeHead(404).end(); return; }
   res.setHeader('Content-Type', type + (type === 'image/png' ? '' : '; charset=utf-8'));
   res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'");

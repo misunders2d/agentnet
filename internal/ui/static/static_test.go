@@ -245,27 +245,35 @@ func TestRelayManifest(t *testing.T) {
 	if page := string(devicePage()); strings.Count(page, `rel="icon"`) != 1 || !strings.Contains(page, `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) {
 		t.Fatal("the device page does not name its icon once")
 	}
-	// The icon is the ant (dark teal) on a light tile, with clear corners
-	// and room around the ant, at each size.
+	desktop, err := os.ReadFile("../../../desktop/src-tauri/icons/icon.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(AppIcon(512), desktop) {
+		t.Fatal("the web app must use the same logo as the desktop app")
+	}
+	// Check flat regions of the Open Exchange artwork after resizing.
 	for _, size := range []int{192, 512} {
 		img, err := png.Decode(bytes.NewReader(AppIcon(size)))
-		if err != nil || img.Bounds().Dx() != size || img.Bounds().Dy() != size {
-			t.Fatalf("icon %d: %v %v", size, err, img.Bounds())
+		if err != nil {
+			t.Fatalf("icon %d: %v", size, err)
 		}
-		at := func(fx, fy float64) [4]uint32 {
-			r, g, b, a := img.At(int(fx*float64(size)), int(fy*float64(size))).RGBA()
-			return [4]uint32{r >> 8, g >> 8, b >> 8, a >> 8}
+		if img.Bounds().Dx() != size || img.Bounds().Dy() != size {
+			t.Fatalf("icon %d bounds: %v", size, img.Bounds())
 		}
-		if c := at(0, 0); c[3] != 0 {
-			t.Errorf("%d: corner not clear: %v", size, c)
-		}
-		for _, p := range [][2]float64{{.5, .06}, {.06, .5}, {.94, .5}, {.5, .94}} { // the margin: tile only
-			if c := at(p[0], p[1]); c != [4]uint32{iconTileR, iconTileG, iconTileB, 255} {
-				t.Errorf("%d: margin at %v: %v", size, p, c)
+		for _, spot := range []struct {
+			x, y int
+			rgba [4]uint32
+		}{
+			{0, 0, [4]uint32{0, 0, 0, 0}},
+			{256, 31, [4]uint32{27, 21, 48, 255}},
+			{100, 155, [4]uint32{255, 212, 59, 255}},
+			{420, 330, [4]uint32{168, 151, 255, 255}},
+		} {
+			r, g, b, a := img.At(spot.x*size/512, spot.y*size/512).RGBA()
+			if got := [4]uint32{r >> 8, g >> 8, b >> 8, a >> 8}; got != spot.rgba {
+				t.Errorf("icon %d at %d,%d: got %v, want %v", size, spot.x, spot.y, got, spot.rgba)
 			}
-		}
-		if c := at(.5, .56); c[3] != 255 || c[0] > 40 || c[1] > 90 || c[2] > 100 { // the ant's middle
-			t.Errorf("%d: ant: %v", size, c)
 		}
 	}
 }

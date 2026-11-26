@@ -266,11 +266,9 @@
     tasks are held and nothing runs;
   - a plain join page (`e971c16`; one name field with a usable link, one
     recovery message otherwise, "Privacy and storage" one click away);
-  - install as an app (`1cab993`): a manifest and 192/512 icons. Since
-    `ae7f7ea` every icon is the owner's chosen logo (`ant.png`, a dark teal
-    ant) on a light rounded tile that reads on dark and light tabs, drawn
-    at each size (favicon and header mark on both pages, the installed
-    app's icons); seen in Chrome on the demo page, light and dark.
+  - install as an app (`1cab993`): a manifest and 192/512 icons. The web
+    favicon and installed-web-app icons use the same Open Exchange artwork
+    as the desktop launcher (`1de0c477`).
 
   Evidence: Node journeys against a real test Hub, an opt-in real IndexedDB
   test (`AGENTNET_CHROME=google-chrome-stable go test ./internal/ui/static`),
