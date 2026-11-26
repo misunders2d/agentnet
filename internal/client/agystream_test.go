@@ -240,10 +240,9 @@ func TestAgyWarmStrayOutputUnfit(t *testing.T) {
 // being written must not become this turn's answer.
 func TestAgyReusedResultNeedsThisTurnsInput(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		input bool
-		want  string
-	}{{"stale result", false, envelope.StatusFailed}, {"answer after input", true, envelope.StatusDone}} {
+		name, input string // input: the conversation of a user_input step, "" for none
+		want        string
+	}{{"stale result", "", envelope.StatusFailed}, {"another conversation's input", "00000000-0000-4000-8000-000000000000", envelope.StatusFailed}, {"answer after input", agyTestConversation, envelope.StatusDone}} {
 		t.Run(tc.name, func(t *testing.T) {
 			pr, pw, err := os.Pipe()
 			if err != nil {
@@ -259,8 +258,8 @@ func TestAgyReusedResultNeedsThisTurnsInput(t *testing.T) {
 			if !turn.begun() {
 				t.Fatal("the turn's message was not begun")
 			}
-			if tc.input {
-				s.Write([]byte(`{"event":"step_update","step_update":{"conversation_id":"` + agyTestConversation + `","state":"DONE","step_type":"user_input"}}` + "\n"))
+			if tc.input != "" {
+				s.Write([]byte(`{"event":"step_update","step_update":{"conversation_id":"` + tc.input + `","state":"DONE","step_type":"user_input"}}` + "\n"))
 			}
 			s.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "an answer") + "\n"))
 			if !isClosed(turn.settled) {

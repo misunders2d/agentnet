@@ -106,9 +106,11 @@ func (s *agyStream) flush() {
 		// agy reports each message it reads as a user_input step before
 		// answering it (agy 1.5.18, every turn of a warm process).
 		var read struct {
-			Type string `json:"step_type"`
+			Type         string `json:"step_type"`
+			Conversation string `json:"conversation_id"`
 		}
-		if s.onInput != nil && !s.complete && json.Unmarshal(ev.StepUpdate, &read) == nil && read.Type == "user_input" && s.onInput() {
+		if s.onInput != nil && !s.complete && json.Unmarshal(ev.StepUpdate, &read) == nil && read.Type == "user_input" &&
+			s.conversation != "" && read.Conversation == s.conversation && s.onInput() {
 			s.input = true
 		}
 		if s.onActivity != nil && !s.complete && !s.damaged && s.conversation != "" && (ev.Conversation == "" || ev.Conversation == s.conversation) {

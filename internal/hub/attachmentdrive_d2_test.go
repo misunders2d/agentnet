@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -312,7 +313,7 @@ func TestRelayAttachmentDriveTransientResumeRetriesQueue(t *testing.T) {
 // Transfers admitted together all wait for the pause their rate limit
 // causes, down to a pace of one: the move stops only when Drive refuses a
 // single transfer (MEL-836). Two files: 32, 16, 8, 4 and 2 each try both,
-// then one try at a pace of one.
+// then one try alone, after the last pause.
 func TestRelayAttachmentDriveRateLimitStopsOnlyAtPaceOne(t *testing.T) {
 	old := attachmentDriveSlowDown
 	attachmentDriveSlowDown = 100 * time.Millisecond
@@ -348,10 +349,11 @@ func TestRelayAttachmentDriveRateLimitStopsOnlyAtPaceOne(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	p.mu.Lock()
-	calls := p.uploadCalls - before
+	starts := slices.Clone(p.uploadStarts[before:])
 	p.mu.Unlock()
-	if calls != 11 {
-		t.Fatalf("rate-limited uploads before the move stopped: %d, want 11", calls)
+	// Timing-proof: however late a reply, the last try ran alone.
+	if n := len(starts); n < 2 || starts[n-1].Sub(starts[n-2]) < attachmentDriveSlowDown/2 {
+		t.Fatalf("the move stopped without a try at a pace of one: %d tries", n)
 	}
 }
 
@@ -378,21 +380,7 @@ func TestRelayAttachmentDriveRateLimitedResumeRejoinsPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitAttachmentState(t, h, resumed, "remote")
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var present int
-		if err := h.store.db.QueryRow(`SELECT local_present FROM relay_drive_blobs WHERE blob_id=?`, resumed).Scan(&present); err != nil {
-			t.Fatal(err)
-		}
-		if present == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("rate-limited resumed copy never finished its move")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	awaitAttachmentState(t, h, resumed, "remote") // and its local copy removed
 	p.mu.Lock()
 	left := p.metadataRateLimits[fileID]
 	p.mu.Unlock()

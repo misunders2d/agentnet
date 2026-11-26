@@ -678,6 +678,7 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 	}
 	results := make(chan result, attachmentDriveTransfers)
 	inflight := make(map[string]bool, attachmentDriveTransfers)
+	pace := make(map[string]int, attachmentDriveTransfers) // the pace each transfer was admitted at
 	newest, stopped := false, false
 	var transferErr error
 	// Drive's rate limit lowers the pace instead of pausing the whole move:
@@ -696,7 +697,7 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 				transferErr, stopped = err, true
 				break
 			}
-			inflight[id], newest = true, !newest
+			inflight[id], pace[id], newest = true, limit, !newest
 			go func() {
 				size, err := h.copyAttachmentDrive(ctx, id)
 				results <- result{id, size, err}
@@ -727,10 +728,15 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 				return ctx.Err()
 			}
 		}
+		admitted := pace[r.id]
 		delete(inflight, r.id)
-		// A transfer admitted before the pause (limit was higher) waits for
-		// it too, even when the pause just took the pace to one.
-		if errors.Is(r.err, gdrive.ErrRateLimited) && (limit > 1 || paused != nil) && ctx.Err() == nil {
+		delete(pace, r.id)
+		// A transfer admitted at a faster pace is tried again at the slower
+		// one, even when its reply arrives after the pause that took the pace
+		// to one: only a refusal at a pace of one stops the move.
+		// Once the move is stopping, a rate limit is an ordinary temporary
+		// failure (retry state), so the outer backoff schedules the retry.
+		if errors.Is(r.err, gdrive.ErrRateLimited) && (limit > 1 || admitted > 1) && !stopped && ctx.Err() == nil {
 			// The file is picked again after the pause. A resumed Drive copy
 			// whose check was refused marked itself retry (copyAttachmentDrive);
 			// it rejoins this pass, which would otherwise end "connected" with
