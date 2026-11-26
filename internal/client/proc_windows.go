@@ -2,7 +2,13 @@
 
 package client
 
-import "os/exec"
+import (
+	"os"
+	"os/exec"
+)
+
+// terminate: Windows has no termination signal; the grace period ends in a kill.
+func terminate(*os.Process) {}
 
 // ownProcessGroup: on Windows only the harness process itself is killed on
 // cancellation; processes it started may keep running (no job object here).

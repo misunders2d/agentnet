@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
@@ -95,9 +96,10 @@ func (s *agyStream) flush() {
 	case "step_update":
 		if s.onActivity != nil && !s.complete && !s.damaged && s.conversation != "" && (ev.Conversation == "" || ev.Conversation == s.conversation) {
 			var step struct {
-				Type string `json:"step_type"`
+				Type         string `json:"step_type"`
+				Conversation string `json:"conversation_id"`
 			}
-			if json.Unmarshal(ev.StepUpdate, &step) == nil && step.Type == "agent_response" {
+			if json.Unmarshal(ev.StepUpdate, &step) == nil && step.Type == "agent_response" && (step.Conversation == "" || step.Conversation == s.conversation) {
 				s.onActivity(activityAnswer)
 			}
 		}
@@ -125,6 +127,7 @@ type agyWarmTurn struct {
 	sent    chan struct{} // the whole event was written
 	failed  chan struct{} // the event could not be written; err says why
 	err     error
+	writing atomic.Bool // the event's write has begun
 	once    sync.Once
 }
 
@@ -137,6 +140,7 @@ func newAgyWarmTurn(in io.WriteCloser, prompt string) *agyWarmTurn {
 // the write. A failed or partial write fails the turn; nothing is resent.
 func (t *agyWarmTurn) begin() {
 	go func() {
+		t.writing.Store(true)
 		if _, err := io.WriteString(t.in, agyInput(t.prompt)); err != nil {
 			t.err = err
 			close(t.failed)
@@ -147,11 +151,13 @@ func (t *agyWarmTurn) begin() {
 }
 
 // settle ends the turn on its terminal result. It reports false for a result
-// read before the turn's whole message was written: agy answers an event
+// read before the turn's message began to be written: agy answers an event
 // only after reading it, so that result is not this turn's (the turn fails).
+// It does not wait for the write to report completion: agy may read the
+// event and answer before the writing goroutine resumes.
 func (t *agyWarmTurn) settle() bool {
 	t.once.Do(func() { close(t.settled) })
-	return isClosed(t.sent)
+	return t.writing.Load()
 }
 
 func (s *agyStream) setConversation(id string) {
@@ -223,9 +229,13 @@ func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, atten
 
 // agyMergedOutput splits a warm agy process's single output pipe (stdout and
 // stderr, in the order agy wrote them) into its stream-json events and its
-// diagnostics. A line that is not a stream-json event is a diagnostic; an
-// event line broken by interleaved text fails to parse and fails the turn
-// closed (agyStream marks it damaged), never as success.
+// diagnostics. agy writes every event as one line starting {"event": and its
+// notices with a trailing newline (agy 1.5.18). A line starting so goes to
+// the events decoder: a valid event is read, one broken by interleaved text
+// fails to parse and fails the turn closed (agyStream marks it damaged, and
+// the broken line is a diagnostic too), never as success. Any other line is
+// a diagnostic, JSON logs of tools included; text written without a newline
+// just before an event is split off it, so the event is still read.
 type agyMergedOutput struct {
 	events, diagnostics io.Writer
 	line                []byte
@@ -254,31 +264,26 @@ func (m *agyMergedOutput) Write(p []byte) (int, error) {
 			}
 			continue
 		}
-		var ev struct {
-			Event string `json:"event"`
+		line := m.line
+		if i := bytes.Index(line, agyEventStart); i > 0 && len(bytes.TrimSpace(line[:i])) > 0 {
+			_, _ = m.diagnostics.Write(append(line[:i:i], '\n'))
+			line = line[i:]
 		}
-		trimmed := bytes.TrimSpace(m.line)
-		switch {
-		case len(trimmed) > 0 && trimmed[0] == '{':
-			// An event, or one broken by interleaved text (refused by the
-			// decoder, never a success). Diagnostic text that a write larger
-			// than the pipe's atomic size placed inside it is still seen: a
-			// false match only asks the person, never answers.
-			if json.Unmarshal(trimmed, &ev) != nil || ev.Event == "" || agyDiagnosticText(trimmed) {
-				_, _ = m.diagnostics.Write(m.line)
+		if bytes.HasPrefix(bytes.TrimSpace(line), agyEventStart) {
+			var ev struct {
+				Event string `json:"event"`
 			}
-			_, _ = m.events.Write(m.line)
-		default:
-			_, _ = m.diagnostics.Write(m.line)
+			if json.Unmarshal(bytes.TrimSpace(line), &ev) != nil || ev.Event == "" {
+				_, _ = m.diagnostics.Write(line)
+			}
+			_, _ = m.events.Write(line)
+		} else {
+			_, _ = m.diagnostics.Write(line)
 		}
 		m.line = m.line[:0]
 	}
 	return n, nil
 }
 
-// agyDiagnosticText reports whether line carries agy's soft-denial notice,
-// the diagnostic that would otherwise let a denied turn pass as a success.
-func agyDiagnosticText(line []byte) bool {
-	l := bytes.ToLower(line)
-	return bytes.Contains(l, []byte("headless mode cannot prompt for")) && bytes.Contains(l, []byte("auto-denied"))
-}
+// agyEventStart begins every stream-json event line agy writes.
+var agyEventStart = []byte(`{"event":`)

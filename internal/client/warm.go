@@ -351,6 +351,10 @@ func (w *warmProc) end(why string, interrupt any, grace time.Duration) {
 			w.wmu.Lock()
 			_ = json.NewEncoder(w.stdin).Encode(interrupt)
 			w.wmu.Unlock()
+		} else if w.harness == "agy" {
+			// agy finishes a running turn on end of input; its own stop
+			// request is a termination signal, which it handles itself.
+			terminate(w.cmd.Process)
 		}
 		_ = w.stdin.Close()
 	}
@@ -478,7 +482,7 @@ func nativeSettingsFiles(harness, home, dir string, env []string) []string {
 		}
 		return []string{filepath.Join(codexHome, "config.toml"), filepath.Join(dir, ".codex", "config.toml")}
 	case "agy":
-		return []string{filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), filepath.Join(home, ".gemini", "settings.json")}
+		return []string{filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), filepath.Join(home, ".gemini", "settings.json"), filepath.Join(home, ".gemini", "config", "mcp_config.json"), filepath.Join(dir, ".agents", "mcp_config.json")}
 	case "pi", "omp":
 		agentDir := filepath.Join(home, "."+harness, "agent")
 		if harness == "pi" && get("PI_CODING_AGENT_DIR") != "" {

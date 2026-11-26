@@ -648,6 +648,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if wp != nil {
 			agyTurn = newAgyWarmTurn(wp.input(), prompt)
 			agy.onResult = agyTurn.settle
+			if reused && plan.ref != nil && plan.ref.ID != "" {
+				agy.conversation = plan.ref.ID // a running agy announced it once, on its first turn
+			}
 		}
 		cmd.Stdout = activityWriter{Writer: agy, activity: activity, first: first}
 	} else {

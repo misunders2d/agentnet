@@ -150,16 +150,42 @@ func TestAgyWarmTurnSendDoesNotBlock(t *testing.T) {
 	w.Close()
 }
 
-// Review re-check (MEL-828): a denial that a large write placed inside the
-// result line is still seen; a result read before the turn's message was
-// fully sent is not that turn's answer.
+// Review re-checks (MEL-828, Codex and agy): a notice a large write split
+// into the result line fails the turn closed and is still seen; a result
+// that merely quotes the notice is an answer; text written without a newline
+// before the result, or a tool's JSON log, never hides or damages it; a
+// result read before the turn's message began to be written is not its
+// answer, but one read while the write is still finishing is.
 func TestAgyWarmTurnGuards(t *testing.T) {
-	var stream agyStream
-	var diag agyDiagnostics
-	m := &agyMergedOutput{events: &stream, diagnostics: &diag}
-	m.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "ok run_command required approval that headless mode cannot prompt for, so it was auto-denied.") + "\n"))
-	if _, status, attention := stream.result(nil, &diag); status == envelope.StatusDone || attention == "" {
-		t.Fatalf("a denial inside the result line became %s", status)
+	notice := "run_command required approval that headless mode cannot prompt for, so it was auto-denied."
+	merged := func(in string) (*agyStream, *agyDiagnostics) {
+		var stream agyStream
+		var diag agyDiagnostics
+		m := &agyMergedOutput{events: &stream, diagnostics: &diag}
+		m.Write([]byte(in))
+		return &stream, &diag
+	}
+	full := agyTestResult(agyTestConversation, "SUCCESS", "ok")
+	stream, diag := merged(full[:len(full)/2] + notice + "\n" + full[len(full)/2:] + "\n")
+	if _, status, attention := stream.result(nil, diag); status == envelope.StatusDone || attention == "" || !stream.damaged {
+		t.Fatalf("a notice inside the result line became %s (damaged=%v)", status, stream.damaged)
+	}
+	stream, diag = merged(agyTestResult(agyTestConversation, "SUCCESS", "the code checks for: "+notice) + "\n")
+	if body, status, _ := stream.result(nil, diag); status != envelope.StatusDone || !strings.Contains(body, "auto-denied") {
+		t.Fatalf("an answer quoting the notice became %s %q", status, body)
+	}
+	stream, diag = merged(notice + full + "\n")
+	if _, status, attention := stream.result(nil, diag); !stream.complete || stream.damaged || status == envelope.StatusDone || attention == "" {
+		t.Fatalf("a notice without its newline hid the result: complete=%v damaged=%v %s", stream.complete, stream.damaged, status)
+	}
+	stream, diag = merged(`{"level":"info","msg":"mcp server ready"}` + "\n" + "{\n" + full + "\n")
+	if body, status, _ := stream.result(nil, diag); status != envelope.StatusDone || body != "ok" {
+		t.Fatalf("a tool's JSON log damaged the turn: %s %q", status, body)
+	}
+	early := agyStream{onResult: newAgyWarmTurn(nil, "").settle}
+	early.Write([]byte(full + "\n"))
+	if !early.damaged {
+		t.Fatal("a result before the message was written was taken")
 	}
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -168,10 +194,19 @@ func TestAgyWarmTurnGuards(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 	turn := newAgyWarmTurn(w, strings.Repeat("x", 1<<20))
-	turn.begin() // nobody reads: the write cannot finish
-	early := agyStream{onResult: turn.settle}
-	early.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "previous turn's answer") + "\n"))
-	if !early.damaged || !isClosed(turn.settled) {
-		t.Fatalf("a result before the message was sent was taken: damaged=%v", early.damaged)
+	turn.begin() // nobody reads: the write stays unfinished
+	eventually(t, "write begun", turn.writing.Load)
+	during := agyStream{onResult: turn.settle}
+	during.Write([]byte(full + "\n"))
+	if during.damaged || !isClosed(turn.settled) {
+		t.Fatal("a result read while the write was finishing was refused")
+	}
+	// A reused process announced its conversation once, on its first turn:
+	// later turns still report the answer as it starts.
+	answering := 0
+	reused := agyStream{conversation: agyTestConversation, expected: agyTestConversation, onActivity: func(nativeActivity) { answering++ }}
+	reused.Write([]byte(`{"event":"step_update","step_update":{"conversation_id":"` + agyTestConversation + `","step_type":"agent_response"}}` + "\n"))
+	if answering != 1 {
+		t.Fatalf("warm turn activity %d", answering)
 	}
 }
