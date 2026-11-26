@@ -6,6 +6,9 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- On Windows, messages you send quickly one after another arrive in the order
+  you sent them. Windows' clock moves in small steps, so messages queued
+  within one step could leave in a random order.
 - Messages send faster when you send many at once. Queued messages of one
   chat now go out in batches, with one round of checks and one save for many
   messages, in the order you sent them. 1000 queued messages finish in about
