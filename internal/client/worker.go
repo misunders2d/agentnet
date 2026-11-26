@@ -831,8 +831,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		// Output reaches only this turn's decoder, from before its input.
 		wp.out.set(cmd.Stdout)
 		wp.errOut.set(cmd.Stderr)
+		var writeFailed <-chan struct{}
+		if agyTurn != nil {
+			wp.out.set(&agyMergedOutput{events: cmd.Stdout, diagnostics: cmd.Stderr})
+			writeFailed = agyTurn.failed
+		}
 		if !reused {
-			cmd.Stdout, cmd.Stderr = &wp.out, &wp.errOut
+			cmd.Stdout, cmd.Stderr = wp.outputs()
 			runErr = wp.start()
 		}
 		if runErr == nil {
@@ -853,18 +858,16 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				defer a.store.setRunGroup(j.ID, 0, "")
 			}
 			releaseWarmVouch = a.vouchRun(j, wp.cmd.Process.Pid) // this turn's run origin
-			begin()
+			if runCtx.Err() == nil {
+				begin()
+			}
 			select {
 			case <-settled:
 			case <-wp.exited:
 			case <-runCtx.Done():
+			case <-writeFailed:
 			}
 			if agyTurn != nil {
-				if isClosed(settled) {
-					// A soft denial agy wrote before its result may still be
-					// on its way through the stderr copy.
-					agyErr.quiet(150*time.Millisecond, time.Second)
-				}
 				// The turn's decoders are read below: nothing more reaches
 				// them once detached (set waits for a write in progress).
 				wp.out.set(nil)
@@ -886,6 +889,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				_ = a.setWarmBinding(wp.handle, "", 0)
 				go wp.stop("its turn was stopped", nativeInterrupt(r.Harness, thread, turn))
 				runErr = runCtx.Err()
+			case !isClosed(settled) && writeFailed != nil && isClosed(writeFailed):
+				// The message never fully reached the process: the turn
+				// fails and the process is discarded; nothing is resent.
+				runErr = fmt.Errorf("the message could not be sent to the running %s process: %v", r.Harness, agyTurn.err)
 			case !isClosed(settled):
 				// Lost while working: reported below, never run again.
 				runErr = wp.waitErr

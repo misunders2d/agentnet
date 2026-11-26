@@ -221,8 +221,18 @@ func (p *warmPool) spawn(cmd *exec.Cmd, harness, fp, handle string) (*warmProc, 
 		return nil, err
 	}
 	w := &warmProc{pool: p, harness: harness, fp: fp, handle: handle, cmd: cmd, stdin: stdin, exited: make(chan struct{})}
-	cmd.Stdout, cmd.Stderr = &w.out, &w.errOut
+	cmd.Stdout, cmd.Stderr = w.outputs()
 	return w, nil
+}
+
+// outputs are the process's stdout and stderr writers. agy gets one pipe for
+// both: a diagnostic it wrote before its result (a soft denial) is read
+// before that result (agyMergedOutput).
+func (w *warmProc) outputs() (stdout, stderr io.Writer) {
+	if w.harness == "agy" {
+		return &w.out, &w.out
+	}
+	return &w.out, &w.errOut
 }
 
 func (w *warmProc) start() error {

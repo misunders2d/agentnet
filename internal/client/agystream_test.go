@@ -3,9 +3,11 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
@@ -91,4 +93,59 @@ func TestAgyInputAndNativePolicy(t *testing.T) {
 	if !slices.Contains(HarnessNames(), "agy") || !strings.Contains(HarnessLimits("agy"), nativeHarnessPermissions) {
 		t.Fatal("Antigravity missing from native harness catalog")
 	}
+}
+
+// A warm agy process's one output pipe keeps agy's own order: a soft denial
+// written before the result reaches the diagnostics first, and an event line
+// broken by interleaved text is refused, never a success (MEL-828 review).
+func TestAgyMergedOutputKeepsOrder(t *testing.T) {
+	var stream agyStream
+	var diag agyDiagnostics
+	m := &agyMergedOutput{events: &stream, diagnostics: &diag}
+	in := `{"event":"init","conversation_id":"` + agyTestConversation + `","init":{}}` + "\n" +
+		"run_command required approval that headless mode cannot prompt for, so it was auto-denied.\n" +
+		agyTestResult(agyTestConversation, "SUCCESS", "done") + "\n"
+	for i := 0; i < len(in); i += 7 { // arbitrary pipe chunks
+		m.Write([]byte(in[i:min(i+7, len(in))]))
+	}
+	if !stream.complete || stream.damaged || !diag.permission {
+		t.Fatalf("complete=%v damaged=%v permission=%v", stream.complete, stream.damaged, diag.permission)
+	}
+	if _, status, attention := stream.result(nil, &diag); status == envelope.StatusDone || attention == "" {
+		t.Fatalf("a soft denial became %s", status)
+	}
+	var broken agyStream
+	var none agyDiagnostics
+	m = &agyMergedOutput{events: &broken, diagnostics: &none}
+	m.Write([]byte(`{"event":"result","result":{"conversation_id":"` + agyTestConversation + `"progress text` + "\n"))
+	if !broken.damaged || broken.complete {
+		t.Fatalf("a broken event line was not refused: %+v", broken)
+	}
+}
+
+// begin never blocks the worker on a process that stopped reading its input,
+// and a write that cannot complete fails the turn (MEL-828 review).
+func TestAgyWarmTurnSendDoesNotBlock(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := newAgyWarmTurn(w, strings.Repeat("x", 1<<20)) // larger than any pipe buffer
+	done := make(chan struct{})
+	go func() { turn.begin(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("begin blocked on a reader that stopped reading")
+	}
+	r.Close() // the process is gone
+	select {
+	case <-turn.failed:
+		if turn.err == nil {
+			t.Fatal("no write error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a failed write was not reported")
+	}
+	w.Close()
 }

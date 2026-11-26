@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
@@ -123,16 +122,26 @@ type agyWarmTurn struct {
 	in      io.WriteCloser
 	prompt  string
 	settled chan struct{}
+	failed  chan struct{} // the event could not be written; err says why
+	err     error
 	once    sync.Once
 }
 
 func newAgyWarmTurn(in io.WriteCloser, prompt string) *agyWarmTurn {
-	return &agyWarmTurn{in: in, prompt: prompt, settled: make(chan struct{})}
+	return &agyWarmTurn{in: in, prompt: prompt, settled: make(chan struct{}), failed: make(chan struct{})}
 }
 
-// begin sends the event. A failed write means the process is gone, which
-// the worker sees as its exit; nothing is sent again.
-func (t *agyWarmTurn) begin() { _, _ = io.WriteString(t.in, agyInput(t.prompt)) }
+// begin sends the event without blocking the worker: a process that stops
+// reading cannot hold off a stop or timeout, which end the process and so
+// the write. A failed or partial write fails the turn; nothing is resent.
+func (t *agyWarmTurn) begin() {
+	go func() {
+		if _, err := io.WriteString(t.in, agyInput(t.prompt)); err != nil {
+			t.err = err
+			close(t.failed)
+		}
+	}()
+}
 
 func (t *agyWarmTurn) settle() { t.once.Do(func() { close(t.settled) }) }
 
@@ -151,49 +160,18 @@ func (s *agyStream) setConversation(id string) {
 // Keep scanning after the bounded diagnostic buffer fills: a late soft denial
 // must not become success merely because native progress used its first 4 KiB.
 //
-// A warm process's stderr is copied while the worker reads the turn's result,
-// so the fields are locked, and quiet waits for a diagnostic agy wrote before
-// its result but that this side has not copied yet.
+// A warm agy process writes its stdout and stderr into one pipe
+// (agyMergedOutput), so a diagnostic it wrote before its result is always
+// read before it; the lock covers the reads after the turn.
 type agyDiagnostics struct {
 	mu                       sync.Mutex
-	wrote                    chan struct{}
 	tail                     string
 	permission, auth, failed bool
-}
-
-// quiet returns once no diagnostic arrived for gap, or after limit.
-func (d *agyDiagnostics) quiet(gap, limit time.Duration) {
-	d.mu.Lock()
-	if d.wrote == nil {
-		d.wrote = make(chan struct{}, 1)
-	}
-	wrote := d.wrote
-	d.mu.Unlock()
-	end := time.NewTimer(limit)
-	defer end.Stop()
-	t := time.NewTimer(gap)
-	defer t.Stop()
-	for {
-		select {
-		case <-wrote:
-			t.Reset(gap)
-		case <-t.C:
-			return
-		case <-end.C:
-			return
-		}
-	}
 }
 
 func (d *agyDiagnostics) Write(p []byte) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.wrote != nil {
-		select {
-		case d.wrote <- struct{}{}:
-		default:
-		}
-	}
 	text := d.tail + strings.ToLower(string(p))
 	d.permission = d.permission || strings.Contains(text, "headless mode cannot prompt for") && strings.Contains(text, "auto-denied")
 	d.auth = d.auth || strings.Contains(text, "authentication required") || strings.Contains(text, "unauthenticated")
@@ -232,4 +210,52 @@ func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, atten
 	default:
 		return s.response, envelope.StatusDone, ""
 	}
+}
+
+// agyMergedOutput splits a warm agy process's single output pipe (stdout and
+// stderr, in the order agy wrote them) into its stream-json events and its
+// diagnostics. A line that is not a stream-json event is a diagnostic; an
+// event line broken by interleaved text fails to parse and fails the turn
+// closed (agyStream marks it damaged), never as success.
+type agyMergedOutput struct {
+	events, diagnostics io.Writer
+	line                []byte
+	overflow            bool // an over-long line goes to the events decoder, which refuses it
+}
+
+func (m *agyMergedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		chunk := p
+		if i >= 0 {
+			chunk = p[:i+1]
+		}
+		p = p[len(chunk):]
+		if m.overflow {
+			_, _ = m.events.Write(chunk)
+			m.overflow = i < 0
+			continue
+		}
+		m.line = append(m.line, chunk...)
+		if i < 0 {
+			if len(m.line) > codexLineMax {
+				_, _ = m.events.Write(m.line)
+				m.line, m.overflow = m.line[:0], true
+			}
+			continue
+		}
+		var ev struct {
+			Event string `json:"event"`
+		}
+		if trimmed := bytes.TrimSpace(m.line); len(trimmed) > 0 && trimmed[0] == '{' && json.Unmarshal(trimmed, &ev) == nil && ev.Event != "" {
+			_, _ = m.events.Write(m.line)
+		} else if len(trimmed) > 0 && trimmed[0] == '{' {
+			_, _ = m.events.Write(m.line) // a damaged event: refused, never a diagnostic
+		} else {
+			_, _ = m.diagnostics.Write(m.line)
+		}
+		m.line = m.line[:0]
+	}
+	return n, nil
 }
