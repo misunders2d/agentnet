@@ -43,6 +43,11 @@ run_partition() {
 				if ($0=="TestRoomBusyAncestorCallback") part=7
 				if ($0=="TestGroupParticipationHistoryInvalidUpgradeRecovery") part=21
 				if ($0=="TestOwnPersonTasksDirectAndGroup") part=11
+				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=13
+				if ($0=="TestGroupParticipationHistoryLinkedRestartReorder") part=1
+				if ($0=="TestHistoryWindowOfflineReceiptRestartAndCompletion") part=18
+				if ($0=="TestReadSyncOlderReaderRestartAndKeyFence") part=3
+				if ($0=="TestProactiveAgentMessageAdmission") part=8
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
