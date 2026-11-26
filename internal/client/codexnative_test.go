@@ -86,17 +86,28 @@ func TestCodexNativeRolloutIdentityAndBounds(t *testing.T) {
 	if entries, e := codexNativeEntries(codexRollout(t, sid, huge), sid); e != nil || len(entries) != 1 {
 		t.Fatalf("an oversize record refused or kept: %d %v", len(entries), e)
 	}
+	// The last record without its newline is still being written (Codex
+	// Desktop appends while AgentNet reads): it is read once complete. A
+	// complete invalid record still fails closed.
+	appendRaw := func(file string, b []byte) {
+		f, e := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0600)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, e = f.Write(b)
+		f.Close()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
 	file = codexRollout(t, sid)
-	f, e := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0600)
-	if e != nil {
-		t.Fatal(e)
+	appendRaw(file, []byte(`{"type":"response_item","payload":`))
+	if entries, e := codexNativeEntries(file, sid); e != nil || len(entries) != 1 {
+		t.Fatalf("a record still being written: %d %v", len(entries), e)
 	}
-	_, e = f.Write(make([]byte, 64))
-	f.Close()
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = codexNativeEntries(file, sid); e == nil {
+	file = codexRollout(t, sid)
+	appendRaw(file, append(make([]byte, 64), '\n'))
+	if _, e := codexNativeEntries(file, sid); e == nil {
 		t.Fatal("invalid record accepted")
 	}
 }
