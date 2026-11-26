@@ -276,7 +276,8 @@ func TestGroupLiveAgentContext(t *testing.T) {
 func TestDMLiveExternalPeerContext(t *testing.T) {
 	w, readerHost, conv, _, stub, records, _ := externalAgentWorld(t)
 	peerHost := mustJoin(t, filepath.Join(t.TempDir(), "dave"), w.aliceInvites("dave"), "host")
-	runAgent(t, peerHost)
+	faults := injectFaults(peerHost)
+	stopPeer := runAgent(t, peerHost)
 	persons(t, peerHost)
 	fakeNotify(peerHost)
 	waitNamedAgentCaps(t, peerHost)
@@ -320,9 +321,9 @@ func TestDMLiveExternalPeerContext(t *testing.T) {
 		return false
 	})
 	// An already queued captured-audience reply still rechecks its parent.
-	faults := injectFaults(peerHost)
-	// Every post fails until the reply is queued: the host's own background
-	// posts share these faults, so a fixed count could be used up elsewhere.
+	// Stop the background retry before staging and altering the fixture. The
+	// explicit flush below is the operation whose parent check we exercise.
+	stopPeer()
 	faults.add("POST", "/v1/messages", 1<<20, false)
 	queued, err := peerHost.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindAnswer, PID: peer.PID, AgentID: record.ID, ReplyTo: q.ID, Body: "QUEUED_PEER_ANSWER", Origin: envelope.OriginAgentPrefix + "stub", Emotion: "neutral"})
 	if err != nil || queued.State != stateQueued {

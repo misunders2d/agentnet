@@ -308,6 +308,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		return
 	}
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
+	if _, current, e := editJobText(a.store.db, j, false); e != nil || !current {
+		a.endJob(j.ID, stateNotRun, "Edit follow-up did not run because the original attempt or revision changed", j.nativeAttempt)
+		return
+	}
+	if same, e := a.editExecutorCurrent(j, r.Harness); e != nil || !same {
+		a.endJob(j.ID, stateNotRun, "Edit follow-up could not reach the original agent", j.nativeAttempt)
+		return
+	}
 	followupContext, followupErr := a.requestFollowupPrompt(j)
 	if followupErr != nil {
 		a.endJob(j.ID, stateNeedHuman, followupErr.Error(), j.nativeAttempt)
@@ -1261,12 +1269,13 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 		}
 		return nil
 	}
-	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, TopicDone: j.TopicDone, AgentID: j.AgentID, Named: files, claim: claim})
+	replyTo := editReplyTo(j)
+	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: replyTo, Kind: replyKind(j.Kind), Status: status, TopicDone: j.TopicDone, AgentID: j.AgentID, Named: files, claim: claim})
 	if err != nil && res.ID == "" && len(files) > 0 {
 		// The files could not go (nothing was stored): the result goes
 		// without them, saying so; the local reason stays here.
 		detail = "files in the outbox were not sent: " + err.Error()
-		res, err = a.SendMessage(ctx, Outgoing{To: j.From, Body: body + "\n\n(The files in the outbox could not be sent with this result.)", ReplyTo: j.ID,
+		res, err = a.SendMessage(ctx, Outgoing{To: j.From, Body: body + "\n\n(The files in the outbox could not be sent with this result.)", ReplyTo: replyTo,
 			Kind: replyKind(j.Kind), Status: status, TopicDone: j.TopicDone, AgentID: j.AgentID, claim: claim})
 	}
 	if err != nil && res.ID == "" {

@@ -1,5 +1,42 @@
 # Next-release interaction coverage and responsiveness
 
+## Next release after v0.11.10 — MEL-825 and MEL-826
+
+MEL-825 keeps a revision on the original message. The first claim reads the
+latest verified revision in the same transaction. Once claimed, the target
+host binds the correction to the exact original agent and attempt. It uses
+the existing native input handover while the original runs, or the existing
+follow-up context and approval checks once it finishes. Only a handover
+known to be unsent can return to the queue. Revisions of ordinary chat,
+history copies, or stopped requests do not launch work. The original
+audience and signed author key still govern edits to addressed requests.
+Status selects the winning signed revision and leaves the original request's
+execution state independent.
+
+Reuse evidence. Telegram Web A at `f67a40879a7d78c2683ec5a296cf55bc22417d56`
+updates the existing editor and message locally in [`editMessage`](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/messages.ts#L825).
+[Slack's message change event](https://docs.slack.dev/reference/events/message/message_changed/)
+updates the original history entry by identity. AgentNet keeps the existing
+optimistic edit and signed revision controls, and adapts the host's existing
+steering/follow-up lifecycle for agent execution. The owner-provided Slack
+desktop view demonstrates sectioned sidebar navigation. AgentNet uses its
+existing conversation kinds and rows for the Groups, DMs and Agents
+sections, with a chronological Recent view and a flat search.
+
+`TestEditQueuedRequestUsesNewestSignedTextOnce` checks the latest revision
+at claim, duplicate delivery and out-of-order revisions.
+`TestEditRemoteGroupRequestSteersOrFollowsUp` covers a signed edit crossing
+devices, acknowledged native input, an original finishing before handover,
+a follow-up with earlier result context, delivery after a transport outage,
+and the stopped-run boundary. The retry uses the exact edit job's stored
+result and checks participation again while quoting the original turn.
+`TestEditFollowsUpCompletedRequest` exercises the direct worker path.
+`TestLocalChangesRendered` checks immediate editing under a held write,
+failure, retry, concurrent linked-device text, and all five edit outcomes at
+desktop and phone sizes with 100 and 1000 messages. `TestListPanelCollapseResizeRendered`
+checks desktop Grouped/Recent selection, collapse, unread, restored layout,
+search and keyboard focus, and the existing phone list at 390 px.
+
 ## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
 
 ### MEL-821 Office built in, the default for a new profile; MEL-823 Office gutters

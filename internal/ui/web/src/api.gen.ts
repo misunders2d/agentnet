@@ -290,6 +290,7 @@ export interface DMMessage {
   reactions?: ReactionView[];
   edited?: boolean;
   revision?: number;
+  edit_execution?: string;
   text?: string;
   deleted?: boolean;
   can?: string[];
@@ -765,6 +766,7 @@ export interface Message {
   reactions?: ReactionView[];
   edited?: boolean;
   revision?: number;
+  edit_execution?: string;
   text?: string;
   deleted?: boolean;
   can?: string[];

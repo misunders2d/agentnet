@@ -395,10 +395,12 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	var sender, key, kind, state string
 	var conv, lid sql.NullString
 	var local, replica, selected, ownTarget bool
-	err = a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, local, replica, attempts,
+	var editOf, editID string
+	err = a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, `+executionLocal+`, replica, attempts,
 		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id),
-		coalesce(json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=?,0) FROM inbox WHERE id = ?`, a.Address, a.Self().Fingerprint(), id).
-		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected, &ownTarget)
+		coalesce(json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=?,0),
+		`+editJobParent+`,coalesce(ref_id,'') FROM inbox WHERE id = ?`, a.Address, a.Self().Fingerprint(), id).
+		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected, &ownTarget, &editOf, &editID)
 	if err != nil || due == 0 {
 		return true
 	}
@@ -441,6 +443,22 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	ref := ControlRef{ID: id, Fingerprint: key}
 	if conv.Valid {
 		ref = ControlRef{Conv: conv.String, ID: lid.String, Fingerprint: key}
+	}
+	if editOf != "" {
+		var parentState string
+		if e := a.store.db.QueryRow(`SELECT coalesce(lid,id),state,attempts FROM inbox WHERE id=? AND verified_by=? AND replica=0`, editOf, key).
+			Scan(&ref.ID, &parentState, &attempt); e != nil {
+			if e == sql.ErrNoRows {
+				told()
+			}
+			return true
+		}
+		if prior, _, visible := statusOf(parentState); visible {
+			public = prior
+		} else {
+			public = "not_run"
+		}
+		detail = editStatusDetail(editID, editStateWord(state))
 	}
 	n, err := a.store.nextCounter(ref, envelope.SubStatus, "")
 	if err != nil {
@@ -1071,6 +1089,9 @@ func execViews(rows []controlRow) map[ControlRef]ExecView {
 		}
 		var st envelope.Status
 		if json.Unmarshal([]byte(c.body), &st) != nil || st.Decision != "" {
+			continue
+		}
+		if id, _ := parseEditStatus(st.Detail); id != "" {
 			continue
 		}
 		ref := ControlRef{ID: c.refID, Fingerprint: c.refFP}

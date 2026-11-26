@@ -681,6 +681,7 @@ export const TOPICS = Object.freeze({
 // a connected host's word is old news (client ExecRunningMaxAge, pinned by
 // internal/ui topics_browser_test.go).
 export const EXEC_RUNNING_MAX_AGE = 3600;
+const requestEditStatus = (detail) => /^request-edit ([0-9a-f]{32}) (queued|running|steered|answered|failed)$/.exec(detail || "");
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting", "helpers_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined", "not_delivered"]);
 // replyCloses: an answer or result is its request's last word unless it says
@@ -5579,7 +5580,7 @@ export class Engine {
     const resources=role==="member"&&!frozen?await this.conversationResources(conv):undefined;
     return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,...(resources?{resources}:{}),created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],guests:infos.filter(i=>i.role==="human").map(i=>this.guestView(i,role==="member")),audience_pending:infos.some(i=>i.role==="human"&&i.state==="active"&&i.held),messages:await Promise.all(messages.map(async m=>{
       const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="continuity"?m.body:m.sub==="event"?this.eventText(m.body,null,members,humans.get(m.pid)||false,{originals:members,member:role==="member"}):"",fp=m.fp||m.claimed_key||this.fp,ev=m.sub==="event"?this.eventFields(m.body,members,humanHosts):null;
-      const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
+      const targetPerson=await this.personOfFp(fp,read),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&replyCloses(r));
@@ -9879,7 +9880,7 @@ export class Engine {
     for (const c of statuses) {
       let pay;
       try { pay = wire.parseControl(c.sub, c.body); } catch (e) { continue; }
-      if (pay.decision) continue; // Attempt echoes the submitted CAS; only a normal status proves the actual current execution attempt.
+      if (pay.decision || requestEditStatus(pay.detail)) continue; // Only a normal status proves the original attempt's state.
       const id = c.lid || c.id; // as controlsOn: the same on every device
       if (!best || pay.n > best.n || (pay.n === best.n && id > best.id)) best = { ...pay, id, authorFp:c.fp };
     }
@@ -10219,6 +10220,7 @@ export class Engine {
   // person in a conversation), targetAuthor the target's.
   controlsOn(ctls, targetAuthor, author, who, mineIs, idOf = (a) => a, hostLabel) {
     const byAuthorEmoji = new Map(), assistants = new Map();
+    const edits = new Map();
     let rev = null, deleted = false;
     for (const c of ctls) {
       let pay;
@@ -10230,6 +10232,12 @@ export class Engine {
         const k = a + "\n" + pay.emoji;
         const cur = byAuthorEmoji.get(k);
         if (!cur || pay.n > cur.n || (pay.n === cur.n && id > cur.id)) byAuthorEmoji.set(k, { n: pay.n, id, op: pay.op, a, emoji: pay.emoji });
+      } else if (c.sub === wire.SubStatus) {
+        const edit = !pay.decision && requestEditStatus(pay.detail);
+        if (edit) {
+          const prev = edits.get(edit[1]);
+          if (!prev || pay.n > prev.n || pay.n === prev.n && id > prev.id) edits.set(edit[1], { phase: edit[2], n: pay.n, id });
+        }
       } else if (a === targetAuthor) {
         if (c.sub === wire.SubRevision && (!rev || pay.rev > rev.rev || (pay.rev === rev.rev && id > rev.id))) rev = { rev: pay.rev, id, text: pay.text };
         if (c.sub === wire.SubRetraction) deleted = true;
@@ -10246,7 +10254,11 @@ export class Engine {
     }
     const out = {};
     if (reactions.size) out.reactions = [...reactions.values()];
-    if (rev) { out.edited = true; out.revision = rev.rev; out.text = rev.text; }
+    if (rev) {
+      out.edited = true; out.revision = rev.rev; out.text = rev.text;
+      const edit = edits.get(rev.id);
+      if (edit) out.edit_execution = edit.phase;
+    }
     if (deleted) out.deleted = true;
     return out;
   }
@@ -10662,7 +10674,7 @@ export class Engine {
     const ctlView = async (m, here) => {
       const { targetFp, mine } = controlsOf(m, here);
       const targetPerson = await this.personOfFp(targetFp, read);
-      const rel = ctls.filter((x) => x.ref && x.ref.id === m.lid && x.ref.fingerprint === targetFp && x.sub !== wire.SubStatus && x.sub !== wire.SubDecision);
+      const rel = ctls.filter((x) => x.ref && x.ref.id === m.lid && x.ref.fingerprint === targetFp && x.sub !== wire.SubDecision);
       const view = this.controlsOn(rel, targetPerson, (x) => x.person || "", personLabel, (p) => p === (this.me && this.me.person), undefined, (pid) => hostLabels.get(pid));
       view.can = view.deleted || !wire.rootMember(wire.parseRoot(c.root), this.me?.person) ? [] : ["react", ...((await mine()) ? ["edit", "delete"] : [])];
       return view;
@@ -12964,7 +12976,7 @@ export class Engine {
     };
     const ctlView = (m) => {
       const targetFp = m.author_fp;
-      const rel = ctls.filter((x) => x.ref && x.ref.id === m.id && x.ref.fingerprint === targetFp && x.sub !== wire.SubStatus && x.sub !== wire.SubDecision);
+      const rel = ctls.filter((x) => x.ref && x.ref.id === m.id && x.ref.fingerprint === targetFp && x.sub !== wire.SubDecision);
       // Grouped by key; shown as the device's address (the core's By in a device thread), never a label.
       const addr = (fp) => (fp === this.fp ? this.address : peer);
       const view = this.controlsOn(rel, targetFp, (x) => x.author, addr, (fp) => fp === this.fp, addr);
