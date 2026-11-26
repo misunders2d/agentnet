@@ -3652,6 +3652,27 @@ No timeout or assertion was weakened. The complete control/platform/history
 inventory remains incomplete. The later explicit release authorization and
 final passing gallery gate are recorded in the current disposition above.
 
+### Paste of WPS Office cells in the desktop app — November 26 (v0.11.12)
+
+Report: copying SKU cells in WPS Office (Linux) and pressing Ctrl+V in the
+desktop app pasted nothing; pasting through Google Sheets first worked.
+Evidence: the clipboard (read with `wl-paste --list-types` after a WPS copy)
+holds `text/plain` (CRLF lines), `text/html` (an Excel-style table) and
+`image/bmp`. In the app nothing appeared, so the web event carried neither
+text nor a file and the native picture read found none (BMP). The WebKitGTK
+event itself could not be probed here (headless WebKitGTK aborted without a
+GL context); that part is inferred from the observed outcome.
+Fix: a paste whose event has no text and no file reads the native clipboard
+text first (`host.clipboardText`, `agentnet_clipboard_text`, same origin
+check as the picture read) and inserts it; only when there is none is the
+picture read, so a screenshot still attaches. Browser text keeps the earlier
+order (a browser image copy still attaches). Local feedback is the inserted
+text, immediately after the one native read. Checks:
+`internal/ui/testdata/picture_crop_paste_check.mjs` (WPS case, plain paste,
+screenshot, browser image copy, too-long text) and the desktop
+`clipboard_only_from_current_main_page` origin test. Outstanding: a rendered
+paste in the installed app with real WPS cells.
+
 ### Plain-text paste of Excel cells — October 29 (MEL-714)
 
 Cause, from source: with no browser clipboard file, the desktop shell's

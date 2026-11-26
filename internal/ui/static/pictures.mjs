@@ -74,7 +74,12 @@ export function tableMarkdown(text) {
   return [line(rows[0]),"|"+" --- |".repeat(cols),...rows.slice(1).map(line)].join("\n");
 }
 
-export function pastePictures(e, add, {clipboardImage:read, insertText=()=>{}, error=()=>{}, plain=false}={}) {
+// A paste whose web event carries no text and no file may still hold text the
+// web view did not offer: WebKitGTK gives none for WPS Office cells, whose
+// picture flavour is unreadable, so nothing was pasted. The native shell's
+// clipboard text then wins over its picture; a picture with no text (a
+// screenshot) still attaches.
+export function pastePictures(e, add, {clipboardImage:read, clipboardText:readText, insertText=()=>{}, error=()=>{}, plain=false}={}) {
   // Paste as plain text (Ctrl+Shift+V) keeps the clipboard's text, even when
   // it also holds a picture, as Excel cells do (MEL-714).
   if(plain&&e.clipboardData?.getData("text/plain"))return;
@@ -83,9 +88,13 @@ export function pastePictures(e, add, {clipboardImage:read, insertText=()=>{}, e
   if(typeof read!=="function")return;
   const text=e.clipboardData?.getData("text/plain")||"";
   e.preventDefault();
-  return Promise.resolve().then(()=>read()).then(file=>{
-    if(file)add([file]);else if(text)insertText(text);
-  }).catch(()=>{if(text)insertText(text);else error("Could not paste the picture. Choose it with Add files instead.");});
+  const nativeText=text||typeof readText!=="function"?Promise.resolve(""):Promise.resolve().then(()=>readText()).then(s=>typeof s==="string"?s:"",()=>"");
+  return nativeText.then(native=>{
+    if(native){insertText(native.replace(/\r\n?/g,"\n").replace(/\n+$/,""));return;}
+    return Promise.resolve().then(()=>read()).then(file=>{
+      if(file)add([file]);else if(text)insertText(text);
+    }).catch(()=>{if(text)insertText(text);else error("Could not paste the picture. Choose it with Add files instead.");});
+  });
 }
 
 export function pictureCrop(width,height,zoom=1,x=width/2,y=height/2) {

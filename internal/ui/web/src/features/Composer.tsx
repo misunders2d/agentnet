@@ -454,6 +454,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (pasteTable(e, insertText, plain) || !filesAllowed) return;
     void pastePictures(e, (list) => { if (here()) addFiles(list, true); }, {
       clipboardImage: host.clipboardImage ? () => host.clipboardImage!() : undefined,
+      clipboardText: host.clipboardText ? () => host.clipboardText!() : undefined,
       insertText,
       error: (text) => { if (here()) setNotice({ conv, text }); },
       plain,

@@ -99,6 +99,8 @@ export interface FileDrop { x: number; y: number; files: DroppedFile[]; error?: 
 export interface Host {
   /** Native shell fallback, read only in response to paste; absent in browsers. */
   clipboardImage?(): Promise<File | null>;
+  /** Native shell fallback, read only in response to a paste whose event carried no text; absent in browsers. */
+  clipboardText?(): Promise<string | null>;
   /** Present and true in a native window that could not take the one-window lock: it reads saved drafts and sends, never writes them. */
   savedReadOnly?: boolean;
   version: number;

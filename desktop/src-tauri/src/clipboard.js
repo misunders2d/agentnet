@@ -31,6 +31,7 @@
       return file;
     }) ?? null;
   }});
+  Object.defineProperty(window, '__agentnetNativeClipboardText', { value: async () => (await invoke('agentnet_clipboard_text')) || null });
   Object.defineProperty(window, '__agentnetNativeClipboardImage', { value: async () => {
     const image = await invoke('agentnet_clipboard_image');
     if (!image) return null;

@@ -28,6 +28,30 @@ pub async fn agentnet_clipboard_image(window: WebviewWindow) -> Result<Option<Cl
     Ok(Some(ClipboardImage { width, height, rgba }))
 }
 
+/// Longest clipboard text a paste takes, as the composer's own limit allows.
+const MAX_CLIPBOARD_TEXT: usize = 1 << 20;
+
+/// The clipboard's text, for a paste whose web event carried none: WebKitGTK
+/// can offer no text for a spreadsheet copy (WPS Office) that does hold it,
+/// whose picture flavour (BMP) is unreadable, so nothing was pasted.
+#[tauri::command]
+pub async fn agentnet_clipboard_text(window: WebviewWindow) -> Result<Option<String>, String> {
+    let actual = window.url().map_err(|_| "Clipboard is unavailable.")?;
+    {
+        let shell = window.state::<crate::Shell>();
+        if !permitted(window.label(), shell.page.lock().unwrap().as_ref(), &actual) {
+            return Err("Clipboard is unavailable on this page.".into());
+        }
+    }
+    let text = tauri::async_runtime::spawn_blocking(move || window.clipboard().read_text())
+        .await.map_err(|_| "Clipboard is unavailable.")?;
+    match text {
+        Ok(text) if text.len() > MAX_CLIPBOARD_TEXT => Err("This text is too long to paste.".into()),
+        Ok(text) if !text.is_empty() => Ok(Some(text)),
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

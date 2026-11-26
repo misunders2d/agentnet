@@ -79,7 +79,7 @@ fn main() {
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image, droppedfiles::agentnet_dropped_file, skinfolder::agentnet_skin_folder, download::agentnet_download_blob, download::agentnet_cancel_download, appcontrols::agentnet_app_controls])
+        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image, clipboard::agentnet_clipboard_text, droppedfiles::agentnet_dropped_file, skinfolder::agentnet_skin_folder, download::agentnet_download_blob, download::agentnet_cancel_download, appcontrols::agentnet_app_controls])
         .manage(Shell::default())
         .setup(move |app| {
             #[cfg(target_os = "linux")]
