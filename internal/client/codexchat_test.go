@@ -123,7 +123,9 @@ func (f *codexChatFixture) event(t *testing.T, payload map[string]any) {
 	f.append(t, map[string]any{"type": "event_msg", "payload": payload})
 }
 
-func (f *codexChatFixture) queue() []fakeQueueEntry { return readFakeQueue(filepath.Join(f.home, "queue.json")) }
+func (f *codexChatFixture) queue() []fakeQueueEntry {
+	return readFakeQueue(filepath.Join(f.home, "queue.json"))
+}
 
 // dispatch is Codex Desktop starting the queued entry: it leaves the queue
 // and its user message is recorded in a new turn.
