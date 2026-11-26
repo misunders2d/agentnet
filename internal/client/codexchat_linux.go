@@ -46,7 +46,7 @@ func findCodexDesktopEngine(home string) (codexEngine, error) {
 		}
 		// AgentNet runs this exe itself: only an install this user cannot
 		// change, never a planted copy.
-		if !rootOwned(exe) || !rootOwned(filepath.Dir(exe)) {
+		if trustedInstall(exe) != nil {
 			continue
 		}
 		found = append(found, codexEngine{PID: pid, Ticks: ticks, Exe: exe, Env: engineCodexEnv(pid)})
@@ -67,6 +67,22 @@ func hasArg(cmdline []byte, arg string) bool {
 		}
 	}
 	return false
+}
+
+// trustedInstall checks exe and every folder above it: none may be
+// changeable by this user, so the path keeps naming the same install.
+func trustedInstall(exe string) error {
+	if !filepath.IsAbs(exe) {
+		return errors.New("the Codex Desktop engine path is not absolute")
+	}
+	// Every folder below the root (a system whose root this user can
+	// write is not protected by anything here).
+	for p := filepath.Clean(exe); p != "/"; p = filepath.Dir(p) {
+		if !rootOwned(p) {
+			return errors.New("the Codex Desktop engine is not a protected install (" + p + ")")
+		}
+	}
+	return nil
 }
 
 // rootOwned reports whether path, like a packaged install, belongs to

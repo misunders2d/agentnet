@@ -4,6 +4,8 @@ package client
 
 import "errors"
 
+func trustedInstall(string) error { return nil }
+
 func findCodexDesktopEngine(string) (codexEngine, error) {
 	return codexEngine{}, errors.New("Codex Desktop chat delivery is qualified on Linux only")
 }

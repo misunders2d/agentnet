@@ -450,7 +450,7 @@ func (a *Agent) waitClaudeChat(runCtx context.Context, j job, c ClaudeChat, limi
 		if file != "" && (row.State == chatWritten || row.State == chatStarted) && claudeChatInterrupted(file, row) {
 			why := "The turn for this was stopped in the Claude chat (for example, a permission was denied) before it answered. It was not sent again."
 			a.setChatState(j.ID, row.State, chatSuperseded, why)
-			continue
+			return chatEnd(stateNeedHuman, why)
 		}
 		switch row.State {
 		case chatAnswered:

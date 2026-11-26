@@ -1049,7 +1049,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	go func() { defer close(done); a.worker(ctx, wake) }()
 	// Codex chat requests an earlier daemon left queued leave the queue.
 	withdrawn := make(chan struct{})
-	go func() { defer close(withdrawn); a.withdrawCodexChats(ctx) }()
+	go func() { defer close(withdrawn); a.keepWithdrawingCodexChats(ctx) }()
 	a.wakeWorker()
 	return func() {
 		cancel()

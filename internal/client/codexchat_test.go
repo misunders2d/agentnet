@@ -91,8 +91,14 @@ func newCodexChatFixture(t *testing.T, notOwn ...bool) *codexChatFixture {
 		return engine, nil
 	}
 	t.Cleanup(func() { codexDesktopEngine = old })
+	oldTrusted := codexTrustedExe
+	codexTrustedExe = func(string) error { return nil } // the fake engine lives in a test folder
+	t.Cleanup(func() { codexTrustedExe = oldTrusted })
 	oldSettle, oldRetries := codexDeleteSettle, codexWithdrawRetries
 	codexDeleteSettle, codexWithdrawRetries = 150*time.Millisecond, []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+	oldBackoff := codexWithdrawBackoff
+	codexWithdrawBackoff = []time.Duration{100 * time.Millisecond}
+	t.Cleanup(func() { codexWithdrawBackoff = oldBackoff })
 	t.Cleanup(func() { codexDeleteSettle, codexWithdrawRetries = oldSettle, oldRetries })
 	if f.agentID, err = w.bob.ConnectCodexChat(f.thread, "Codex Desktop"); err != nil {
 		t.Fatal(err)
@@ -585,4 +591,53 @@ func TestCodexChatSteeredIntoARunningTurnIsNotAnAnswer(t *testing.T) {
 	if r := inboxRow(t, f.w.bob, request); r.State != stateNeedHuman || !strings.Contains(r.Detail, "already running") {
 		t.Fatalf("folded request %+v", r)
 	}
+}
+
+func TestCodexChatEntryGoneByOtherHandsIsNeverQueuedAgain(t *testing.T) {
+	f := newCodexChatFixture(t)
+	old := codexChatDeadline
+	codexChatDeadline = 500 * time.Millisecond
+	t.Cleanup(func() { codexChatDeadline = old })
+	// Desktop takes the entry off the queue but has not yet recorded it
+	// when the deadline comes: AgentNet did not remove it, so it is not
+	// "taken out", and nothing queues it again.
+	request := f.ask(t, "PROBE-G")
+	done := f.run(tctx(t))
+	eventually(t, "queued", func() bool { return len(f.queue()) == 1 })
+	writeFakeQueue(filepath.Join(f.home, "queue.json"), nil)
+	waitDone(t, done)
+	r := inboxRow(t, f.w.bob, request)
+	if r.State != stateNeedHuman || !strings.Contains(r.Detail, "without AgentNet removing it") {
+		t.Fatalf("gone request %+v", r)
+	}
+	if row, _, _ := codexChatRowIn(f.w.bob.store.db, request); row.State != chatSuperseded {
+		t.Fatalf("ledger %+v", row)
+	}
+}
+
+func TestCodexChatWithdrawRetriesWhileTheDaemonRuns(t *testing.T) {
+	f := newCodexChatFixture(t)
+	fails := filepath.Join(f.home, "delete-fails")
+	os.WriteFile(fails, nil, 0600)
+	request := f.ask(t, "PROBE-K")
+	ctx, stop := context.WithCancel(tctx(t))
+	done := f.run(ctx)
+	eventually(t, "queued", func() bool { return len(f.queue()) == 1 })
+	stop()
+	waitDone(t, done)
+	// No new request comes; the daemon's own retries take it out once the
+	// queue can be changed again.
+	loop, end := context.WithCancel(tctx(t))
+	finished := make(chan struct{})
+	go func() { defer close(finished); f.w.bob.keepWithdrawingCodexChats(loop) }()
+	defer func() { end(); <-finished }()
+	time.Sleep(300 * time.Millisecond)
+	if row, _, _ := codexChatRowIn(f.w.bob.store.db, request); row.State != codexQueued {
+		t.Fatalf("ledger while failing %+v", row)
+	}
+	os.Remove(fails)
+	eventually(t, "withdrawn by a retry", func() bool {
+		row, _, _ := codexChatRowIn(f.w.bob.store.db, request)
+		return row.State == codexRemoved && len(f.queue()) == 0
+	})
 }
