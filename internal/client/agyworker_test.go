@@ -59,9 +59,13 @@ func TestAgyProcessHelper(t *testing.T) {
 		os.Exit(0)
 	}
 	if mode == "deny" {
+		// As agy 1.5.18: the notice on stderr, then a SUCCESS result that
+		// lists the denied action.
 		fmt.Fprintln(os.Stderr, strings.Repeat("progress\n", 600)+"run_command required approval that headless mode cannot prompt for, so it was auto-denied.")
+		fmt.Println(agyTestDeniedResult(id))
+	} else {
+		fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
 	}
-	fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
 	// Later turns of a warm process: each event gets its own result on the
 	// same conversation; the turn's input is logged beside the runs.
 	for {

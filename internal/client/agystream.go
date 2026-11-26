@@ -37,6 +37,7 @@ type agyStream struct {
 	onResult                 func() bool // a warm turn's terminal result was read; false: not this turn's
 	line                     []byte
 	skipping, damaged        bool
+	denied                   bool // the result lists actions agy auto-denied
 	conversation, expected   string
 	complete                 bool
 	status, response, detail string
@@ -69,7 +70,7 @@ func (s *agyStream) Write(p []byte) (int, error) {
 func (s *agyStream) flush() {
 	defer func() { s.line, s.skipping = s.line[:0], false }()
 	if s.skipping {
-		s.damaged = true
+		s.fail()
 		return
 	}
 	if len(bytes.TrimSpace(s.line)) == 0 {
@@ -80,14 +81,15 @@ func (s *agyStream) flush() {
 		Conversation string          `json:"conversation_id"`
 		StepUpdate   json.RawMessage `json:"step_update"`
 		Result       *struct {
-			Conversation string `json:"conversation_id"`
-			Status       string `json:"status"`
-			Response     string `json:"response"`
-			Error        string `json:"error"`
+			Conversation string          `json:"conversation_id"`
+			Status       string          `json:"status"`
+			Response     string          `json:"response"`
+			Error        string          `json:"error"`
+			Denied       json.RawMessage `json:"denied_actions"`
 		} `json:"result"`
 	}
 	if json.Unmarshal(s.line, &ev) != nil || ev.Event == "" {
-		s.damaged = true
+		s.fail()
 		return
 	}
 	switch ev.Event {
@@ -105,12 +107,18 @@ func (s *agyStream) flush() {
 		}
 	case "result":
 		if s.complete || ev.Result == nil {
-			s.damaged = true
+			s.fail()
 			return
 		}
 		s.complete = true
 		s.setConversation(ev.Result.Conversation)
 		s.status, s.response, s.detail = ev.Result.Status, ev.Result.Response, ev.Result.Error
+		// agy 1.5.18 lists what it auto-denied, e.g.
+		// "denied_actions":[{"action":"command","display_name":"Bash"}],
+		// beside a SUCCESS status.
+		if d := bytes.TrimSpace(ev.Result.Denied); len(d) > 0 && !bytes.Equal(d, []byte("null")) && !bytes.Equal(d, []byte("[]")) && !bytes.Equal(d, []byte("{}")) {
+			s.denied = true
+		}
 		if s.onResult != nil && !s.onResult() {
 			s.damaged = true // a result before this turn's message was sent is not its answer
 		}
@@ -139,9 +147,10 @@ func newAgyWarmTurn(in io.WriteCloser, prompt string) *agyWarmTurn {
 // reading cannot hold off a stop or timeout, which end the process and so
 // the write. A failed or partial write fails the turn; nothing is resent.
 func (t *agyWarmTurn) begin() {
+	input := agyInput(t.prompt)
 	go func() {
 		t.writing.Store(true)
-		if _, err := io.WriteString(t.in, agyInput(t.prompt)); err != nil {
+		if _, err := io.WriteString(t.in, input); err != nil {
 			t.err = err
 			close(t.failed)
 			return
@@ -158,6 +167,15 @@ func (t *agyWarmTurn) begin() {
 func (t *agyWarmTurn) settle() bool {
 	t.once.Do(func() { close(t.settled) })
 	return t.writing.Load()
+}
+
+// fail marks the stream unverifiable and, for a warm turn, ends the turn at
+// once: the process keeps running and would otherwise hold it until timeout.
+func (s *agyStream) fail() {
+	s.damaged = true
+	if s.onResult != nil && !s.complete {
+		s.onResult()
+	}
 }
 
 func (s *agyStream) setConversation(id string) {
@@ -204,7 +222,7 @@ func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, atten
 	status = envelope.StatusFailed
 	detail := strings.ToLower(s.detail)
 	switch {
-	case d.permission:
+	case d.permission || s.denied:
 		return "", status, nativeStatusPrefix + "Antigravity could not obtain a native tool approval. Review the request in your native setup; AgentNet did not change permissions or retry it."
 	case d.auth || strings.Contains(detail, "authentication required") || strings.Contains(detail, "unauthenticated"):
 		return "", status, nativeStatusPrefix + "Antigravity requires sign-in. Open agy in its configured directory and sign in, then explicitly retry this request."
@@ -226,64 +244,3 @@ func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, atten
 		return s.response, envelope.StatusDone, ""
 	}
 }
-
-// agyMergedOutput splits a warm agy process's single output pipe (stdout and
-// stderr, in the order agy wrote them) into its stream-json events and its
-// diagnostics. agy writes every event as one line starting {"event": and its
-// notices with a trailing newline (agy 1.5.18). A line starting so goes to
-// the events decoder: a valid event is read, one broken by interleaved text
-// fails to parse and fails the turn closed (agyStream marks it damaged, and
-// the broken line is a diagnostic too), never as success. Any other line is
-// a diagnostic, JSON logs of tools included; text written without a newline
-// just before an event is split off it, so the event is still read.
-type agyMergedOutput struct {
-	events, diagnostics io.Writer
-	line                []byte
-	overflow            bool // an over-long line goes to the events decoder, which refuses it
-}
-
-func (m *agyMergedOutput) Write(p []byte) (int, error) {
-	n := len(p)
-	for len(p) > 0 {
-		i := bytes.IndexByte(p, '\n')
-		chunk := p
-		if i >= 0 {
-			chunk = p[:i+1]
-		}
-		p = p[len(chunk):]
-		if m.overflow {
-			_, _ = m.events.Write(chunk)
-			m.overflow = i < 0
-			continue
-		}
-		m.line = append(m.line, chunk...)
-		if i < 0 {
-			if len(m.line) > codexLineMax {
-				_, _ = m.events.Write(m.line)
-				m.line, m.overflow = m.line[:0], true
-			}
-			continue
-		}
-		line := m.line
-		if i := bytes.Index(line, agyEventStart); i > 0 && len(bytes.TrimSpace(line[:i])) > 0 {
-			_, _ = m.diagnostics.Write(append(line[:i:i], '\n'))
-			line = line[i:]
-		}
-		if bytes.HasPrefix(bytes.TrimSpace(line), agyEventStart) {
-			var ev struct {
-				Event string `json:"event"`
-			}
-			if json.Unmarshal(bytes.TrimSpace(line), &ev) != nil || ev.Event == "" {
-				_, _ = m.diagnostics.Write(line)
-			}
-			_, _ = m.events.Write(line)
-		} else {
-			_, _ = m.diagnostics.Write(line)
-		}
-		m.line = m.line[:0]
-	}
-	return n, nil
-}
-
-// agyEventStart begins every stream-json event line agy writes.
-var agyEventStart = []byte(`{"event":`)

@@ -19,6 +19,13 @@ func agyTestResult(id, status, response string) string {
 	return string(raw)
 }
 
+// agyTestDeniedResult is agy 1.5.18's result for a turn whose tool it
+// auto-denied: SUCCESS, with what was denied (captured live, November 26).
+func agyTestDeniedResult(id string) string {
+	raw, _ := json.Marshal(map[string]any{"event": "result", "result": map[string]any{"conversation_id": id, "status": "SUCCESS", "response": "", "denied_actions": []map[string]string{{"action": "command", "display_name": "Bash"}}}})
+	return string(raw)
+}
+
 func TestAgyTerminalResults(t *testing.T) {
 	init := `{"event":"init","conversation_id":"` + agyTestConversation + `","init":{"permission_mode":"request-review"}}` + "\n"
 	for _, tc := range []struct {
@@ -98,31 +105,6 @@ func TestAgyInputAndNativePolicy(t *testing.T) {
 // A warm agy process's one output pipe keeps agy's own order: a soft denial
 // written before the result reaches the diagnostics first, and an event line
 // broken by interleaved text is refused, never a success (MEL-828 review).
-func TestAgyMergedOutputKeepsOrder(t *testing.T) {
-	var stream agyStream
-	var diag agyDiagnostics
-	m := &agyMergedOutput{events: &stream, diagnostics: &diag}
-	in := `{"event":"init","conversation_id":"` + agyTestConversation + `","init":{}}` + "\n" +
-		"run_command required approval that headless mode cannot prompt for, so it was auto-denied.\n" +
-		agyTestResult(agyTestConversation, "SUCCESS", "done") + "\n"
-	for i := 0; i < len(in); i += 7 { // arbitrary pipe chunks
-		m.Write([]byte(in[i:min(i+7, len(in))]))
-	}
-	if !stream.complete || stream.damaged || !diag.permission {
-		t.Fatalf("complete=%v damaged=%v permission=%v", stream.complete, stream.damaged, diag.permission)
-	}
-	if _, status, attention := stream.result(nil, &diag); status == envelope.StatusDone || attention == "" {
-		t.Fatalf("a soft denial became %s", status)
-	}
-	var broken agyStream
-	var none agyDiagnostics
-	m = &agyMergedOutput{events: &broken, diagnostics: &none}
-	m.Write([]byte(`{"event":"result","result":{"conversation_id":"` + agyTestConversation + `"progress text` + "\n"))
-	if !broken.damaged || broken.complete {
-		t.Fatalf("a broken event line was not refused: %+v", broken)
-	}
-}
-
 // begin never blocks the worker on a process that stopped reading its input,
 // and a write that cannot complete fails the turn (MEL-828 review).
 func TestAgyWarmTurnSendDoesNotBlock(t *testing.T) {
@@ -150,37 +132,38 @@ func TestAgyWarmTurnSendDoesNotBlock(t *testing.T) {
 	w.Close()
 }
 
-// Review re-checks (MEL-828, Codex and agy): a notice a large write split
-// into the result line fails the turn closed and is still seen; a result
-// that merely quotes the notice is an answer; text written without a newline
-// before the result, or a tool's JSON log, never hides or damages it; a
-// result read before the turn's message began to be written is not its
-// answer, but one read while the write is still finishing is.
+// Review re-checks (MEL-828, Codex and agy): a result listing auto-denied
+// actions needs the person, whatever stderr's timing; a result that merely
+// quotes the denial notice is an answer; a broken event ends a warm turn at
+// once instead of holding it until timeout; a result read before the turn's
+// message began to be written is not its answer, one read while the write is
+// still finishing is (the worker then waits for the write to finish).
 func TestAgyWarmTurnGuards(t *testing.T) {
 	notice := "run_command required approval that headless mode cannot prompt for, so it was auto-denied."
-	merged := func(in string) (*agyStream, *agyDiagnostics) {
-		var stream agyStream
-		var diag agyDiagnostics
-		m := &agyMergedOutput{events: &stream, diagnostics: &diag}
-		m.Write([]byte(in))
-		return &stream, &diag
+	var stream agyStream
+	stream.Write([]byte(agyTestDeniedResult(agyTestConversation) + "\n"))
+	if _, status, attention := stream.result(nil, &agyDiagnostics{}); status == envelope.StatusDone || !strings.Contains(attention, "native tool approval") {
+		t.Fatalf("a result listing denied actions became %s %q", status, attention)
 	}
-	full := agyTestResult(agyTestConversation, "SUCCESS", "ok")
-	stream, diag := merged(full[:len(full)/2] + notice + "\n" + full[len(full)/2:] + "\n")
-	if _, status, attention := stream.result(nil, diag); status == envelope.StatusDone || attention == "" || !stream.damaged {
-		t.Fatalf("a notice inside the result line became %s (damaged=%v)", status, stream.damaged)
+	for _, none := range []string{`null`, `[]`, `{}`} {
+		var s agyStream
+		s.Write([]byte(`{"event":"result","result":{"conversation_id":"` + agyTestConversation + `","status":"SUCCESS","response":"ok","denied_actions":` + none + `}}` + "\n"))
+		if _, status, _ := s.result(nil, &agyDiagnostics{}); status != envelope.StatusDone {
+			t.Fatalf("denied_actions %s became %s", none, status)
+		}
 	}
-	stream, diag = merged(agyTestResult(agyTestConversation, "SUCCESS", "the code checks for: "+notice) + "\n")
-	if body, status, _ := stream.result(nil, diag); status != envelope.StatusDone || !strings.Contains(body, "auto-denied") {
+	stream = agyStream{}
+	stream.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "the code checks for: "+notice) + "\n"))
+	if body, status, _ := stream.result(nil, &agyDiagnostics{}); status != envelope.StatusDone || !strings.Contains(body, "auto-denied") {
 		t.Fatalf("an answer quoting the notice became %s %q", status, body)
 	}
-	stream, diag = merged(notice + full + "\n")
-	if _, status, attention := stream.result(nil, diag); !stream.complete || stream.damaged || status == envelope.StatusDone || attention == "" {
-		t.Fatalf("a notice without its newline hid the result: complete=%v damaged=%v %s", stream.complete, stream.damaged, status)
-	}
-	stream, diag = merged(`{"level":"info","msg":"mcp server ready"}` + "\n" + "{\n" + full + "\n")
-	if body, status, _ := stream.result(nil, diag); status != envelope.StatusDone || body != "ok" {
-		t.Fatalf("a tool's JSON log damaged the turn: %s %q", status, body)
+	full := agyTestResult(agyTestConversation, "SUCCESS", "ok")
+	broken := newAgyWarmTurn(nil, "")
+	broken.writing.Store(true)
+	bs := agyStream{onResult: broken.settle}
+	bs.Write([]byte(full[:len(full)/2] + "\n"))
+	if !bs.damaged || !isClosed(broken.settled) {
+		t.Fatalf("a broken event did not end the warm turn: damaged=%v", bs.damaged)
 	}
 	early := agyStream{onResult: newAgyWarmTurn(nil, "").settle}
 	early.Write([]byte(full + "\n"))
@@ -198,7 +181,7 @@ func TestAgyWarmTurnGuards(t *testing.T) {
 	eventually(t, "write begun", turn.writing.Load)
 	during := agyStream{onResult: turn.settle}
 	during.Write([]byte(full + "\n"))
-	if during.damaged || !isClosed(turn.settled) {
+	if during.damaged || !isClosed(turn.settled) || isClosed(turn.sent) {
 		t.Fatal("a result read while the write was finishing was refused")
 	}
 	// A reused process announced its conversation once, on its first turn:
@@ -208,5 +191,19 @@ func TestAgyWarmTurnGuards(t *testing.T) {
 	reused.Write([]byte(`{"event":"step_update","step_update":{"conversation_id":"` + agyTestConversation + `","step_type":"agent_response"}}` + "\n"))
 	if answering != 1 {
 		t.Fatalf("warm turn activity %d", answering)
+	}
+}
+
+// Output a warm agy process writes between turns makes it unfit for the
+// next one: an event then could be taken for that turn's answer.
+func TestAgyWarmStrayOutputUnfit(t *testing.T) {
+	p := &warmPool{limits: warmLimits{lifetime: time.Hour}}
+	w := &warmProc{pool: p, harness: "agy", fp: "f", born: time.Now(), exited: make(chan struct{})}
+	if ok, why := p.fits(w, "f", time.Minute); !ok {
+		t.Fatalf("clean idle agy unfit: %s", why)
+	}
+	w.out.Write([]byte(`{"event":"result"}` + "\n"))
+	if ok, _ := p.fits(w, "f", time.Minute); ok {
+		t.Fatal("agy that wrote between turns was reused")
 	}
 }

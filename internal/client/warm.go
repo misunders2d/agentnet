@@ -76,8 +76,9 @@ type warmKey struct{ session, person, harness string }
 
 // warmSink routes a retained process's output to the current turn only.
 type warmSink struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu    sync.Mutex
+	w     io.Writer
+	stray atomic.Bool // output arrived with no turn attached
 }
 
 func (s *warmSink) Write(p []byte) (int, error) {
@@ -85,6 +86,8 @@ func (s *warmSink) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	if s.w != nil {
 		_, _ = s.w.Write(p)
+	} else if len(p) > 0 {
+		s.stray.Store(true)
 	}
 	return len(p), nil
 }
@@ -199,6 +202,10 @@ func (p *warmPool) fits(w *warmProc, fp string, timeout time.Duration) (bool, st
 		return false, "its native process had exited"
 	case w.fp != fp:
 		return false, "its launch or native settings changed"
+	case w.harness == "agy" && w.out.stray.Load():
+		// agy answers only a message it was sent: an event between turns
+		// could be taken for the next turn's answer.
+		return false, "it wrote output between turns"
 	case time.Since(w.born)+timeout >= lifetime:
 		return false, "it reached its lifetime"
 	}
@@ -225,15 +232,10 @@ func (p *warmPool) spawn(cmd *exec.Cmd, harness, fp, handle string) (*warmProc, 
 	return w, nil
 }
 
-// outputs are the process's stdout and stderr writers. agy gets one pipe for
-// both: a diagnostic it wrote before its result (a soft denial) is read
-// before that result (agyMergedOutput).
-func (w *warmProc) outputs() (stdout, stderr io.Writer) {
-	if w.harness == "agy" {
-		return &w.out, &w.out
-	}
-	return &w.out, &w.errOut
-}
+// outputs are the process's stdout and stderr writers, kept apart: stream
+// events are read only from stdout. agy's soft denial is in its result
+// (denied_actions), so it does not depend on stderr's timing.
+func (w *warmProc) outputs() (stdout, stderr io.Writer) { return &w.out, &w.errOut }
 
 func (w *warmProc) start() error {
 	p := w.pool

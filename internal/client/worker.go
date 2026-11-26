@@ -836,7 +836,6 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		wp.errOut.set(cmd.Stderr)
 		var writeFailed <-chan struct{}
 		if agyTurn != nil {
-			wp.out.set(&agyMergedOutput{events: cmd.Stdout, diagnostics: cmd.Stderr})
 			writeFailed = agyTurn.failed
 		}
 		if !reused {
@@ -871,10 +870,25 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			case <-writeFailed:
 			}
 			if agyTurn != nil {
+				if isClosed(settled) {
+					// agy answers a message only after reading all of it:
+					// the write reports done at once for a real answer. A
+					// write that fails or never ends fails the turn.
+					select {
+					case <-agyTurn.sent:
+					case <-agyTurn.failed:
+					case <-wp.exited:
+					case <-runCtx.Done():
+					}
+					if !isClosed(agyTurn.sent) && runCtx.Err() == nil {
+						settled = nil // not this turn's answer: reported below
+					}
+				}
 				// The turn's decoders are read below: nothing more reaches
 				// them once detached (set waits for a write in progress).
 				wp.out.set(nil)
 				wp.errOut.set(nil)
+				_ = agyTurn.in.Close() // a write not yet begun never reaches a later turn
 			}
 			pool.lastTurn.Store(int64(time.Since(launchAt)))
 			switch {
@@ -892,11 +906,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				_ = a.setWarmBinding(wp.handle, "", 0)
 				go wp.stop("its turn was stopped", nativeInterrupt(r.Harness, thread, turn))
 				runErr = runCtx.Err()
-			case !isClosed(settled) && writeFailed != nil && isClosed(writeFailed):
+			case (settled == nil || !isClosed(settled)) && writeFailed != nil && isClosed(writeFailed):
 				// The message never fully reached the process: the turn
 				// fails and the process is discarded; nothing is resent.
 				runErr = fmt.Errorf("the message could not be sent to the running %s process: %v", r.Harness, agyTurn.err)
-			case !isClosed(settled):
+			case settled == nil || !isClosed(settled):
 				// Lost while working: reported below, never run again.
 				runErr = wp.waitErr
 				if runErr == nil {
