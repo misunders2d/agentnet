@@ -4325,3 +4325,32 @@ Download and Open in default app still address the displayed attachment.
 touch swipe at 1440 and 390 CSS px in Chromium. Switching shows the next
 image title within 1100 ms, keeps the same dialog open, and preserves
 original bytes, zoom, pinch, Back, Escape and exact opener focus restoration.
+
+## MEL-828 — Antigravity in Connect an agent (November 26, 2026)
+
+Sergey reported that agy was missing from his available agents. On base
+`517b86df` the Agents page's primary "Connect an agent" list (shown as
+"Choose your agents") came from a fixed server list of Codex, Claude, Pi and
+OMP (`cmd/agentnet/assistantsetup.go`), so Antigravity never appeared there.
+The agent runtime, the named-agent catalog and the secondary "New agent"
+sheet already detected `agy`. The fix adds Antigravity to that server list as
+an agent-only row: it is detected from the same PATH and has
+`supported=false`. Native-session setup for it is refused, so the review
+installs no hook and changes no Antigravity file. The existing row
+(`AssistantSetup.model.ts#selectable`/`canHaveAgent`) and the existing
+`Set up <tool>` control still create its named agent. No web bundle or skin
+changed, and the same screen serves Comic and the built-in Office overlay.
+
+Disposable rendered check: a local Hub with loopback TLS, an isolated
+AgentNet home with Codex/Claude/Pi/OMP agents enabled, the real `agy` 1.5.16
+on PATH, and the Office skin in Chromium.
+Base listed four tools; the candidate listed `Set up Antigravity`. Selecting
+only Antigravity created agent `Agy test` (agy, Ready). The route guard
+recorded no native setup POST. From the laptop, a request showed `Working…`
+within 2 s and the real agy reply in its topic at 38 s. From the linked phone
+device, a reply follow-up in that topic was answered by the same native agy
+conversation, which recalled the earlier answer. The phone's own
+"Chat with" start was held as "Not sent … joins when its computer connects":
+it asks before the laptop has admitted the new topic invite. That held send
+is not agy-specific and remains open. Focused regression:
+`TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
