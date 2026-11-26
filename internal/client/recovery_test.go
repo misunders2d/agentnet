@@ -94,7 +94,14 @@ func tctx(t *testing.T) context.Context {
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	eventuallyWithin(t, what, 15*time.Second, cond)
+}
+
+// eventuallyWithin is eventually with an explicit bound, for fixture steps
+// whose work is a known chain of Hub round trips.
+func eventuallyWithin(t *testing.T, what string, bound time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
 	interval := 20 * time.Millisecond
 	for !cond() {
 		if time.Now().After(deadline) {

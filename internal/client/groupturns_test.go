@@ -66,8 +66,15 @@ func traceFixtureHTTP(t *testing.T, ctx context.Context) (context.Context, func(
 	}
 }
 
+// groupContextFixtureBound bounds groupTurnsFixture's wait for both readers'
+// current context; it must stay below protocol.HeartbeatInterval.
+const groupContextFixtureBound = 60 * time.Second
+
 func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent, GroupContext, map[*Agent]func()) {
 	t.Helper()
+	if groupContextFixtureBound >= protocol.HeartbeatInterval {
+		t.Fatal("group context fixture bound must stay below the Hub ping")
+	}
 	w, p, first := newGroupPublicationFixture(t)
 	if _, err := w.alice.PublishGroup(tctx(t), first, p); err != nil {
 		t.Fatal(err)
@@ -120,13 +127,29 @@ func groupTurnsFixture(t *testing.T, beforeRun ...func(*Agent)) (*world, *Agent,
 			groupFixtureSnapshot(t, t.Logf, next.State.Conv, w.alice, w.bob, carol)
 		}
 	})
-	for _, a := range []*Agent{w.bob, carol} {
-		eventually(t, "ordinary member current context", func() bool {
+	// The carriers were sealed before any daemon ran, so they wait for the
+	// readers' group capabilities, are released by the capability change and
+	// sent again: a chain of Hub round trips per reader. Slow Windows runners
+	// took past the 15 s default (one finished 200 ms after it); the same
+	// chain at an injected 1 s per request arrived in 14-27 s. The bound
+	// stays below the Hub's 90 s ping, so a copy that waits for the next ping
+	// instead of its release wake still fails here. One bound covers both
+	// readers, so it never adds up past that ping.
+	current := map[*Agent]bool{}
+	eventuallyWithin(t, "ordinary member current context", groupContextFixtureBound, func() bool {
+		for _, a := range []*Agent{w.bob, carol} {
+			if current[a] {
+				continue
+			}
 			got, e := a.GroupContext(next.State.Conv)
 			last[a.Address] = fmt.Sprintf("%s seq=%d hash=%s error=%v", time.Now().UTC().Format(time.RFC3339Nano), got.State.Seq, got.State.Hash(), e)
-			return e == nil && got.State.Hash() == next.State.Hash()
-		})
-	}
+			if e != nil || got.State.Hash() != next.State.Hash() {
+				return false
+			}
+			current[a] = true
+		}
+		return true
+	})
 	return w, carol, next, stops
 }
 
