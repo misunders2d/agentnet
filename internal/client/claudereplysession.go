@@ -116,6 +116,10 @@ func (a *Agent) registerClaudeHook(event, sid, file string, route claudeNativeRo
 			r.Label = "claude " + sid
 		}
 		r.Claude = &route
+		r.ClaudeInbox = ""
+		if inbox := os.Getenv("CLAUDE_CODE_MESSAGING_SOCKET"); claudeInboxPath(inbox, route.PID) == nil {
+			r.ClaudeInbox = inbox
+		}
 		r.Generation++
 		r.OwnerToken = protocol.NewID()
 		r.Active = true

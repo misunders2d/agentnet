@@ -232,6 +232,7 @@
     openLink: (value) => openPortable(value),
     ...(window.__agentnetPlatform === "android" ? { platform: "android", android: window.__agentnetAndroid, onBack: window.__agentnetOnBack } : {}),
     ...(typeof window.__agentnetNativeClipboardImage === "function" ? { clipboardImage: () => window.__agentnetNativeClipboardImage() } : {}),
+    ...(typeof window.__agentnetNativeClipboardText === "function" ? { clipboardText: () => window.__agentnetNativeClipboardText() } : {}),
     // A native window without tab locks writes no saved drafts or sends (above; saved-storage.ts).
     ...(window.__agentnetSingleWindow === "readonly" ? { savedReadOnly: true } : {}),
     // Computer-wide app actions stay on this loopback origin; switching a

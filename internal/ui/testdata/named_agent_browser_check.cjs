@@ -39,7 +39,7 @@ const server=http.createServer(async(req,res)=>{
  if(req.method!=='GET'){res.writeHead(405).end();return;}
  if(url.pathname==='/'){type='text/html';content='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentNet named agent UI fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/app.css">'+fs.readFileSync(path.join(base,'default.html'),'utf8')+'<script src="/fixture.js"></script><script src="/assets/lenses.js"></script><script src="/assets/app.js"></script>';}
  else if(url.pathname==='/fixture.js')content=bootstrap.replace('__PLATFORM__',JSON.stringify(browserMode?'browser':'daemon'));
- else if(['/assets/app.css','/assets/app.js','/assets/lenses.js','/assets/icon-192.png'].includes(url.pathname)){type=url.pathname.endsWith('.css')?'text/css':url.pathname.endsWith('.png')?'image/png':'text/javascript';content=fs.readFileSync(path.join(base,url.pathname.endsWith('.png')?'ant.png':path.basename(url.pathname)));}
+ else if(['/assets/app.css','/assets/app.js','/assets/lenses.js','/assets/icon-192.png'].includes(url.pathname)){type=url.pathname.endsWith('.css')?'text/css':url.pathname.endsWith('.png')?'image/png':'text/javascript';content=fs.readFileSync(path.join(base,url.pathname.endsWith('.png')?'app-icon.png':path.basename(url.pathname)));}
  else{res.writeHead(404).end();return;}
  res.setHeader('Content-Type',type+'; charset=utf-8');res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'");res.end(content);
 });

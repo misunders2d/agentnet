@@ -433,6 +433,11 @@ func runAgentAsk(ctx context.Context, a *client.Agent, args []string, out io.Wri
 	if err := receiverCommandGuard("dm", []string{"ask-agent"}); err != nil {
 		return err
 	}
+	if inRun() {
+		// It would be signed as the person: a run asks as its agent, with
+		// ask or task (My agents room), never as a person's own request.
+		return errors.New("a background run asks other agents with `agentnet ask` or `agentnet task`, not dm/group ask-agent")
+	}
 	fs := flag.NewFlagSet("ask-agent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	task := fs.Bool("task", false, "a task instead of a question")

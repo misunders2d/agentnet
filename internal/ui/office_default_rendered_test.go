@@ -18,7 +18,7 @@ func TestOfficeDefaultRendered(t *testing.T) {
 		t.Skip("rendered")
 	}
 	ts := httptest.NewUnstartedServer(nil)
-	ts.Config.Handler = New(NewFixture(time.Now), ts.Listener.Addr().String(), testToken).Handler()
+	ts.Config.Handler = New(officeFixture(), ts.Listener.Addr().String(), testToken).Handler()
 	ts.Start()
 	t.Cleanup(ts.Close)
 	t.Setenv("AGENTNET_TEST_FRESH_SKIN", "1") // the real first open (testdata/comic_preload.cjs)
@@ -37,7 +37,7 @@ func TestOfficeDefaultWorkspaceRendered(t *testing.T) {
 		t.Skip("rendered")
 	}
 	set := NewWorkspaceProviders()
-	f := NewFixture(time.Now)
+	f := officeFixture()
 	if _, err := set.Bind(client.Workspace{ID: "default", Name: "This computer", Realm: strings.Repeat("a", 32), Address: f.me.Address, State: "enrolled"}, f); err != nil {
 		t.Fatal(err)
 	}
@@ -53,4 +53,19 @@ func TestOfficeDefaultWorkspaceRendered(t *testing.T) {
 		t.Fatalf("no pass line:\n%s", out)
 	}
 	t.Logf("%s", out)
+}
+
+// Seed the same long incoming and outgoing messages for the width checks.
+func officeFixture() *Fixture {
+	f := NewFixture(time.Now)
+	for _, thread := range f.threads {
+		if thread.peer == "vitalii/phone" {
+			for _, direction := range []string{"in", "out"} {
+				f.add(thread, &Message{Dir: direction, Kind: KindMessage, At: f.now(), Body: strings.Repeat("Это длинное сообщение для проверки ширины переписки. ", 7)})
+			}
+			f.add(thread, &Message{Dir: "out", Kind: KindMessage, At: f.now(), Body: "Got it."})
+			break
+		}
+	}
+	return f
 }

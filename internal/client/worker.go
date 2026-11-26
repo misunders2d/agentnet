@@ -322,11 +322,29 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		return
 	}
 	h := Harnesses[r.Harness]
+	chat := r.isChat()
+	if chat {
+		// An opted-in Claude or Codex Desktop chat takes one plain message:
+		// no files, no run folder, no edit of a message it already has
+		// (claudechat.go, codexchat.go).
+		name := r.chatName()
+		switch {
+		case j.Receiver != nil:
+			a.endJob(j.ID, stateNotRun, "a "+name+" agent is not a reply receiver", j.nativeAttempt)
+			return
+		case j.Attachments > 0:
+			a.endJob(j.ID, stateNeedHuman, "This request has files, which cannot be passed to a "+name+". Nothing was sent.", j.nativeAttempt)
+			return
+		case j.editOf != "":
+			a.endJob(j.ID, stateNotRun, "Edit follow-up did not run: the "+name+" already has the original message", j.nativeAttempt)
+			return
+		}
+	}
 	// The session is planned first: whether the run gets an outbox, and its
 	// prompt names one, depends on it (runfiles.go). A planning error ends
 	// the job below, after the checks that come first.
 	plan, planErr := a.planSession(j, r, h)
-	if j.run = a.newRun(j, planErr == nil && outboxFor(j, h, plan.resume)); j.run != nil {
+	if j.run = a.newRun(j, !chat && planErr == nil && outboxFor(j, h, plan.resume)); j.run != nil {
 		defer func() {
 			if err := j.run.remove(); err != nil {
 				a.Logf("%s %s: run folder not removed: %v", j.Kind, j.ID, err)
@@ -353,7 +371,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	if err == nil {
 		prompt += followupContext + a.requestFollowupFiles(ctx, j)
-		if j.Executor != nil && j.Receiver == nil {
+		if j.Executor != nil && j.Receiver == nil && !chat {
 			prompt += modelReportPrompt
 		}
 		if err = j.run.seal(); err != nil {
@@ -380,7 +398,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
-	runCtx, cancel := runContext(ctx, r.Timeout)
+	limit := r.Timeout
+	if r.isChat() {
+		limit = 0 // the chat's own wait applies it, and says how far it got
+	}
+	runCtx, cancel := runContext(ctx, limit)
 	defer cancel()
 	if j.PID != "" && j.Conv != "" {
 		nestedDone := make(chan struct{})
@@ -429,6 +451,45 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		})
 	}()
 
+	if chat {
+		name := r.chatName()
+		var out chatOutcome
+		if r.CodexChat != nil {
+			out = a.runCodexChat(runCtx, j, r, prompt, activity)
+		} else {
+			out = a.runClaudeChat(runCtx, j, r, prompt, activity)
+		}
+		cancel()
+		<-watchDone
+		if ctx.Err() == nil && out.answer == "" {
+			// Final either way: the chat's later hooks have nothing to record.
+			// A stopping daemon keeps it live for an exact reconcile.
+			_, _ = a.store.db.Exec(`UPDATE claude_chat_deliveries SET state=? WHERE request=? AND state IN (?,?,?)`, chatSuperseded, j.ID, chatSending, chatWritten, chatStarted)
+			// A Codex request still queued stays so for withdrawCodexChats.
+			_, _ = a.store.db.Exec(`UPDATE codex_chat_deliveries SET state=? WHERE request=? AND state=?`, chatSuperseded, j.ID, chatStarted)
+		}
+		reached := "It was already delivered to the " + name + "."
+		if r.CodexChat != nil {
+			reached = a.codexChatReached(j.ID)
+		}
+		switch {
+		case ctx.Err() != nil:
+			a.endJob(j.ID, stateInterrupt, "the daemon stopped while waiting for the "+name+"; it is not sent again. "+reached, j.nativeAttempt)
+		case stopWhy != "":
+			a.endJob(j.ID, stateNotDelivered, "stopped and not sent: "+stopWhy+". "+reached, j.nativeAttempt)
+		case cancelled.Load():
+			a.finishRun(ctx, j, r, envelope.StatusCancelled, "cancelled by the recipient", "", false, false, func(bool) {})
+		case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+			a.finishRun(ctx, j, r, envelope.StatusTimeout, fmt.Sprintf("stopped after %s", r.Timeout), "", false, false, func(bool) {})
+		case out.state != "":
+			a.endJob(j.ID, out.state, out.detail, j.nativeAttempt)
+		case strings.TrimSpace(out.answer) == "":
+			a.endJob(j.ID, stateNeedHuman, "The "+name+"'s turn ended without an answer.", j.nativeAttempt)
+		default:
+			a.finishRun(ctx, j, r, envelope.StatusDone, strings.TrimSpace(out.answer), out.answer, false, true, func(bool) {})
+		}
+		return
+	}
 	var stdout, stderr limitedBuffer
 	stdout.max, stderr.max = maxOutput, 4<<10
 	outPath := ""
@@ -578,17 +639,34 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	var agy *agyStream
 	var agyErr agyDiagnostics
+	var agyTurn *agyWarmTurn
 	if h.sessions == agySessions {
 		agy = &agyStream{onActivity: activity.report}
 		if plan.ref != nil {
 			agy.expected = plan.ref.ID
+		}
+		if wp != nil {
+			agyTurn = newAgyWarmTurn(wp.input(), prompt)
+			agy.onResult = agyTurn.settle
+			if reused {
+				// A running agy must stay silent until this turn's message.
+				agyTurn.strict, agyTurn.clean = true, func() bool { return !wp.out.stray.Load() }
+				agy.onOutput = agyTurn.early
+				agy.onInput = agyTurn.begun
+				if plan.ref != nil && plan.ref.ID != "" {
+					agy.conversation = plan.ref.ID // a running agy announced it once, on its first turn
+				}
+			}
 		}
 		cmd.Stdout = activityWriter{Writer: agy, activity: activity, first: first}
 	} else {
 		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity, first: first}
 	}
 	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity, first: first}
-	if agy != nil {
+	if agy != nil && !reused {
+		// A reused agy's stderr is not tied to this turn (a late notice of
+		// the previous one): its result alone classifies it, denied_actions
+		// and sign-in errors included.
 		cmd.Stderr = activityWriter{Writer: io.MultiWriter(&stderr, &agyErr), activity: activity, first: first}
 	}
 	var roomBridge *codexRoomBridge
@@ -738,6 +816,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				wp.thread, wp.model = roomBridge.thread, roomBridge.modelReport()
 				key.session = plan.ref.ID
 			}
+			if agy != nil {
+				key.session = plan.ref.ID // agy names a new conversation only once it has answered
+			}
 			if pool.release(wp, key) {
 				a.Logf("%s %s: %s session %s kept warm for its next turn", j.Kind, j.ID, r.Harness, key.session)
 			}
@@ -756,12 +837,18 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			settled, begin = piBridge.settledCh(), piBridge.begin
 		case claudeBridge != nil:
 			settled, begin = claudeBridge.settledCh(), claudeBridge.begin
+		case agyTurn != nil:
+			settled, begin = agyTurn.settled, agyTurn.begin
 		}
 		// Output reaches only this turn's decoder, from before its input.
 		wp.out.set(cmd.Stdout)
 		wp.errOut.set(cmd.Stderr)
+		var writeFailed <-chan struct{}
+		if agyTurn != nil {
+			writeFailed = agyTurn.failed
+		}
 		if !reused {
-			cmd.Stdout, cmd.Stderr = &wp.out, &wp.errOut
+			cmd.Stdout, cmd.Stderr = wp.outputs()
 			runErr = wp.start()
 		}
 		if runErr == nil {
@@ -769,6 +856,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		if runErr != nil {
 			a.Logf("%s %s: launch failed: setup_ms=%d start_ms=%d (%v)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds(), runErr)
+			// Nothing the process writes now reaches this turn's decoders.
+			wp.out.set(nil)
+			wp.errOut.set(nil)
+			if agyTurn != nil {
+				*agy = agyStream{}
+				agyErr.reset()
+			}
 		} else {
 			if reused {
 				a.Logf("%s %s: warm %s session %s continued: setup_ms=%d turn=%d", j.Kind, j.ID, r.Harness, key.session, setupMS, wp.turns+1)
@@ -782,11 +876,67 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				defer a.store.setRunGroup(j.ID, 0, "")
 			}
 			releaseWarmVouch = a.vouchRun(j, wp.cmd.Process.Pid) // this turn's run origin
-			begin()
+			// A reused agy that spoke before this turn's message (a stray
+			// event) never gets it: begin refuses (agyWarmTurn.state).
+			var agyRefused error
+			if runCtx.Err() == nil {
+				begin()
+			}
 			select {
 			case <-settled:
 			case <-wp.exited:
 			case <-runCtx.Done():
+			case <-writeFailed:
+			}
+			if agyTurn != nil {
+				if !agyTurn.strict && isClosed(agyTurn.failed) && runCtx.Err() == nil {
+					// A new agy that failed at launch (sign-in) may exit
+					// before reading its message: its stderr says why, and
+					// is complete once the process has exited.
+					drain := time.NewTimer(2 * time.Second)
+					select {
+					case <-wp.exited:
+					case <-runCtx.Done():
+					case <-drain.C:
+					}
+					drain.Stop()
+				}
+				// The turn's decoders are read below and here: nothing more
+				// reaches them once detached (set waits for a write in
+				// progress).
+				wp.out.set(nil)
+				wp.errOut.set(nil)
+				if agy.complete && !agy.damaged && runCtx.Err() == nil {
+					// agy answers a message only after reading all of it, so
+					// the write reports done at once for a real answer.
+					grace := time.NewTimer(5 * time.Second)
+					select {
+					case <-agyTurn.sent:
+					case <-agyTurn.failed:
+					case <-wp.exited:
+					case <-runCtx.Done():
+					case <-grace.C:
+					}
+					grace.Stop()
+				}
+				_ = agyTurn.in.Close() // a write not yet begun never reaches a later turn
+				if runCtx.Err() == nil && !isClosed(agyTurn.sent) {
+					// No answer is taken for a message that did not fully
+					// reach the process; a failed write says why.
+					agyRefused = fmt.Errorf("the message did not fully reach the running %s process", r.Harness)
+					if isClosed(agyTurn.failed) {
+						agyRefused = fmt.Errorf("the message could not be sent to the running %s process: %v", r.Harness, agyTurn.err)
+					}
+				}
+				if agyRefused != nil {
+					// No answer, session, status or denial of it is kept. A
+					// reused process's diagnostics are not this turn's either;
+					// a new one's (a sign-in failure at launch) still are.
+					*agy = agyStream{}
+					if agyTurn.strict {
+						agyErr.reset()
+					}
+				}
 			}
 			pool.lastTurn.Store(int64(time.Since(launchAt)))
 			switch {
@@ -804,6 +954,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				_ = a.setWarmBinding(wp.handle, "", 0)
 				go wp.stop("its turn was stopped", nativeInterrupt(r.Harness, thread, turn))
 				runErr = runCtx.Err()
+			case agyRefused != nil:
+				// The message never fully reached the process: the turn
+				// fails and the process is discarded; nothing is resent.
+				runErr = agyRefused
 			case !isClosed(settled):
 				// Lost while working: reported below, never run again.
 				runErr = wp.waitErr
@@ -997,8 +1151,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			}
 		}
 	}
-	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
 	cleanTurn := !stdout.truncated && nativeFailure == "" && runErr == nil && !cancelled.Load() && stopWhy == "" && ctx.Err() == nil
+	a.finishRun(ctx, j, r, status, body, output, stdout.truncated, cleanTurn, endWarm)
+}
+
+// finishRun ends a run that produced its output: the agent's own question
+// or proposal, waiting for other agents, or the reply (worker.go, claudechat.go).
+func (a *Agent) finishRun(ctx context.Context, j job, r *Responder, status, body, output string, truncated, cleanTurn bool, endWarm func(bool)) {
+	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
 	if outcome == outcomeNeedsHuman && status == envelope.StatusDone {
 		// The agent's own question to its person ended its turn cleanly: its
 		// warm worker stays for the answer (MEL-746). AgentNet's own
@@ -1034,7 +1194,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		switch {
 		case !j.proposalEligible():
 			why = r.Harness + " proposed an action, which only a question's own answer can carry, so nothing was sent. Its proposal:\n" + rest
-		case stdout.truncated:
+		case truncated:
 			why = r.Harness + " proposed an action, but its text was cut off, so nothing was sent. What it wrote:\n" + rest
 		case strings.TrimSpace(rest) == "":
 			why = r.Harness + " proposed an action but wrote no task"
@@ -1050,8 +1210,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	// Asks to other agents still out (MEL-540): the request waits for them
 	// and runs again with their results, instead of answering now. A reply
-	// tagging present agents asks them first (agenttags.go).
-	if status == envelope.StatusDone && j.Receiver == nil {
+	// tagging present agents asks them first (agenttags.go). A Claude chat
+	// is never written a second time, so its rerun could not read their
+	// results: its answer is sent as it is.
+	if status == envelope.StatusDone && j.Receiver == nil && !r.isChat() {
 		a.routeAgentTags(ctx, j, r.Harness, body)
 		if parked, err := a.parkForHelpers(j, body); err != nil {
 			a.Logf("%s %s: could not wait for other agents' results: %v", j.Kind, j.ID, err)

@@ -22,7 +22,12 @@ import (
 // Serialize this UI's review/apply boundary across workspace providers. File
 // content is rechecked before apply; no durable installer or new state store.
 var assistantSetupMu sync.Mutex
-var setupHarnesses = []string{"codex", "claude", "pi", "omp"}
+var setupHarnesses = []string{"codex", "claude", "pi", "omp", "agy"}
+
+// agentOnlySetup lists tools the setup offers as AgentNet agents (the
+// responder registry runs them) without native session integration:
+// AgentNet installs no hook or extension for them and changes no file.
+var agentOnlySetup = map[string]bool{"agy": true}
 
 type setupPlan struct {
 	row           ui.AssistantSetupHarness
@@ -118,7 +123,7 @@ func configuredAssistantHooks(config map[string]any, harness, command string) bo
 }
 
 func (c *assistantSetupController) inspect(harness string, sessions []client.ReplySessionView) setupPlan {
-	labels := map[string]string{"codex": "Codex", "claude": "Claude", "pi": "Pi", "omp": "OMP"}
+	labels := map[string]string{"codex": "Codex", "claude": "Claude", "pi": "Pi", "omp": "OMP", "agy": "Antigravity"}
 	row := ui.AssistantSetupHarness{ID: harness, Label: labels[harness], Supported: runtime.GOOS != "windows", State: "not_detected", Note: "Not found on this computer's AgentNet PATH."}
 	if _, err := exec.LookPath(harness); err == nil {
 		row.Detected = true
@@ -126,6 +131,16 @@ func (c *assistantSetupController) inspect(harness string, sessions []client.Rep
 		row.Note = "Installed; AgentNet integration is not configured."
 	}
 	plan := setupPlan{row: row}
+	if agentOnlySetup[harness] {
+		// The agent itself is created through the named-agent catalog, which
+		// finds the same executable. Native sessions are not claimed.
+		plan.row.Supported = false
+		if row.Detected {
+			plan.row.State = "unsupported"
+			plan.row.Note = "AgentNet does not connect open Antigravity CLI (agy) sessions yet, so no Antigravity setting is changed. Its AgentNet agent runs chats, questions and approved tasks in new agy conversations with your own agy setup and permissions."
+		}
+		return plan
+	}
 	if !row.Supported {
 		plan.row.State = "unsupported"
 		plan.row.Note = "Native hook installation is not supported on Windows yet. No software was changed."

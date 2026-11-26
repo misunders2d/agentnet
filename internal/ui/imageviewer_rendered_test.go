@@ -71,6 +71,7 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 	dm.Messages[0].Attachments = []FileView{
 		{Index: 2, Name: "wide.png", Size: int64(len(f.images[0])), Openable: true},
 		{Index: 5, Name: "tall.png", Size: int64(len(f.images[1])), Openable: true},
+		{Index: 6, Name: "last.png", Size: int64(len(f.images[0])), Openable: true},
 		{Index: 8, Name: "received.webm", Size: int64(len(f.video)), Openable: true},
 		{Index: 9, Name: "spoof.mp4", Size: 16, Openable: true},
 		{Index: 10, Name: "broken.webm", Size: 4, Openable: true},
@@ -109,6 +110,8 @@ func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index i
 		return io.NopCloser(bytes.NewReader(f.images[0])), "wide.png", nil
 	case 5:
 		return io.NopCloser(bytes.NewReader(f.images[1])), "tall.png", nil
+	case 6:
+		return io.NopCloser(bytes.NewReader(f.images[0])), "last.png", nil
 	case 8, 14:
 		return io.NopCloser(bytes.NewReader(f.video)), "received.webm", nil
 	case 9:

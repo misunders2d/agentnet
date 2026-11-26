@@ -250,3 +250,28 @@ func TestCiphertextResumableLocationCannotLeakBearer(t *testing.T) {
 		t.Fatalf("unsafe error: %v", err)
 	}
 }
+
+// MEL-836: Drive's "slow down" replies are their own temporary error, so the
+// relay can lower its pace instead of pausing the move or asking to reconnect.
+func TestCipherErrorRateLimit(t *testing.T) {
+	for _, err := range []error{
+		&googleapi.Error{Code: 429},
+		&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "rateLimitExceeded"}}},
+		&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "userRateLimitExceeded"}}},
+		fmt.Errorf("wrapped: %w", ErrRateLimited),
+	} {
+		got := cipherError(err)
+		if !errors.Is(got, ErrRateLimited) || !errors.Is(got, ErrOffline) {
+			t.Errorf("%v → %v, want a rate limit that is also temporary", err, got)
+		}
+	}
+	for _, err := range []error{
+		&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "storageQuotaExceeded"}}},
+		&googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "forbidden"}}},
+		&googleapi.Error{Code: 503},
+	} {
+		if errors.Is(cipherError(err), ErrRateLimited) {
+			t.Errorf("%v classified as a rate limit", err)
+		}
+	}
+}

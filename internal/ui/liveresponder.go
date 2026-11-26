@@ -50,6 +50,9 @@ func (l *Live) ResponderStatus() (ResponderView, error) {
 // responderReady says whether r can be started here: its harness is on the
 // daemon's PATH and its directory exists. It never says it works.
 func responderReady(hs []HarnessView, r *client.Responder) (bool, string) {
+	if r.Chat != nil || r.CodexChat != nil {
+		return true, "" // an opted-in Desktop chat: no program to find (readiness says if it is open)
+	}
 	found := false
 	for _, h := range hs {
 		if h.Name == r.Harness && h.Found {

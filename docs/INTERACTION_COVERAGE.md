@@ -3652,6 +3652,41 @@ No timeout or assertion was weakened. The complete control/platform/history
 inventory remains incomplete. The later explicit release authorization and
 final passing gallery gate are recorded in the current disposition above.
 
+### Paste of WPS Office cells in the desktop app — November 26 (v0.11.12)
+
+Report: copying SKU cells in WPS Office (Linux) and pressing Ctrl+V in the
+desktop app pasted nothing; pasting through Google Sheets first worked.
+Evidence: the clipboard (read with `wl-paste --list-types` after a WPS copy)
+holds `text/plain` (CRLF lines), `text/html` (an Excel-style table) and
+`image/bmp`. In the app nothing appeared, so the web event carried neither
+text nor a file and the native picture read found none (BMP). The WebKitGTK
+event itself could not be probed here (headless WebKitGTK aborted without a
+GL context); that part is inferred from the observed outcome.
+Fix: a paste whose event has no text and no file reads the native clipboard
+text first (`host.clipboardText`, `agentnet_clipboard_text`, same origin
+check as the picture read) and inserts it; only when there is none is the
+picture read, so a screenshot still attaches. Browser text keeps the earlier
+order (a browser image copy still attaches). Local feedback is the inserted
+text, immediately after the one native read. The native text read answers
+once per trusted paste event within 2 s (a script's synthetic paste gets
+`null`), and the native command requires a per-run key held only in the
+shell's own script, so a direct call from page code is refused; code that
+rewrites the page's native bridge is outside that. A text read that fails
+(too long, or text the clipboard could not convert) shows a notice and
+attaches no picture instead. The text goes where the person pasted: an edit
+made while the read is pending cancels it with "The text changed while
+pasting. Paste again." instead of replacing other text. A box that takes no files still
+recovers the text and reads no picture. One trailing row end is dropped,
+other line breaks kept. Checks:
+`internal/ui/testdata/picture_crop_paste_check.mjs` (WPS case, plain paste,
+screenshot, browser image copy, too-long text, no-file box, trailing line
+breaks), the rendered `picture_rendered_check.cjs` (WPS paste with no
+picture read; an edit during a pending paste keeps the newer text and shows
+the notice), agentnet-skins `tests/paste-native-text.test.mjs` (Classic,
+Holonet, Zoom) and the desktop `clipboard_text_replies` and
+`clipboard_only_from_current_main_page` origin test. Outstanding: a rendered
+paste in the installed app with real WPS cells.
+
 ### Plain-text paste of Excel cells — October 29 (MEL-714)
 
 Cause, from source: with no browser clipboard file, the desktop shell's
@@ -4076,6 +4111,20 @@ px tall, failed before this). The emoji picker's grid keeps
 room for a sticky heading plus one full 44 px row (the taller composer left
 a 45 px grid at 390×400 where the heading covered the row).
 
+Office desktop density follows the owner’s annotated composer screenshot.
+At 1280×800 in Chromium with a mouse, the formatting strip went from 49 to
+37 px and the lower tools row from 46 to 36 px. At 390×844 with touch
+emulation, Aa still swaps tools in place with 44 px targets. The draft
+remains 16 px on a 24 px line. `TestOfficeDefaultWorkspaceRendered` checks both
+layouts. `TestMessageFormattingRendered` also passed on Office with 40 and
+400 messages, including Aa, selection, formatting and the Send menu.
+
+Office uses quieter tool colors, a plain arrow for Send, and one composer
+outline on desktop. The desktop and touch fixtures measure composited colors
+inside the skin's shadow tree. Lowest sampled text ratio: 5.15:1 (selected
+chat timestamp, dark). Lowest sampled icon ratio: 3.68:1 (inactive formatting,
+light). The draft and placeholder also pass in both themes.
+
 | Inventory | Intended local feedback | Completion/recovery | Executed evidence |
 |---|---|---|---|
 | phone Aa toggles strip | strip replaces tools in place; Send, clock and draft selection/focus unchanged (`phone Aa 320` 15 ms, `390` 16 ms) | strip Bold formats the kept selection, field stays focused (16–32 ms) | `TestMessageFormattingRendered` (320/390 touch) |
@@ -4298,3 +4347,62 @@ mise x go@1.26.8 -- go test ./internal/client ./internal/ui ./internal/ui/static
 AGENTNET_FORMATTING_BASE="$base_comic_dir" taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
 taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
 ```
+
+## Browse photos in one message (November 26, 2026)
+
+Telegram Web A's [MediaViewerSlides](https://github.com/Ajaxy/telegram-tt/blob/4566a14adb6287867f21ed6c51449292581c8653/src/components/mediaViewer/MediaViewerSlides.tsx)
+uses adjacent slides, arrow keys at fit zoom, and separates swiping from
+zooming and panning. AgentNet reuses its current modal and verified image
+cache, limiting navigation to openable photos attached to the same message.
+Download and Open in default app still address the displayed attachment.
+
+`TestImageViewerRendered` exercised the navigation buttons, keyboard and
+touch swipe at 1440 and 390 CSS px in Chromium. Switching shows the next
+image title within 1100 ms, keeps the same dialog open, and preserves
+original bytes, zoom, pinch, Back, Escape and exact opener focus restoration.
+
+The same rendered fixture also sends two successive Right inputs in one
+browser dispatch and checks that the third image is selected. On desktop it
+holds the first image's native-open response while navigating to the second,
+checks that the second image's Open control is immediately usable, then
+releases the response and checks its result on the first image.
+
+## MEL-828 — Antigravity in Connect an agent (November 26, 2026)
+
+Sergey reported that agy was missing from his available agents. On base
+`517b86df` the Agents page's primary "Connect an agent" list (shown as
+"Choose your agents") came from a fixed server list of Codex, Claude, Pi and
+OMP (`cmd/agentnet/assistantsetup.go`), so Antigravity never appeared there.
+The agent runtime, the named-agent catalog and the secondary "New agent"
+sheet already detected `agy`. The fix adds Antigravity to that server list as
+an agent-only row: it is detected from the same PATH and has
+`supported=false`. Native-session setup for it is refused, so the review
+installs no hook and changes no Antigravity file. The existing row
+(`AssistantSetup.model.ts#selectable`/`canHaveAgent`) and the existing
+`Set up <tool>` control still create its named agent. No web bundle or skin
+changed, and the same screen serves Comic and the built-in Office overlay.
+
+Disposable rendered check: a local Hub with loopback TLS, an isolated
+AgentNet home with Codex/Claude/Pi/OMP agents enabled, the real `agy` 1.5.16
+on PATH, and the Office skin in Chromium.
+Base listed four tools; the candidate listed `Set up Antigravity`. Selecting
+only Antigravity created agent `Agy test` (agy, Ready). The route guard
+recorded no native setup POST. From the laptop, a request showed `Working…`
+within 2 s and the real agy reply in its topic at 38 s. From the linked phone
+device, a reply follow-up in that topic was answered by the same native agy
+conversation, which recalled the earlier answer. The phone's own
+"Chat with" start was held as "Not sent … joins when its computer connects":
+it asks before the laptop has admitted the new topic invite. A no-model
+Claude fixture showed the same hold. Retry about 8 s later sent the ask, and
+real agy answered in the phone's topic at 48 s. The first-attempt hold remains
+open. The opt-in native catalog browser test also failed on base while
+waiting for the removed “Set up harnesses” button. Focused regression:
+`TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
+
+Holonet and the legacy interface initially disabled agent-only rows on the
+same native-hook check. Both now use Classic's managed-agent selection and
+native-only review and apply flow from gallery revision `73fc2da`. The
+rendered regression exercised Antigravity alone at 1280 px and alongside
+Claude at 390 px in both interfaces. Antigravity was selectable, its agent
+was created in the chosen folder, and the mixed flow sent only Claude to
+native review and apply. A tool with neither route remained disabled.

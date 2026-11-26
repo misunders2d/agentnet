@@ -58,6 +58,8 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		Owner          *client.ReplySessionCall         `json:"owner"`
 		ReceiverAck    *client.ReplyReceiverAck         `json:"receiver_ack"`
 		ReplySession   string                           `json:"reply_session"`
+		Prompt         string                           `json:"prompt"`                 // UserPromptSubmit (claude)
+		LastAssistant  string                           `json:"last_assistant_message"` // Stop (claude)
 	}
 	if err := json.NewDecoder(io.LimitReader(stdin, 64<<20)).Decode(&in); err != nil {
 		return nil
@@ -133,6 +135,11 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 			}
 			if e == nil {
 				in.ReplySession = handle
+				if args[0] == "claude" {
+					// Before Attention: its Stop block continues the turn, and
+					// only this first Stop's message answers the chat's turn.
+					a.ClaudeChatHook(handle, in.HookEventName, in.SessionID, in.TranscriptPath, in.Prompt, in.LastAssistant)
+				}
 			}
 		}
 		if in.HookEventName == "SessionEnd" {

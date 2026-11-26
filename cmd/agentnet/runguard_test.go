@@ -326,3 +326,15 @@ func TestBackgroundRunSendsExactDMAttachment(t *testing.T) {
 		t.Fatalf("attachment sent %d times", n)
 	}
 }
+
+// A background run cannot ask an agent as the person (dm/group ask-agent):
+// a person-only agent, such as a Desktop chat, would take it as theirs.
+func TestRunCannotAskAgentAsThePerson(t *testing.T) {
+	runEnv(t, "1", "", "", "")
+	for _, group := range []bool{false, true} {
+		err := runAgentAsk(context.Background(), nil, []string{"PID", "TEXT"}, &bytes.Buffer{}, group)
+		if err == nil || !strings.Contains(err.Error(), "agentnet ask") {
+			t.Fatalf("group=%v: %v", group, err)
+		}
+	}
+}

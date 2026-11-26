@@ -1,6 +1,7 @@
-# Only this custom command may reach native image data. It checks the
-# invoking main webview's exact current loopback origin before reading.
+# Only these custom commands may reach native clipboard data, each only in
+# response to a paste. They check the invoking main webview's exact current
+# loopback origin before reading.
 [[permission]]
 identifier = "allow-agentnet-clipboard-image"
-description = "Read one clipboard image from the current AgentNet app page."
-commands.allow = ["agentnet_clipboard_image"]
+description = "Read one clipboard image, or the clipboard text a paste did not carry, from the current AgentNet app page."
+commands.allow = ["agentnet_clipboard_image", "agentnet_clipboard_text"]

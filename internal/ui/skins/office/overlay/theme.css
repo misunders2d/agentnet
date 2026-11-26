@@ -46,12 +46,14 @@
   --office-edge-work: #3449B5;
   --office-edge-quiet: #C4C7CC;
   --office-selection: #BBD6FB;
+  --office-tool-inactive: #858589;
   /* Layout (skin/README.md, optional layout tokens): a list column a shade
      darker than the conversation; on a laptop the messages use the width
-     instead of leaving empty gutters, with bubbles capped near 80 characters. */
+     instead of leaving empty gutters. Leave room beside long bubbles for
+     the avatar and the desktop actions. */
   --an-sidebar: #F4F5F7;
   --an-timeline-max: 1040px;
-  --an-bubble-max: min(70%, 34rem);
+  --an-bubble-max: min(38rem, max(70%, calc(100% - 12rem)));
   color-scheme: light;
 }
 .an-root[data-theme=dark] {
@@ -63,6 +65,7 @@
   --an-on-fill: #1D1C1D; --an-scrim: #000000; --an-rail: #121417; --an-rail-ink: #E4E5E7;
   --office-selected: #2B3340; --office-edge-act: #F2C46B; --office-edge-work: #A7B4F5; --office-edge-quiet: #4A4D52; --office-selection: #3B5B8C;
   --an-sidebar: #15181B;
+  --office-tool-inactive: #81858C;
   color-scheme: dark;
 }
 
@@ -138,12 +141,35 @@
   [data-part=composer-field] { border-radius: 8px; background: var(--an-surface); border-color: var(--an-outline); }
   [data-part=composer] { border-top-color: var(--an-hairline); }
 
+  /* Quiet controls, with readable contrast on Aa and the toolbar glyphs.
+     Unavailable tools stay readable and use a separate, quieter ink. */
+  :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send]) {
+    color: var(--an-muted);
+  }
+  :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send])[aria-disabled=true] {
+    color: var(--office-tool-inactive);
+    opacity: 1;
+  }
+
+  /* Keep the draft roomy on desktop and retain the larger touch targets. */
+  @media (min-width: 64rem) and (pointer: fine) {
+    [data-part=composer] { border-top-width: 0; }
+    [data-part=composer-format] { padding-block: 2px; }
+    [data-part=composer-tools] { padding-bottom: 4px; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button { height: 2rem; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send]) { width: 2rem; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button svg { width: 18px; height: 18px; }
+  }
+
 /* ---- Office's own pieces (overlay slots) ------------------------------------ */
   /* The send button: a plain square. */
   .office-send { border-radius: 6px; border: 1px solid transparent; }
   .office-send-on { background: var(--an-act); color: var(--an-act-ink); }
   .office-send-on:hover { filter: brightness(1.06); }
   .office-send-off { background: var(--an-sunken); color: var(--an-muted); border-color: var(--an-hairline); }
+  @media (min-width: 64rem) and (pointer: fine) {
+    .office-send-off { background: transparent; border-color: transparent; }
+  }
 
   /* Request cards: a hairline card with a coloured left edge by state. */
   .office-request { border: 1px solid var(--an-hairline); border-left: 4px solid var(--office-edge-quiet); border-radius: 8px; }

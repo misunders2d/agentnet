@@ -6,6 +6,6 @@ export function cleanPicturePNG(bytes: Uint8Array): Uint8Array;
 export function pictureCrop(width: number, height: number, zoom?: number, x?: number, y?: number): { zoom: number; x: number; y: number; side: number };
 export function pasteTable(event: { clipboardData?: DataTransfer | null; preventDefault(): void }, insertText: (text: string) => void, plain?: boolean): boolean;
 export function tableMarkdown(text: string): string;
-export function pastePictures(event: { clipboardData?: DataTransfer | null; preventDefault(): void }, add: (files: File[]) => void, options?: { clipboardImage?: () => Promise<File | null>; insertText?: (text: string) => void; error?: (text: string) => void; plain?: boolean }): Promise<void> | undefined;
+export function pastePictures(event: { clipboardData?: DataTransfer | null; preventDefault(): void }, add: (files: File[]) => void, options?: { clipboardImage?: () => Promise<File | null>; clipboardText?: () => Promise<string | null>; insertText?: (text: string) => void; error?: (text: string) => void; plain?: boolean; files?: boolean }): Promise<void> | undefined;
 export function avatarPicture(overview: unknown, seed: string, name?: string): string;
 export function openPictureEditor(options: { into: HTMLElement; save: (png: string) => Promise<unknown>; src?: string; current?: string }): Promise<boolean>;

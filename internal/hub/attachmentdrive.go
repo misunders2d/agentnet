@@ -657,7 +657,15 @@ func (h *Hub) runAttachmentDrive(ctx context.Context) {
 	}
 }
 
-const attachmentDriveTransfers = 4
+// attachmentDriveTransfers bounds parallel transfers. Most attachments are
+// small, so request latency, not bandwidth, sets the pace: many at once.
+// When Drive asks to slow down, the queue halves its pace and pauses briefly,
+// then grows back one transfer per success (see copyAttachmentQueue).
+const attachmentDriveTransfers = 32
+
+// attachmentDriveSlowDown is the first pause after Drive's rate limit; it
+// doubles while Drive keeps refusing, up to attachmentDriveSlowDownMax.
+var attachmentDriveSlowDown, attachmentDriveSlowDownMax = time.Second, 30 * time.Second
 
 // The existing durable queue owns retries and stable provider IDs. Keep only
 // the current bounded transfers in memory, alternating old backlog and fresh
@@ -670,10 +678,17 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 	}
 	results := make(chan result, attachmentDriveTransfers)
 	inflight := make(map[string]bool, attachmentDriveTransfers)
+	pace := make(map[string]int, attachmentDriveTransfers) // the pace each transfer was admitted at
 	newest, stopped := false, false
 	var transferErr error
+	// Drive's rate limit lowers the pace instead of pausing the whole move:
+	// limit halves (once per pause) and nothing new starts until the pause
+	// ends; each success then adds one transfer back. A rate limit at a pace
+	// of one is an ordinary temporary failure (retry state, outer backoff).
+	limit, slowDown := attachmentDriveTransfers, attachmentDriveSlowDown
+	var paused <-chan time.Time
 	for {
-		for !stopped && ctx.Err() == nil && len(inflight) < attachmentDriveTransfers {
+		for !stopped && paused == nil && ctx.Err() == nil && len(inflight) < limit {
 			id, err := h.nextAttachmentDrive(ctx, inflight, newest)
 			if errors.Is(err, sql.ErrNoRows) {
 				break
@@ -682,20 +697,20 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 				transferErr, stopped = err, true
 				break
 			}
-			inflight[id], newest = true, !newest
+			inflight[id], pace[id], newest = true, limit, !newest
 			go func() {
 				size, err := h.copyAttachmentDrive(ctx, id)
 				results <- result{id, size, err}
 			}()
 		}
-		if len(inflight) == 0 {
+		if len(inflight) == 0 && (paused == nil || stopped || ctx.Err() != nil) {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return transferErr
 		}
 		wake := h.attachmentDrive.wake
-		if stopped || len(inflight) == attachmentDriveTransfers {
+		if stopped || paused != nil || len(inflight) >= limit {
 			wake = nil
 		}
 		var r result
@@ -703,8 +718,40 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 		case r = <-results: // drain admitted transfers before status changes or shutdown
 		case <-wake:
 			continue // fill a free slot when an arrival wakes a partially full batch
+		case <-paused:
+			paused = nil
+			continue
+		case <-ctx.Done():
+			if len(inflight) > 0 {
+				r = <-results // admitted transfers still drain
+			} else {
+				return ctx.Err()
+			}
 		}
+		admitted := pace[r.id]
 		delete(inflight, r.id)
+		delete(pace, r.id)
+		// A transfer admitted at a faster pace is tried again at the slower
+		// one, even when its reply arrives after the pause that took the pace
+		// to one: only a refusal at a pace of one stops the move.
+		// Once the move is stopping, a rate limit is an ordinary temporary
+		// failure (retry state), so the outer backoff schedules the retry.
+		if errors.Is(r.err, gdrive.ErrRateLimited) && (limit > 1 || admitted > 1) && !stopped && ctx.Err() == nil {
+			// The file is picked again after the pause. A resumed Drive copy
+			// whose check was refused marked itself retry (copyAttachmentDrive);
+			// it rejoins this pass, which would otherwise end "connected" with
+			// no retry scheduled.
+			if _, err := h.store.db.ExecContext(ctx, `UPDATE relay_drive_blobs SET state='pending' WHERE blob_id=? AND state='retry'`, r.id); err != nil {
+				transferErr, stopped = err, true
+				continue
+			}
+			if paused == nil {
+				limit = max(1, limit/2)
+				paused = time.After(slowDown)
+				slowDown = min(slowDown*2, attachmentDriveSlowDownMax)
+			}
+			continue
+		}
 		if errors.Is(r.err, errAttachmentGone) {
 			// An erased file is nobody's transfer failure. Its upload has now
 			// closed the file, which Windows would not let an erase remove
@@ -713,6 +760,10 @@ func (h *Hub) copyAttachmentQueue(ctx context.Context) error {
 			continue
 		}
 		if r.err == nil {
+			if paused == nil {
+				limit = min(limit+1, attachmentDriveTransfers)
+				slowDown = attachmentDriveSlowDown
+			}
 			h.attachmentDrive.mu.Lock()
 			h.attachmentDrive.progress.Files++
 			h.attachmentDrive.progress.Bytes += r.size
@@ -781,6 +832,7 @@ func copyVerifiedCiphertext(dst io.Writer, src io.Reader, size int64, sha string
 	}
 	return nil
 }
+
 // errAttachmentGone: the file is no longer stored (its account was deleted),
 // so there is nothing to transfer.
 var errAttachmentGone = errors.New("attachment no longer stored")

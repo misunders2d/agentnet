@@ -40,9 +40,115 @@ const origin = new URL(target).origin;
     return page.evaluate(() => {
       const tl = document.getElementById('skin').shadowRoot.querySelector('[data-part=timeline]');
       const a = tl.getBoundingClientRect(), b = tl.parentElement.getBoundingClientRect();
-      const bubble = getComputedStyle(tl.querySelector('[data-part=bubble]').parentElement).maxWidth;
-      return { pane: Math.round(b.width), timeline: Math.round(a.width), left: Math.round(a.left - b.left), bubble };
+      const bubbles = [...tl.querySelectorAll('[data-part=bubble]')];
+      const long = bubbles.filter(el => el.textContent.includes('Это длинное сообщение'));
+      return {
+        pane: Math.round(b.width), timeline: Math.round(a.width), left: Math.round(a.left - b.left),
+        short: Math.round(bubbles.find(el => el.textContent.includes('Got it.')).getBoundingClientRect().width),
+        long: long.map(el => Math.round(el.getBoundingClientRect().width)),
+      };
     });
+  };
+  const assertBubbleWidths = (col, min, max, view) => {
+    assert.equal(col.long.length, 2, view + ' rendered both long messages');
+    assert(col.long.every(width => width >= min && width <= max), view + ' long bubbles fit ' + JSON.stringify(col));
+    assert(col.short < 160, view + ' short message stays snug ' + JSON.stringify(col));
+  };
+  const checkContrast = async (page, touch) => {
+    const ratios = await page.locator('[data-part=composer-field]').evaluate((frame, touch) => {
+      const root = frame.getRootNode();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', {willReadFrequently: true});
+      const rgba = color => {
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+        const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+        return [r, g, b, a / 255];
+      };
+      const blend = ([r, g, b, alpha], back) =>
+        [r, g, b].map((v, i) => v * alpha + back[i] * (1 - alpha));
+      const lum = rgb => rgb.map(c => c / 255).map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+        .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+      const ratio = (el, prop = 'color') => {
+        if (!el) throw new Error('contrast target missing');
+        const layers = [];
+        let opacity = 1;
+        for (let node = el; node; node = node.parentElement) {
+          const css = getComputedStyle(node);
+          layers.unshift(rgba(css.backgroundColor));
+          opacity *= +css.opacity;
+        }
+        const back = layers.reduce((base, layer) => blend(layer, base), [255, 255, 255]);
+        const fg = rgba(getComputedStyle(el)[prop]);
+        fg[3] *= opacity;
+        const a = lum(back), b = lum(blend(fg, back));
+        return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      };
+      const drafts = frame.querySelector('[data-composer-measure]').parentElement;
+      const svgRatio = selector => ratio(frame.querySelector(selector), 'stroke');
+      const bubble = '[data-part=bubble]';
+      const text = {
+        draft: ratio(drafts),
+        placeholder: ratio(drafts.querySelector('.text-muted')),
+        formattingLabel: ratio(frame.querySelector('button[aria-label=Formatting] span')),
+        incoming: ratio(root.querySelector('[data-from=person] ' + bubble + ' p')),
+        outgoing: ratio(root.querySelector('[data-from=me] ' + bubble + ' p')),
+        timestamp: ratio(root.querySelector(bubble + ' time')),
+      };
+      if (!touch) {
+        text.chatTitle = ratio(root.querySelector('[aria-current=true] [data-part=chat-title]'));
+        text.chatPreview = ratio(root.querySelector('[aria-current=true] [data-part=chat-preview] .truncate'));
+        text.chatTime = ratio(root.querySelector('[aria-current=true] [data-part=chat-time]'));
+      }
+      return {
+        text,
+        icons: {
+          idleSend: svgRatio('[data-part=send] svg'),
+          inactiveFormatting: svgRatio('[data-part=composer-format] svg'),
+        },
+      };
+    }, touch);
+    for (const [name, ratio] of Object.entries(ratios.text)) assert(ratio >= 4.5, name + ' contrast ' + ratio);
+    for (const [name, ratio] of Object.entries(ratios.icons)) assert(ratio >= 3, name + ' contrast ' + ratio);
+    return Object.fromEntries(Object.entries(ratios).map(([kind, values]) =>
+      [kind, Object.fromEntries(Object.entries(values).map(([name, ratio]) => [name, +ratio.toFixed(2)]))]));
+  };
+  const checkComposer = async (page, touch) => {
+    const frame = page.locator('[data-part=composer-field]');
+    const toggle = frame.getByRole('button', { name: 'Formatting', exact: true });
+    const strip = frame.getByRole('group', { name: 'Formatting options' });
+    const measure = () => frame.evaluate(el => {
+      const get = part => el.querySelector('[data-part=' + part + ']');
+      const bar = get('composer-format'), tools = get('composer-tools'), field = el.querySelector('textarea');
+      const height = node => Math.round(node.getBoundingClientRect().height);
+      const target = (row, selector) => height(row.querySelector(selector));
+      return {
+        formatting: height(bar), tools: height(tools), formatTarget: target(bar, 'button'), toolTarget: target(tools, 'button'),
+        send: height(get('send')), icon: height(bar.querySelector('svg')),
+        draft: [getComputedStyle(field).fontSize, getComputedStyle(field).lineHeight],
+        divider: getComputedStyle(el.closest('[data-part=composer]')).borderTopWidth,
+        sendText: get('send').textContent.trim(),
+      };
+    });
+    const tools = frame.locator('[data-part=composer-tools]');
+    const before = (await tools.boundingBox()).height;
+    if (touch) await toggle.tap();
+    await strip.waitFor();
+    const m = await measure();
+    assert.deepEqual(m.draft, ['16px', '24px'], 'draft text and line height ' + JSON.stringify(m));
+    if (touch) {
+      assert.deepEqual([m.formatTarget, m.toolTarget, m.send, m.tools], [44, 44, 44, before], 'phone Aa keeps targets and row height');
+    } else {
+      assert.deepEqual([m.formatting, m.tools, m.formatTarget, m.toolTarget, m.send, m.icon], [37, 36, 32, 32, 32, 18], 'compact desktop composer ' + JSON.stringify(m));
+      assert.equal(m.divider, '0px', 'composer outline is the only divider');
+      assert.equal(m.sendText, '', 'plain Send uses the icon');
+      await toggle.click();
+      await strip.waitFor({ state: 'hidden' });
+      await toggle.click();
+      await strip.waitFor();
+    }
+    return m;
   };
   try {
     for (const view of [{ tag: 'desk-light', width: 1280, height: 800, scheme: 'light' }, { tag: 'phone-dark', width: 390, height: 844, scheme: 'dark', touch: true }]) {
@@ -59,8 +165,20 @@ const origin = new URL(target).origin;
       // MEL-823: no empty side gutters on a laptop; the phone is unchanged.
       const col = await column(fresh.page);
       assert.equal(col.timeline, col.pane, view.tag + ' Office message column fills its pane ' + JSON.stringify(col));
+      assertBubbleWidths(col, view.touch ? 245 : 600, view.touch ? 318 : 608, view.tag);
+      if (!view.touch) {
+        for (const bubble of await fresh.page.locator('[data-part=bubble]').filter({ hasText: 'Это длинное сообщение' }).all()) {
+          await bubble.hover();
+          const actions = bubble.getByRole('button', { name: 'More actions' });
+          const box = await actions.boundingBox();
+          assert(box && box.x >= view.width - col.pane && box.x + box.width <= view.width, 'message actions fit inside the pane');
+        }
+      }
       lines.push(view.tag + ' Office message column ' + JSON.stringify(col));
       if (shots) await fresh.page.screenshot({ path: path.join(shots, 'office-default-' + view.tag + '-chat.png') });
+      lines.push(view.tag + ' Office composer ' + JSON.stringify(await checkComposer(fresh.page, view.touch)));
+      lines.push(view.tag + ' Office contrast ' + JSON.stringify(await checkContrast(fresh.page, view.touch)));
+      if (shots) await fresh.page.locator('[data-part=composer-field]').screenshot({ path: path.join(shots, 'office-composer-' + view.tag + '.png') });
       assert.deepEqual(fresh.errors, [], view.tag + ' fresh errors');
       await fresh.ctx.close();
     }
@@ -83,9 +201,15 @@ const origin = new URL(target).origin;
       await c.ctx.close();
     }
     { // MEL-823: Office's column stops at 1040px on a big screen; Comic keeps 800px.
-      const big = await open({ width: 1920, height: 1080 });
+      const big = await open({ width: 1920, height: 1080, scheme: "dark" });
       const col = await column(big.page);
       assert.deepEqual([col.timeline, col.left], [1040, Math.round((col.pane - 1040) / 2)], 'Office on 1920 ' + JSON.stringify(col));
+      assertBubbleWidths(col, 600, 608, 'Office 1920');
+      await checkComposer(big.page, false);
+      lines.push('desk-dark Office contrast ' + JSON.stringify(await checkContrast(big.page, false)));
+      if (shots) await big.page.locator('[data-part=composer-field]').screenshot({ path: path.join(shots, 'office-composer-desk-dark.png') });
+
+      if (shots) await big.page.screenshot({ path: path.join(shots, 'office-default-wide-chat.png') });
       await big.ctx.close();
       const comic = await open({ storage: { 'agentnet.skin': 'comic' } });
       const c = await column(comic.page);

@@ -34,6 +34,33 @@ e=event([],"cells");await pastePictures(e,add,{...options,plain:true});assert.eq
 e=event([],"");await pastePictures(e,add,{...options,plain:true});assert.equal(attached.length,before+1,"a picture alone still pastes");
 delete options.clipboardImage;
 e=event([],"standalone browser text");await pastePictures(e,add,options);assert.equal(e.prevented,false);
+// MEL-828 report: WPS Office cells in the desktop app (WebKitGTK) reach the
+// paste event with no text and no file, and the native picture read finds
+// none, so nothing was pasted. The native clipboard text now wins, before any
+// picture read; a picture with no text still attaches; browser text keeps
+// today's order and never reads native text.
+{
+  let nativeReads=0,textReads=0;const got=[],att=[];
+  const opts={insertText:s=>got.push(s),error:()=>{},clipboardImage:async()=>{nativeReads++;return null;},clipboardText:async()=>{textReads++;return "SKU-1\r\nSKU-2\r\n";}};
+  let ev=event([],"");const p=pastePictures(ev,f=>att.push(...f),opts);assert.equal(ev.prevented,true,"prevented synchronously");await p;
+  assert.deepEqual(got,["SKU-1\nSKU-2"]);assert.equal(nativeReads,0,"no picture read when the clipboard has text");assert.equal(att.length,0);
+  ev=event([],"");await pastePictures(ev,f=>att.push(...f),{...opts,plain:true});assert.deepEqual(got,["SKU-1\nSKU-2","SKU-1\nSKU-2"],"plain paste gets the native text too");
+  opts.clipboardText=async()=>{textReads++;return null;};opts.clipboardImage=async()=>{nativeReads++;return file;};
+  ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(att.length,1,"a screenshot still attaches");
+  textReads=0;ev=event([],"image URL");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(textReads,0,"browser text present: native text unread");assert.equal(att.length,2,"a browser image copy still attaches");
+  const errs=[];opts.error=s=>errs.push(s);
+  opts.clipboardText=async()=>{throw Error("This text is too long to paste.");};opts.clipboardImage=async()=>{nativeReads++;return file;};
+  const readsNow=nativeReads,attNow=att.length;
+  ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(got.length,2);assert.equal(att.length,attNow,"too-long text never attaches a picture instead");assert.equal(nativeReads,readsNow);assert.equal(errs.length,1);
+  // A box that takes no files still recovers the text, and leaves files alone.
+  opts.clipboardText=async()=>null;const before=nativeReads;ev=event([],"");await pastePictures(ev,f=>att.push(...f),{...opts,files:false});assert.equal(nativeReads,before,"no picture read where files are refused");assert.equal(att.length,attNow);
+  opts.clipboardText=async()=>"cells";ev=event([],"");await pastePictures(ev,f=>att.push(...f),{...opts,files:false});assert.deepEqual(got.at(-1),"cells");
+  ev=event([file],"");await pastePictures(ev,f=>att.push(...f),{...opts,files:false});assert.equal(ev.prevented,false);assert.equal(att.length,attNow);
+  // A browser (no native reads) still attaches a pasted file.
+  ev=event([file],"");await pastePictures(ev,f=>att.push(...f),{insertText:()=>{}});assert.equal(att.length,attNow+1);
+  // One trailing line break (a spreadsheet row end) is dropped, others kept.
+  opts.clipboardText=async()=>"a\n\n";ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(got.at(-1),"a\n");
+}
 // MEL-714: spreadsheet cells (an HTML table on the clipboard) paste as a
 // Markdown table, as GitHub's composer does; one column stays plain lines;
 // Ctrl+Shift+V keeps the text as it is; a browser image copy is no table.
