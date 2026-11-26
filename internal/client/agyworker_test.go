@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,8 +27,11 @@ func TestAgyProcessHelper(t *testing.T) {
 		t.Skip("native stand-in only")
 	}
 	args := os.Args[slices.Index(os.Args, "--")+1:]
-	in, err := io.ReadAll(os.Stdin)
-	if err != nil {
+	// One user event per line, as agy reads them: a cold run's input ends
+	// after its event, a warm process's stays open for the next turn.
+	stdin := bufio.NewReader(os.Stdin)
+	in, err := stdin.ReadString('\n')
+	if err != nil && (err != io.EOF || in == "") {
 		os.Exit(2)
 	}
 	dir, _ := os.Getwd()
@@ -58,7 +62,21 @@ func TestAgyProcessHelper(t *testing.T) {
 		fmt.Fprintln(os.Stderr, strings.Repeat("progress\n", 600)+"run_command required approval that headless mode cannot prompt for, so it was auto-denied.")
 	}
 	fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
-	os.Exit(0)
+	// Later turns of a warm process: each event gets its own result on the
+	// same conversation; the turn's input is logged beside the runs.
+	for {
+		line, err := stdin.ReadString('\n')
+		if line != "" {
+			if f, e := os.OpenFile(log+".turns", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); e == nil {
+				f.WriteString(line)
+				f.Close()
+			}
+			fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
+		}
+		if err != nil {
+			os.Exit(0)
+		}
+	}
 }
 
 func agyFixture(t *testing.T, mode string) (string, string) {
@@ -156,6 +174,37 @@ func TestAgyWorkerSessionsAndTaskApproval(t *testing.T) {
 	if len(lookup.args) != 0 || !strings.Contains(lookup.text, "under your native permissions") {
 		t.Fatalf("lookup=%+v", lookup)
 	}
+}
+
+// MEL-828: agy is kept warm like Claude/Codex/Pi/OMP. The same person's next
+// message in the same conversation goes into the running agy process of its
+// saved conversation: no new process, the same conversation id.
+func TestAgyWorkerKeptWarm(t *testing.T) {
+	log, dir := agyFixture(t, "answer")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "agy", dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	pool := warmPoolOf(t, w.bob)
+	q1, a1 := ask(t, w, "")
+	ref := sessionOf(t, w.bob, q1)
+	if ref == nil || len(ref.ID) != 36 {
+		t.Fatalf("session=%+v", ref)
+	}
+	eventually(t, "agy kept warm", func() bool { return pool.idleCount() == 1 })
+	q2, _ := ask(t, w, a1)
+	if runs := agyRuns(t, log); len(runs) != 1 || pool.spawns.Load() != 1 {
+		t.Fatalf("the second message started another agy process: %+v (spawns %d)", runs, pool.spawns.Load())
+	}
+	if r2 := sessionOf(t, w.bob, q2); r2 == nil || r2.ID != ref.ID {
+		t.Fatalf("second turn's session %+v, want %s", r2, ref.ID)
+	}
+	turns, _ := os.ReadFile(log + ".turns")
+	if strings.Count(string(turns), "\n") != 1 || !json.Valid([]byte(strings.TrimSpace(string(turns)))) {
+		t.Fatalf("the running agy process did not get the second turn: %q", turns)
+	}
+	eventually(t, "agy kept warm again", func() bool { return pool.idleCount() == 1 })
 }
 
 func TestAgyWorkerRefusesFalseSuccess(t *testing.T) {

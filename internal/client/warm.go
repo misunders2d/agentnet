@@ -1,7 +1,8 @@
 package client
 
 // Warm native workers (MEL-746 Part B). A conversation agent's native
-// process (Pi/OMP RPC, Claude stream-json, Codex app-server) stays alive
+// process (Pi/OMP RPC, Claude stream-json, Codex app-server, agy
+// stream-json) stays alive
 // after a clean answer, so the same person's next turn in the same saved
 // session goes into the running process instead of a cold start.
 //
@@ -65,7 +66,7 @@ var warmGrace = 5 * time.Second
 // warmHarness reports the harnesses whose native transport keeps a session
 // open across turns over one process.
 func warmHarness(name string) bool {
-	return name == "pi" || name == "omp" || name == "claude" || name == "codex"
+	return name == "pi" || name == "omp" || name == "claude" || name == "codex" || name == "agy"
 }
 
 // warmKey: the exact saved native session (planSession scopes it to one
@@ -466,6 +467,8 @@ func nativeSettingsFiles(harness, home, dir string, env []string) []string {
 			codexHome = filepath.Join(home, ".codex")
 		}
 		return []string{filepath.Join(codexHome, "config.toml"), filepath.Join(dir, ".codex", "config.toml")}
+	case "agy":
+		return []string{filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), filepath.Join(home, ".gemini", "settings.json")}
 	case "pi", "omp":
 		agentDir := filepath.Join(home, "."+harness, "agent")
 		if harness == "pi" && get("PI_CODING_AGENT_DIR") != "" {

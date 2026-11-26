@@ -639,10 +639,15 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	var agy *agyStream
 	var agyErr agyDiagnostics
+	var agyTurn *agyWarmTurn
 	if h.sessions == agySessions {
 		agy = &agyStream{onActivity: activity.report}
 		if plan.ref != nil {
 			agy.expected = plan.ref.ID
+		}
+		if wp != nil {
+			agyTurn = newAgyWarmTurn(wp.input(), prompt)
+			agy.onResult = agyTurn.settle
 		}
 		cmd.Stdout = activityWriter{Writer: agy, activity: activity, first: first}
 	} else {
@@ -799,6 +804,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				wp.thread, wp.model = roomBridge.thread, roomBridge.modelReport()
 				key.session = plan.ref.ID
 			}
+			if agy != nil {
+				key.session = plan.ref.ID // agy names a new conversation only once it has answered
+			}
 			if pool.release(wp, key) {
 				a.Logf("%s %s: %s session %s kept warm for its next turn", j.Kind, j.ID, r.Harness, key.session)
 			}
@@ -817,6 +825,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			settled, begin = piBridge.settledCh(), piBridge.begin
 		case claudeBridge != nil:
 			settled, begin = claudeBridge.settledCh(), claudeBridge.begin
+		case agyTurn != nil:
+			settled, begin = agyTurn.settled, agyTurn.begin
 		}
 		// Output reaches only this turn's decoder, from before its input.
 		wp.out.set(cmd.Stdout)
@@ -848,6 +858,17 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			case <-settled:
 			case <-wp.exited:
 			case <-runCtx.Done():
+			}
+			if agyTurn != nil {
+				if isClosed(settled) {
+					// A soft denial agy wrote before its result may still be
+					// on its way through the stderr copy.
+					agyErr.quiet(150*time.Millisecond, time.Second)
+				}
+				// The turn's decoders are read below: nothing more reaches
+				// them once detached (set waits for a write in progress).
+				wp.out.set(nil)
+				wp.errOut.set(nil)
 			}
 			pool.lastTurn.Store(int64(time.Since(launchAt)))
 			switch {
