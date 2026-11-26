@@ -29,7 +29,7 @@ run_partition() {
 		/^Test/ {
 			part=i++%n
 			if (client && n==24) {
-				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=15
+				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=0
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=12
 				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=16
 				if ($0=="TestTopicGuestInvitesOwnAgent") part=20

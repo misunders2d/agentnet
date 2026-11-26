@@ -132,8 +132,23 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	}
 	stopPhone := runAgent(t, phone)
 	waitNamedAgentCaps(t, phone)
-	signCapsAfter(t, phone, without(ownCaps, protocol.CapOwnSyncV3)) // an older program
 	stopPhone()
+	// Publish the older program's fixture record after the daemon has stopped
+	// so its background capability publisher cannot replace the record.
+	signCapsNow(t, phone, without(ownCaps, protocol.CapOwnSyncV3))
+	label, device, _ := protocol.SplitAddress(phone.Address)
+	profilePath := "/v1/agents/" + label + "/" + device + "/profile"
+	var oldProfile protocol.Profile
+	eventually(t, "older reader's signed profile before history starts", func() bool {
+		var profile protocol.Profile
+		if phone.hub.do(tctx(t), "GET", profilePath, nil, &profile) != nil ||
+			!profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapAgentIdentity) ||
+			profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapOwnSyncV3) {
+			return false
+		}
+		oldProfile = profile
+		return true
+	})
 	produced := func() (copies, jobs int) {
 		t.Helper()
 		if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub=?`, phone.Address, envelope.SubDeviceHistory).Scan(&copies); err != nil {
@@ -151,11 +166,6 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 	if copies, jobs := produced(); copies != 0 || jobs != 0 {
 		t.Fatalf("sealed for a device that cannot read it: %d copies, %d jobs", copies, jobs)
 	}
-	label, device, _ := protocol.SplitAddress(phone.Address)
-	var oldProfile protocol.Profile
-	if err := phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &oldProfile); err != nil {
-		t.Fatal(err)
-	}
 	freshSession := func(profile protocol.Profile) bool {
 		for _, session := range profile.Sessions {
 			if !slices.Contains(oldProfile.Sessions, session) && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapAgentIdentity) {
@@ -164,15 +174,11 @@ func TestDeviceHistoryWaitsForItsReader(t *testing.T) {
 		}
 		return false
 	}
-	oldGeneric, oldFresh := oldProfile.Supports(phone.Address, phone.Self().SignKey, protocol.CapAgentIdentity), freshSession(oldProfile)
-	if !oldGeneric || oldFresh {
-		t.Fatalf("old-only signed profile: generic=%t fresh=%t", oldGeneric, oldFresh)
-	}
-	t.Logf("reader readiness control: old-only generic=%t fresh=%t sessions=%d", oldGeneric, oldFresh, len(oldProfile.Sessions))
+	t.Logf("reader readiness control: old-only signed profile sessions=%d", len(oldProfile.Sessions))
 	stopPhone = runAgent(t, phone) // it updates
 	eventually(t, "new exact native session before fixture capability", func() bool {
 		var profile protocol.Profile
-		if phone.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile) != nil {
+		if phone.hub.do(tctx(t), "GET", profilePath, nil, &profile) != nil {
 			return false
 		}
 		if !freshSession(profile) {
