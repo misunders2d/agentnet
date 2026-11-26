@@ -113,8 +113,8 @@ func executionFollowup(q dbq, id string) (*envelope.FollowupRef, error) {
 // Pending corrections reach native input in order. Keep the current request's
 // corrections and any later queued sibling out of its ambient chat context.
 func queuedFollowupRefs(q dbq, parent job, refs []protocol.GrantRef) ([]protocol.GrantRef, error) {
-	rows, err := q.Query(`SELECT lid,verified_by FROM inbox WHERE queued_followup_parent=? AND queued_followup_attempt=?
-		UNION ALL SELECT later.lid,later.verified_by FROM inbox current JOIN inbox later
+	rows, err := q.Query(`SELECT coalesce(lid,id),verified_by FROM inbox WHERE queued_followup_parent=? AND queued_followup_attempt=?
+		UNION ALL SELECT coalesce(later.lid,later.id),later.verified_by FROM inbox current JOIN inbox later
 		ON later.queued_followup_parent=current.queued_followup_parent AND later.queued_followup_attempt=current.queued_followup_attempt
 		AND later.arrival>current.arrival WHERE current.id=?`, parent.ID, parent.nativeAttempt, parent.ID)
 	if err != nil {

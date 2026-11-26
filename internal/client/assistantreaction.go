@@ -123,7 +123,7 @@ func (a *Agent) answerWithReaction(ctx context.Context, j job, harness string, c
 			return &heldBack{why}
 		}
 	}
-	sent, err := a.reactAsAssistant(ctx, j.ID, harness, choice.emoji, choice.remove)
+	sent, err := a.reactAsAssistant(ctx, editReplyTo(j), harness, choice.emoji, choice.remove)
 	if err != nil {
 		a.Logf("%s %s: reaction-only reply not sent as a reaction: %v", j.Kind, j.ID, err)
 		return err
@@ -248,7 +248,7 @@ func (a *Agent) sendAssistantReaction(ctx context.Context, j job, harness string
 	if choice == nil {
 		return
 	}
-	if _, err := a.reactAsAssistant(ctx, j.ID, harness, choice.emoji, choice.remove); err != nil {
+	if _, err := a.reactAsAssistant(ctx, editReplyTo(j), harness, choice.emoji, choice.remove); err != nil {
 		a.Logf("%s %s: chosen reaction not sent: %v", j.Kind, j.ID, err)
 	}
 }

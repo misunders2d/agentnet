@@ -56,7 +56,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 		eligible = `(state IN ('pending','accepted') OR attempts=0 AND ((state='held' AND kind='question') OR (state='awaiting' AND kind='task')) AND ` + ownTaskHolds + `)`
 		args = []any{rootID, rootKey, parent.ID, parentAttempt, parent.ID}
 	}
-	rows, err := tx.Query(`SELECT id,sender,verified_by,kind,body,coalesce(reply_to,''),coalesce(conv,''),coalesce(pid,''),coalesce(target,''),state,local,coalesce(topic,'') FROM inbox WHERE replica=0 AND `+binding+` AND id IN (
+	rows, err := tx.Query(`SELECT id,sender,verified_by,kind,body,coalesce(reply_to,''),coalesce(conv,''),coalesce(pid,''),coalesce(target,''),state,`+executionLocal+`,coalesce(topic,''),`+editJobParent+` FROM inbox WHERE replica=0 AND `+binding+` AND id IN (
 		SELECT id FROM inbox WHERE request_followup IS NOT NULL AND json_extract(request_followup,'$.id')=? AND json_extract(request_followup,'$.fingerprint')=?
 		UNION ALL SELECT id FROM inbox WHERE queued_followup_parent=? AND queued_followup_attempt=? AND steering_parent IS NULL)
 		AND `+eligible+` AND `+ready+` AND (queued_followup_parent IS NULL OR `+queuedFollowupEarlier+`) ORDER BY arrival LIMIT 50`, args...)
@@ -70,7 +70,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err = rows.Scan(&c.j.ID, &c.j.From, &c.j.Key, &c.j.Kind, &c.j.Body, &c.j.ReplyTo, &c.j.Conv, &c.j.PID, &c.target, &c.state, &c.j.Local, &c.topic); err != nil {
+		if err = rows.Scan(&c.j.ID, &c.j.From, &c.j.Key, &c.j.Kind, &c.j.Body, &c.j.ReplyTo, &c.j.Conv, &c.j.PID, &c.target, &c.state, &c.j.Local, &c.topic, &c.j.editOf); err != nil {
 			rows.Close()
 			return nativeFollowupClaim{}, false, err
 		}
@@ -82,6 +82,18 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 		return nativeFollowupClaim{}, false, err
 	}
 	for _, c := range candidates {
+		if c.j.editOf != "" {
+			if c.j.editOf != parent.ID {
+				continue
+			}
+			if text, current, err := editJobText(tx, c.j, true); err != nil {
+				return nativeFollowupClaim{}, false, err
+			} else if !current {
+				continue
+			} else {
+				c.j.Body = text
+			}
+		}
 		if c.target != "" {
 			c.j.Target = &envelope.Target{}
 			if json.Unmarshal([]byte(c.target), c.j.Target) != nil {
@@ -111,7 +123,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 			continue
 		}
 		if parent.Conv == "" {
-			if allowed, e := a.directFollowupConsent(tx, c.j, c.state == stateAccepted); e != nil {
+			if allowed, e := a.directFollowupConsent(tx, c.j, c.state == stateAccepted || c.j.editOf == parent.ID); e != nil {
 				return nativeFollowupClaim{}, false, e
 			} else if !allowed {
 				continue
@@ -125,7 +137,7 @@ func (a *Agent) claimNativeFollowup(parent job) (nativeFollowupClaim, bool, erro
 			if v != verdictRun {
 				return nativeFollowupClaim{}, false, nil
 			}
-			v, _, e = agentVerdict(tx, c.j.agentReq(c.state), a.Address, a.Self().Fingerprint(), false, views)
+			v, _, e = agentVerdict(tx, c.j.agentReq(c.state), a.Address, a.Self().Fingerprint(), c.j.editOf == parent.ID, views)
 			if e != nil {
 				return nativeFollowupClaim{}, false, e
 			}
@@ -184,7 +196,7 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job, accepted ...bool) 
 		if tx.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, parent.ID).Scan(&attempt) != nil || !a.nativeJobCurrentIn(tx, parent, attempt) {
 			return false
 		}
-		if allowed, e := a.directFollowupConsent(tx, correction, len(accepted) > 0 && accepted[0]); e != nil || !allowed {
+		if allowed, e := a.directFollowupConsent(tx, correction, correction.editOf == parent.ID || len(accepted) > 0 && accepted[0]); e != nil || !allowed {
 			return false
 		}
 	} else {
@@ -195,6 +207,9 @@ func (a *Agent) nativeFollowupCurrent(parent, correction job, accepted ...bool) 
 				return false
 			}
 		}
+	}
+	if _, current, err := editJobText(tx, correction, true); err != nil || !current {
+		return false
 	}
 	ref, e := executionFollowup(tx, correction.ID)
 	if e != nil || ref == nil {
@@ -327,6 +342,9 @@ func (a *Agent) watchNativeFollowups(ctx context.Context, parent job, bridge nat
 				return
 			}
 			if !a.nativeFollowupCurrent(parent, correction.job, correction.queuedState == stateAccepted) {
+				if a.queueEditAfterCompletion(correction) {
+					continue
+				}
 				_ = a.endJob(correction.ID, stateNeedHuman, "The exact run or correction changed before native handover; review it before continuing", correction.nativeAttempt)
 				continue
 			}

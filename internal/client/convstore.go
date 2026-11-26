@@ -701,6 +701,12 @@ func addConvOutboxTx(tx *sql.Tx, copies []outCopy, local envelope.Inner, claim f
 			return err
 		}
 	}
+	if local.Sub == envelope.SubRevision {
+		local.Replica = false // the last member's own local-only copy can still amend its own run
+		if err := queueRunningRequestEdit(tx, local, jobKeyOrSelf(tx, local.From)); err != nil {
+			return err
+		}
+	}
 	return settleSteeringResultIn(tx, first)
 }
 
