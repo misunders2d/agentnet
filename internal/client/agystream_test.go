@@ -149,3 +149,29 @@ func TestAgyWarmTurnSendDoesNotBlock(t *testing.T) {
 	}
 	w.Close()
 }
+
+// Review re-check (MEL-828): a denial that a large write placed inside the
+// result line is still seen; a result read before the turn's message was
+// fully sent is not that turn's answer.
+func TestAgyWarmTurnGuards(t *testing.T) {
+	var stream agyStream
+	var diag agyDiagnostics
+	m := &agyMergedOutput{events: &stream, diagnostics: &diag}
+	m.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "ok run_command required approval that headless mode cannot prompt for, so it was auto-denied.") + "\n"))
+	if _, status, attention := stream.result(nil, &diag); status == envelope.StatusDone || attention == "" {
+		t.Fatalf("a denial inside the result line became %s", status)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	turn := newAgyWarmTurn(w, strings.Repeat("x", 1<<20))
+	turn.begin() // nobody reads: the write cannot finish
+	early := agyStream{onResult: turn.settle}
+	early.Write([]byte(agyTestResult(agyTestConversation, "SUCCESS", "previous turn's answer") + "\n"))
+	if !early.damaged || !isClosed(turn.settled) {
+		t.Fatalf("a result before the message was sent was taken: damaged=%v", early.damaged)
+	}
+}

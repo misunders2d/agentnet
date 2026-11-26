@@ -33,7 +33,7 @@ func agyInput(prompt string) string {
 
 type agyStream struct {
 	onActivity               func(nativeActivity)
-	onResult                 func() // the turn's terminal result was read (warm turns)
+	onResult                 func() bool // a warm turn's terminal result was read; false: not this turn's
 	line                     []byte
 	skipping, damaged        bool
 	conversation, expected   string
@@ -109,8 +109,8 @@ func (s *agyStream) flush() {
 		s.complete = true
 		s.setConversation(ev.Result.Conversation)
 		s.status, s.response, s.detail = ev.Result.Status, ev.Result.Response, ev.Result.Error
-		if s.onResult != nil {
-			s.onResult()
+		if s.onResult != nil && !s.onResult() {
+			s.damaged = true // a result before this turn's message was sent is not its answer
 		}
 	}
 }
@@ -122,13 +122,14 @@ type agyWarmTurn struct {
 	in      io.WriteCloser
 	prompt  string
 	settled chan struct{}
+	sent    chan struct{} // the whole event was written
 	failed  chan struct{} // the event could not be written; err says why
 	err     error
 	once    sync.Once
 }
 
 func newAgyWarmTurn(in io.WriteCloser, prompt string) *agyWarmTurn {
-	return &agyWarmTurn{in: in, prompt: prompt, settled: make(chan struct{}), failed: make(chan struct{})}
+	return &agyWarmTurn{in: in, prompt: prompt, settled: make(chan struct{}), sent: make(chan struct{}), failed: make(chan struct{})}
 }
 
 // begin sends the event without blocking the worker: a process that stops
@@ -139,11 +140,19 @@ func (t *agyWarmTurn) begin() {
 		if _, err := io.WriteString(t.in, agyInput(t.prompt)); err != nil {
 			t.err = err
 			close(t.failed)
+			return
 		}
+		close(t.sent)
 	}()
 }
 
-func (t *agyWarmTurn) settle() { t.once.Do(func() { close(t.settled) }) }
+// settle ends the turn on its terminal result. It reports false for a result
+// read before the turn's whole message was written: agy answers an event
+// only after reading it, so that result is not this turn's (the turn fails).
+func (t *agyWarmTurn) settle() bool {
+	t.once.Do(func() { close(t.settled) })
+	return isClosed(t.sent)
+}
 
 func (s *agyStream) setConversation(id string) {
 	compact := strings.ReplaceAll(id, "-", "")
@@ -248,14 +257,28 @@ func (m *agyMergedOutput) Write(p []byte) (int, error) {
 		var ev struct {
 			Event string `json:"event"`
 		}
-		if trimmed := bytes.TrimSpace(m.line); len(trimmed) > 0 && trimmed[0] == '{' && json.Unmarshal(trimmed, &ev) == nil && ev.Event != "" {
+		trimmed := bytes.TrimSpace(m.line)
+		switch {
+		case len(trimmed) > 0 && trimmed[0] == '{':
+			// An event, or one broken by interleaved text (refused by the
+			// decoder, never a success). Diagnostic text that a write larger
+			// than the pipe's atomic size placed inside it is still seen: a
+			// false match only asks the person, never answers.
+			if json.Unmarshal(trimmed, &ev) != nil || ev.Event == "" || agyDiagnosticText(trimmed) {
+				_, _ = m.diagnostics.Write(m.line)
+			}
 			_, _ = m.events.Write(m.line)
-		} else if len(trimmed) > 0 && trimmed[0] == '{' {
-			_, _ = m.events.Write(m.line) // a damaged event: refused, never a diagnostic
-		} else {
+		default:
 			_, _ = m.diagnostics.Write(m.line)
 		}
 		m.line = m.line[:0]
 	}
 	return n, nil
+}
+
+// agyDiagnosticText reports whether line carries agy's soft-denial notice,
+// the diagnostic that would otherwise let a denied turn pass as a success.
+func agyDiagnosticText(line []byte) bool {
+	l := bytes.ToLower(line)
+	return bytes.Contains(l, []byte("headless mode cannot prompt for")) && bytes.Contains(l, []byte("auto-denied"))
 }
