@@ -4322,8 +4322,15 @@ only Antigravity created agent `Agy test` (agy, Ready). The route guard
 recorded no native setup POST. From the laptop, a request showed `Working…`
 within 2 s and the real agy reply in its topic at 38 s. From the linked phone
 device, a reply follow-up in that topic was answered by the same native agy
-conversation, which recalled the earlier answer. The phone's own
-"Chat with" start was held as "Not sent … joins when its computer connects":
-it asks before the laptop has admitted the new topic invite. That held send
-is not agy-specific and remains open. Focused regression:
-`TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
+conversation, which recalled the earlier answer. Starting with "Chat with"
+on the phone first showed "Not sent … joins when its computer connects".
+`AgentChat.tsx` asks before the laptop has admitted the new topic invite.
+A no-model claude stand-in was held the same way, so the hold is not
+agy-specific. Retry about 8 s later sent the ask. Real agy then answered the
+phone in its topic at 48 s. The first-attempt hold remains open as a
+separate fix. The legacy static setup page and the gallery skins with their
+own setup screens (Classic, Zoom, Holonet) show the new row disabled as
+"Unsupported"; offering agent-only rows there is a skin companion change.
+The opt-in `TestAssistantSetupRenderedNativeCatalogBridge` already failed on
+base: it waits for a "Set up harnesses" button removed in v0.8.1. Focused
+regression: `TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
