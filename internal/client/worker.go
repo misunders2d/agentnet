@@ -860,35 +860,54 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				defer a.store.setRunGroup(j.ID, 0, "")
 			}
 			releaseWarmVouch = a.vouchRun(j, wp.cmd.Process.Pid) // this turn's run origin
-			if runCtx.Err() == nil {
+			// agy output before this turn's message (a stray event, read
+			// while the turn was being set up) means the process cannot be
+			// trusted with it: the message is never sent.
+			var agyRefused error
+			if agyTurn != nil && runCtx.Err() == nil && (isClosed(settled) || wp.out.stray.Load()) {
+				agyRefused = fmt.Errorf("the running %s process wrote output before this turn's message; the message was not sent", r.Harness)
+			} else if runCtx.Err() == nil {
 				begin()
 			}
-			select {
-			case <-settled:
-			case <-wp.exited:
-			case <-runCtx.Done():
-			case <-writeFailed:
+			if agyRefused == nil {
+				select {
+				case <-settled:
+				case <-wp.exited:
+				case <-runCtx.Done():
+				case <-writeFailed:
+				}
 			}
 			if agyTurn != nil {
-				if isClosed(settled) {
-					// agy answers a message only after reading all of it:
-					// the write reports done at once for a real answer. A
-					// write that fails or never ends fails the turn.
+				// The turn's decoders are read below and here: nothing more
+				// reaches them once detached (set waits for a write in
+				// progress).
+				wp.out.set(nil)
+				wp.errOut.set(nil)
+				if agyRefused == nil && agy.complete && !agy.damaged && runCtx.Err() == nil {
+					// agy answers a message only after reading all of it, so
+					// the write reports done at once for a real answer.
+					grace := time.NewTimer(5 * time.Second)
 					select {
 					case <-agyTurn.sent:
 					case <-agyTurn.failed:
 					case <-wp.exited:
 					case <-runCtx.Done():
+					case <-grace.C:
 					}
-					if !isClosed(agyTurn.sent) && runCtx.Err() == nil {
-						settled = nil // not this turn's answer: reported below
+					grace.Stop()
+				}
+				_ = agyTurn.in.Close() // a write not yet begun never reaches a later turn
+				if agyRefused == nil && runCtx.Err() == nil && !isClosed(agyTurn.sent) {
+					// No answer is taken for a message that did not fully
+					// reach the process; a failed write says why.
+					agyRefused = fmt.Errorf("the message did not fully reach the running %s process", r.Harness)
+					if isClosed(agyTurn.failed) {
+						agyRefused = fmt.Errorf("the message could not be sent to the running %s process: %v", r.Harness, agyTurn.err)
 					}
 				}
-				// The turn's decoders are read below: nothing more reaches
-				// them once detached (set waits for a write in progress).
-				wp.out.set(nil)
-				wp.errOut.set(nil)
-				_ = agyTurn.in.Close() // a write not yet begun never reaches a later turn
+				if agyRefused != nil {
+					agy.complete, agy.denied, agy.status = false, false, "" // nothing of it is this turn's
+				}
 			}
 			pool.lastTurn.Store(int64(time.Since(launchAt)))
 			switch {
@@ -906,11 +925,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				_ = a.setWarmBinding(wp.handle, "", 0)
 				go wp.stop("its turn was stopped", nativeInterrupt(r.Harness, thread, turn))
 				runErr = runCtx.Err()
-			case (settled == nil || !isClosed(settled)) && writeFailed != nil && isClosed(writeFailed):
+			case agyRefused != nil:
 				// The message never fully reached the process: the turn
 				// fails and the process is discarded; nothing is resent.
-				runErr = fmt.Errorf("the message could not be sent to the running %s process: %v", r.Harness, agyTurn.err)
-			case settled == nil || !isClosed(settled):
+				runErr = agyRefused
+			case !isClosed(settled):
 				// Lost while working: reported below, never run again.
 				runErr = wp.waitErr
 				if runErr == nil {

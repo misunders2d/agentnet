@@ -66,6 +66,10 @@ func TestAgyProcessHelper(t *testing.T) {
 	} else {
 		fmt.Println(agyTestResult(id, "SUCCESS", "agy fixture answer"))
 	}
+	if mode == "stray" {
+		time.Sleep(100 * time.Millisecond) // the process is idle by now
+		fmt.Println(agyTestResult(id, "SUCCESS", "an event between turns"))
+	}
 	// Later turns of a warm process: each event gets its own result on the
 	// same conversation; the turn's input is logged beside the runs.
 	for {
@@ -211,6 +215,34 @@ func TestAgyWorkerKeptWarm(t *testing.T) {
 	eventually(t, "agy kept warm again", func() bool { return pool.idleCount() == 1 })
 }
 
+// A warm agy process that writes an event between turns never gets the next
+// message: the next turn starts its own process on the same conversation,
+// and the stray event is nobody's answer (MEL-828 review).
+func TestAgyWorkerStrayEventNotReused(t *testing.T) {
+	log, dir := agyFixture(t, "stray")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "agy", dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	pool := warmPoolOf(t, w.bob)
+	q1, a1 := ask(t, w, "")
+	ref := sessionOf(t, w.bob, q1)
+	eventually(t, "agy kept warm", func() bool { return pool.idleCount() == 1 })
+	eventually(t, "stray event read", pool.idleStray)
+	q2, _ := ask(t, w, a1)
+	if m, ok := findReply(w.alice, q2); !ok || strings.Contains(m.Body, "between turns") {
+		t.Fatalf("a stray event became the answer: %q", m.Body)
+	}
+	if turns, _ := os.ReadFile(log + ".turns"); len(turns) != 0 {
+		t.Fatalf("the process that wrote between turns got the next message: %q", turns)
+	}
+	runs := agyRuns(t, log)
+	if len(runs) != 2 || pool.spawns.Load() != 2 || !slices.Contains(runs[1].Args, ref.ID) {
+		t.Fatalf("runs %+v (spawns %d), want a second process on %s", runs, pool.spawns.Load(), ref.ID)
+	}
+}
+
 func TestAgyWorkerRefusesFalseSuccess(t *testing.T) {
 	for _, tc := range []struct{ mode, state string }{{"deny", stateNeedHuman}, {"auth", stateNeedHuman}, {"partial", stateJobFailed}} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -324,4 +356,16 @@ func TestAgyNamedGroupResponder(t *testing.T) {
 	if len(runs) != 1 || slices.Contains(runs[0].Args, "--conversation") || !strings.Contains(runs[0].Input, "under your native permissions") {
 		t.Fatalf("named group used ambient session/policy: %+v", runs)
 	}
+}
+
+// idleStray reports whether an idle worker has written output between turns.
+func (p *warmPool) idleStray() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, w := range p.idle {
+		if w.out.stray.Load() {
+			return true
+		}
+	}
+	return false
 }

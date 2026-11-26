@@ -113,14 +113,15 @@ func (s *agyStream) flush() {
 		s.complete = true
 		s.setConversation(ev.Result.Conversation)
 		s.status, s.response, s.detail = ev.Result.Status, ev.Result.Response, ev.Result.Error
-		// agy 1.5.18 lists what it auto-denied, e.g.
-		// "denied_actions":[{"action":"command","display_name":"Bash"}],
-		// beside a SUCCESS status.
-		if d := bytes.TrimSpace(ev.Result.Denied); len(d) > 0 && !bytes.Equal(d, []byte("null")) && !bytes.Equal(d, []byte("[]")) && !bytes.Equal(d, []byte("{}")) {
-			s.denied = true
-		}
 		if s.onResult != nil && !s.onResult() {
 			s.damaged = true // a result before this turn's message was sent is not its answer
+		}
+		// agy lists what it auto-denied beside a SUCCESS status (seen live on
+		// 1.5.16 and 1.5.18), e.g.
+		// "denied_actions":[{"action":"command","display_name":"Bash"}].
+		// Only a result that is this turn's counts.
+		if d := bytes.TrimSpace(ev.Result.Denied); !s.damaged && len(d) > 0 && !bytes.Equal(d, []byte("null")) && !bytes.Equal(d, []byte("[]")) && !bytes.Equal(d, []byte("{}")) {
+			s.denied = true
 		}
 	}
 }
@@ -193,9 +194,9 @@ func (s *agyStream) setConversation(id string) {
 // Keep scanning after the bounded diagnostic buffer fills: a late soft denial
 // must not become success merely because native progress used its first 4 KiB.
 //
-// A warm agy process writes its stdout and stderr into one pipe
-// (agyMergedOutput), so a diagnostic it wrote before its result is always
-// read before it; the lock covers the reads after the turn.
+// A warm agy process keeps its stdout and stderr apart, so a stderr notice may
+// be read after the result; the result's own denied_actions carries the
+// denial regardless. The lock covers reads that race a late notice.
 type agyDiagnostics struct {
 	mu                       sync.Mutex
 	tail                     string
