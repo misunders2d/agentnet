@@ -212,7 +212,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           <span className="absolute left-4 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-full bg-surface stroke" aria-hidden="true"
             style={{ opacity: Math.min(1, touch.dx / 64) }}><IconArrowBackUp size={18} /></span>
         )}
-        <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "ml-10 items-start ") + (editing ? "w-full" : who.mine ? "max-w-[85%] lg:max-w-[70%]" : "max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[70%]")}
+        <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "ml-10 items-start ") + (editing ? "w-full" : who.mine ? "max-w-[85%] lg:max-w-[var(--an-bubble-max,70%)]" : "max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[var(--an-bubble-max,70%)]")}
           style={{ ...(touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : {}),
             ...(!editing && !wide && hoverPointer ? { maxWidth: "calc(100% - " + (who.mine ? "3rem" : "5.5rem") + ")" } : {}) }}>
           {first && !who.mine && <NameLine m={m} who={who} />}
@@ -287,7 +287,7 @@ export function AgentNeedsHumanTurn({m, ctx, detail}: {m:AnyMsg; ctx:Ctx; detail
   const pending = useStore(store, () => store.attentionReply(target_, version));
   const [answer, setAnswer] = useState(false);
   return <div data-agent-needs-you data-from="agent" className="mt-2 flex justify-start px-3 sm:px-4">
-    <div className="relative ml-10 flex min-w-0 max-w-[calc(100%-3rem)] flex-col items-start sm:max-w-[80%] lg:max-w-[70%]">
+    <div className="relative ml-10 flex min-w-0 max-w-[calc(100%-3rem)] flex-col items-start sm:max-w-[80%] lg:max-w-[var(--an-bubble-max,70%)]">
       <div className="mb-1 pl-1 text-[13px] font-bold leading-tight text-agent-ink">{name}</div>
       <div role="group" aria-label={name + " says"} className="relative min-w-0 max-w-full rounded-xl bg-agent px-3.5 py-2 text-ink stroke">
         <span className="absolute -left-10 bottom-0"><AgentAvatar seed={target?.agent_id || host || "agent"} size={32} /></span>

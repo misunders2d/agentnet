@@ -276,11 +276,17 @@ func TestP6FixRemovedAudienceDoesNotKillOtherAnswer(t *testing.T) {
 
 func TestP6FixLateJoinMembershipAndShareVisibility(t *testing.T) {
 	stub := installAgentStub(t)
-	w, carol, packet, stops := groupTurnsFixture(t)
+	var carolFaults *faults
+	w, carol, packet, stops := groupTurnsFixture(t, func(a *Agent) {
+		if a.Address == "carol/carol" {
+			carolFaults = injectFaults(a)
+		}
+	})
 	conv := packet.State.Conv
 	// Seal while Dave is absent and no agent has accepted future context.
 	stops[carol]()
-	injectFaults(carol).add("POST", "/v1/messages", 2, false)
+	carol.stopBackgroundPosts()
+	carolFaults.add("POST", "/v1/messages", 2, false)
 	private, err := carol.SendConv(tctx(t), conv, ConvOutgoing{Body: "UNSELECTED_BEFORE_DAVE"})
 	if err != nil {
 		t.Fatal(err)

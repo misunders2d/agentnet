@@ -174,7 +174,8 @@ const local = (version, fail = false) => {
       await page.getByRole('button', { name: 'Done' }).click();
       await page.reload();
       await comicUp(); // the removed skin is gone: Comic opens
-      assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin')), 'comic');
+      // MEL-821: a fallback is not recorded as a choice; the saved one stays.
+      assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin')), 'local:pad');
 
       // One step back to Comic; reload keeps it.
       await page.goto(origin + '/?skin=notebook');

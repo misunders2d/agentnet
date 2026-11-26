@@ -66,8 +66,11 @@ async function desktop(browser) {
   await p.getByRole('button', { name: 'Bring in', exact: true }).click();
   const sheet = p.getByRole('dialog', { name: 'Bring someone in' });
   await sheet.getByRole('radio', { name: /Bob’s agent/ }).check({ force: true });
-  const since = sheet.locator('input[type="datetime-local"]');
-  await since.fill(localValue(new Date(Date.now() - 3600e3)));
+  // MEL-820: the cutoff is separate Date and Time fields under the option.
+  await sheet.getByText('Share messages since', { exact: true }).click();
+  const [sinceDay, sinceTime] = localValue(new Date(Date.now() - 3600e3)).split('T');
+  await sheet.getByLabel('Date', { exact: true }).fill(sinceDay);
+  await sheet.getByLabel('Time', { exact: true }).fill(sinceTime);
   await sheet.getByText(/^3 messages$/).waitFor(T);
   const tasks = sheet.getByRole('group', { name: 'Who can give it tasks without asking' });
   const you = tasks.getByRole('checkbox', { name: /You/ }), bob = tasks.getByRole('checkbox', { name: /Bob/ });

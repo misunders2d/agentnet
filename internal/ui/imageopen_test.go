@@ -139,7 +139,8 @@ func TestLiveOpenImage(t *testing.T) {
 		}
 		var opened string
 		for until := time.Now().Add(5 * time.Second); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
-			if b, err := os.ReadFile(record); err == nil {
+			// The shell creates the file before writing the path.
+			if b, err := os.ReadFile(record); err == nil && bytes.HasSuffix(b, []byte{'\n'}) {
 				opened = strings.TrimSpace(string(b))
 				break
 			}

@@ -98,12 +98,12 @@ export function ChatList() {
   }, []);
 
   const closeSearch = () => { setQuery(""); setSearching(false); };
-  const title = <h1 className={"font-display text-[34px] font-extrabold leading-none tracking-[-.03em] lg:text-[28px] " + stripe} data-part="list-title">{words.chats}</h1>;
+  const title = <h1 className={"font-display text-[34px] font-extrabold leading-none tracking-[-.03em] lg:text-[24px] " + stripe} data-part="list-title">{words.chats}</h1>;
 
   return (
     <section aria-label="Chats" data-part="list" className="pb-8 lg:pb-4">
       {wide ? (
-        <div className="flex items-center justify-between gap-3 px-4 pt-5">{title}<NewChatButton /></div>
+        <div className="flex items-center justify-between gap-3 px-3 pt-3.5">{title}<NewChatButton /></div>
       ) : (
         <>
           <div className="flex items-center gap-2 px-4 pt-3">
@@ -121,7 +121,7 @@ export function ChatList() {
       )}
 
       {showSearch && (
-        <div className="flex items-center gap-1 px-4 pt-3">
+        <div className="flex items-center gap-1 px-4 pt-3 lg:px-3 lg:pt-2.5">
           <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-xl bg-surface pl-3 stroke has-[input:focus-visible]:outline-3 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-agent-ink">
             <IconSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />
             <span className="sr-only">Search chats</span>
@@ -139,7 +139,7 @@ export function ChatList() {
               placeholder="Search people, agents, groups" autoComplete="off"
               className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted focus-visible:outline-none lg:text-[15px] [&::-webkit-search-cancel-button]:hidden" />
             {query ? <IconButton label="Clear search" onClick={() => { setQuery(""); search.current?.focus(); }} className="shrink-0"><IconX size={18} /></IconButton>
-              : wide && <kbd className="mr-2.5 shrink-0 rounded-md border border-hairline px-1.5 py-0.5 font-sans text-[12px] font-bold text-text-2">{isMac ? "⌘ K" : "Ctrl K"}</kbd>}
+              : wide && <kbd className="mr-2.5 shrink-0 rounded-md @max-[22rem]:hidden border border-hairline px-1.5 py-0.5 font-sans text-[12px] font-bold text-text-2">{isMac ? "⌘ K" : "Ctrl K"}</kbd>}
           </label>
           {!wide && <button type="button" onClick={closeSearch} className="min-h-11 shrink-0 rounded-full px-3 font-semibold text-text-2 hover:bg-sunken">Cancel</button>}
         </div>
@@ -153,7 +153,7 @@ export function ChatList() {
           {!q&&savedAgentHistory&&<p className="px-4 pt-3 text-[13px] text-muted">Saved agent history is available in Search chats.</p>}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (
-            <div role="group" aria-label="Show" className="flex gap-2 overflow-x-auto px-4 pt-4 [scrollbar-width:none] lg:px-3">
+            <div role="group" aria-label="Show" className="flex gap-2 overflow-x-auto px-4 pt-4 [scrollbar-width:none] lg:px-3 lg:pt-2.5">
               {shownFilters.map((f) => (
                 <button key={f.id} type="button" aria-pressed={active === f.id} onClick={() => setFilter(f.id)} className="group min-w-11 shrink-0 py-1 lg:py-1.5">
                   <span className={"flex h-9 min-w-11 items-center justify-center gap-1.5 rounded-full px-3.5 text-[14px] font-extrabold stroke transition-colors duration-200 ease-out-soft lg:h-8 lg:px-3 lg:text-[13px] "
@@ -165,7 +165,7 @@ export function ChatList() {
             </div>
           )}
           {shown.length > 0 && (
-            <ul ref={results} className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-2" : "")} aria-label={q ? "Matching chats" : "Chats"}
+            <ul ref={results} className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-1.5" : "")} aria-label={q ? "Matching chats" : "Chats"}
               onKeyDown={e => {
                 if (!q || e.defaultPrevented || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
                 const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[data-part="chat-row"]')];

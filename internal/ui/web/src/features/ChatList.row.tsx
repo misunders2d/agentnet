@@ -36,9 +36,11 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
   const waitingText = waiting === 1 ? "1 message waiting to send" : waiting + " messages waiting to send";
   const mood: Mood = item.working ? "working" : item.needsYou ? "waiting" : "neutral";
   const peerDevices = summary ? (summary.peer.devices || []).map((d) => d.address).concat(summary.peer.address) : [];
-  const avatar = item.kind === "agent" ? <AgentAvatar seed={item.avatarSeed} size={48} mood={mood} device={deviceKind(item.avatarSeed)} />
-    : item.kind === "group" ? <GroupAvatar names={groupFaces(summary, me, item)} seed={item.avatarSeed} size={48} />
-    : <PersonAvatar name={item.title} seed={item.avatarSeed} size={48} online={presence(overview, peerDevices)} />;
+  // Desktop rows are compact (MEL-822): a 40px face, the same readable text.
+  const face = wide ? 40 : 48;
+  const avatar = item.kind === "agent" ? <AgentAvatar seed={item.avatarSeed} size={face} mood={mood} device={deviceKind(item.avatarSeed)} />
+    : item.kind === "group" ? <GroupAvatar names={groupFaces(summary, me, item)} seed={item.avatarSeed} size={face} />
+    : <PersonAvatar name={item.title} seed={item.avatarSeed} size={face} online={presence(overview, peerDevices)} />;
   const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" || item.open.kind === "thread" ? item.subtitle || "" : ""; // a device thread says whose device it is
 
   // Phones show one screen at a time: only the desktop column marks the open chat; a
@@ -47,7 +49,7 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
     <button type="button" onClick={onOpen} aria-current={selected && wide ? "true" : undefined} data-part="chat-row" data-kind={item.kind} data-unread={unread ? "" : undefined}
       className={"relative flex w-full items-center gap-3 text-left transition-colors duration-200 "
         + (!wide ? "px-4 py-3 hover:bg-sunken active:bg-sunken " + (selected ? "z-[1] bg-surface [box-shadow:inset_0_0_0_1.5px_var(--an-outline)]" : "")
-          : "rounded-2xl border px-2.5 py-2.5 " + (selected ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken"))}>
+          : "rounded-2xl border px-2 py-1.5 " + (selected ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken"))}>
       {avatar}
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2" data-part="chat-title-line">

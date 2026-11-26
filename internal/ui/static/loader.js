@@ -4,14 +4,14 @@
 // (/assets/skins/index.json, plus the packages stored in this browser),
 // its document rules (fonts) adopted by the page, its stylesheet and root
 // inside a shadow tree of #skin, and its entry's mount/unmount. Built-in
-// skins (Comic, the default) are packages too; only trust differs: a
+// skins (Comic and Office) are packages too; only trust differs: a
 // built-in one is trusted by this host's fixed list, any other one after
 // the person accepts its exact digest. A shadow tree is styling isolation,
 // not a sandbox: every skin runs with the page's full trust.
 //
-// Every skin but Comic gets the host's switcher above it (skinbar.mjs):
-// one step back to Comic, the skin menu and the workspace control. Comic
-// draws its own (Settings → Appearance → Skin, and its workspace menu).
+// Gallery and installed skins get the host's switcher (skinbar.mjs),
+// with a step back to Comic. The built-in skins draw their own skin and
+// workspace controls.
 //
 // Workspaces: when the program serves /assets/workspaces.mjs, the host keeps
 // one shell with one immutable transport per membership (a home of this
@@ -113,7 +113,7 @@
   catalog.catch(() => { /* seen where it is used */ });
   // Which skin opens and whether it needs consent: built-in skins are
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
-  const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
+  const { BUILT_IN, HOME, FRESH, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
   const { parseLink, linkTo, matchingWorkspace, checkTarget } = await import('/assets/conversation-links.mjs');
   // Leaving the page starts no API request and ends those it still waits
   // on. From beforeunload until the next document commits (pagehide), WebKit
@@ -206,6 +206,24 @@
   // The release serving this page, as its overviews say (host.api below), and
   // the gallery's release comparison once its module has loaded.
   let runningVersion = "", newerRelease = null, updateGallerySkins = () => {};
+  // galleryUpdated: what the open skin does once this page's gallery update
+  // stored new versions (set after the skin mounts; MEL-819).
+  let galleryUpdated = () => {}, galleryStored = null;
+  // Writes this page has under way through any workspace's host: API
+  // requests with a body, staged uploads, video preparation and Drive
+  // uploads. A skin update waits for none of them to be running.
+  let writing = 0;
+  const writeSettled = new Set();
+  const tracked = (fn) => (...args) => {
+    writing++;
+    let done = false;
+    const settle = () => { if (done) return; done = true; writing--; for (const f of [...writeSettled]) { try { f(); } catch (_) { /* its own */ } } };
+    try {
+      const r = fn(...args);
+      if (r && typeof r.then === "function") { r.then(settle, settle); return r; }
+      settle(); return r;
+    } catch (e) { settle(); throw e; }
+  };
   const { browserBackNavigation } = await import("/assets/browser-back.mjs");
   const onBack = window.__agentnetPlatform === "android" ? window.__agentnetOnBack : !nativeAppJSON ? browserBackNavigation() : undefined;
   const common = {
@@ -270,7 +288,11 @@
     updateGallerySkins = () => {
       if (started || !runningVersion) return;
       started = true; // once per page; the next open checks again
-      updateInstalled(common.gallery).catch(() => { /* offline or unsupported: next open */ });
+      updateInstalled(common.gallery, localSkins, (id) => {
+        if (id !== selected?.id || !selected.local || !workspaces?.state) return;
+        const from = selected.digest;
+        return { from, ready: (next) => { galleryStored = { next, from }; galleryUpdated(next, from); } };
+      }).catch(() => { /* offline or unsupported: next open */ });
     };
   } catch (_) { /* a program without it: import still works */ }
 
@@ -325,8 +347,9 @@
   const hostFor = (id) => {
     const bound = shell ? shell.bind(id) : single;
     const wid = bound.workspace.id;
+    const write = tracked((path, body) => bound.api(path, body));
     const api = async (path, body) => {
-      const r = await bound.api(path, body);
+      const r = await (body === undefined ? bound.api(path, body) : write(path, body));
       // Any overview read (with or without query) proves this membership's
       // identity for reconnect and names it in the switcher.
       if (body === undefined && path.split("?")[0] === "/api/overview" && r) {
@@ -338,7 +361,10 @@
     };
     const controls = { open(trigger) { if (window.agentnet === host) bar?.open(trigger); },
       claim(root) { return window.agentnet === host && root === controlsRoot && root.isConnected ? bar.claim() : () => {}; } };
-    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, nativeFileDrop && bound.platform === "daemon" ? { onFileDrop: handler => nativeFileDrop(drop => window.agentnet === host && handler(drop)) } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
+    const writes = { ...(typeof bound.stage === "function" ? { stage: tracked((...a) => bound.stage(...a)) } : {}),
+      ...(typeof bound.prepareVideo === "function" ? { prepareVideo: tracked((...a) => bound.prepareVideo(...a)) } : {}),
+      ...(bound.drive && typeof bound.drive.driveUpload === "function" ? { drive: Object.freeze({ ...bound.drive, driveUpload: tracked((...a) => bound.drive.driveUpload(...a)) }) } : {}) };
+    const host = Object.freeze(Object.assign({}, bound, common, writes, { api, workspaces, linkTo: (target) => linkTo(workspaces?.list().find(w=>w.id===wid)?.realm || bound.workspace.realm, target) }, bar ? { controls } : {}, nativeFileDrop && bound.platform === "daemon" ? { onFileDrop: handler => nativeFileDrop(drop => window.agentnet === host && handler(drop)) } : {}, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
     return host;
   };
   // rebind: this computer's program restarted and retired the membership's
@@ -369,7 +395,7 @@
   const button = (label, fn, cls) => { const b = text("button", label, "btn" + (cls ? " " + cls : "")); b.type = "button"; b.onclick = fn; return b; };
   const link = (href, into) => new Promise((resolve, reject) => {
     const l = document.createElement("link"); l.rel = "stylesheet"; l.href = href;
-    l.onload = resolve; l.onerror = () => reject(new Error("Could not load " + href));
+    l.onload = () => resolve(l); l.onerror = () => reject(new Error("Could not load " + href));
     into.append(l);
   });
   const card = (into, { title, lines, actions, mark, alert }) => {
@@ -384,11 +410,11 @@
     into.replaceChildren(gate);
     (actions[0] || h).focus();
   };
-  // adoptDocument: a package's document rules (manifest "document"). The
+  // loadDocumentRules: a package's document rules (manifest "document"). The
   // page keeps only its @font-face and @property rules, with every URL
   // resolved inside the package; anything else in it is dropped. Browsers
   // ignore both kinds inside a shadow tree, so they apply at document level.
-  const adoptDocument = async (href, base) => {
+  const loadDocumentRules = async (href, base) => {
     const r = await fetch(href);
     if (!r.ok) throw new Error("Could not load the skin’s fonts");
     const parsed = new CSSStyleSheet();
@@ -406,22 +432,32 @@
         if (ok) kept.insertRule(css, kept.cssRules.length);
       }
     }
-    document.adoptedStyleSheets = [...document.adoptedStyleSheets, kept];
+    return kept;
+  };
+  let documentSheet = null;
+  const useDocumentRules = (sheet) => {
+    if (documentSheet === sheet) return;
+    const sheets = [...document.adoptedStyleSheets].filter((rule) => rule !== documentSheet);
+    if (sheet) sheets.push(sheet);
+    document.adoptedStyleSheets = sheets;
+    documentSheet = sheet;
   };
 
   let selected = null, surface = page, homeName = "Comic", fallback = false;
   try {
+    let saved = null, packageChoice = false;
+    try { saved = localStorage.getItem("agentnet.skin"); packageChoice = localStorage.getItem("agentnet.skin.package") === saved; } catch (_) { /* local preference */ }
+    const query = new URL(location.href).searchParams.get("skin");
     const listed = await within(catalog, Math.max(0, catalogAsked + CATALOG_WAIT - Date.now())).catch(() => LATE);
     if (listed !== LATE) offered = listed;
     else {
-      // No list of skins yet (late or failed): Comic's own manifest too,
-      // from its fixed path, and the page opens with whichever answers
-      // first (the list, when both have). Lateness alone never fails the
-      // page: a slow link opens it later, as always. Comic opened from its
-      // manifest is trusted by the host's list as always; the person's saved
-      // choice is kept for the next load, and the list fills in when it comes.
-      const own = fetchJSON("/assets/skins/" + HOME + "/skin.json", "Comic").then((m) => {
-        if (!m || m.api !== 1 || m.id !== HOME) throw new Error("This program has no Comic skin");
+      // A late catalog must not force a different built-in skin. Fetch the
+      // selected built-in (Office for a fresh profile) from its fixed path.
+      // Comic remains the fallback for a skin that needs the full catalog.
+      const requested = query || saved || FRESH;
+      const builtin = requested === "local:" + FRESH ? FRESH : BUILT_IN.includes(requested) ? requested : HOME;
+      const own = fetchJSON("/assets/skins/" + builtin + "/skin.json", "Built-in skin").then((m) => {
+        if (!m || m.api !== 1 || m.id !== builtin) throw new Error("This program could not open its built-in skin");
         return [m];
       });
       own.catch(() => { /* seen by Promise.any, or the list answered */ });
@@ -430,24 +466,23 @@
       offered = first.list;
       if (first.own) {
         fallback = true;
-        catalog.then((list) => { offered = list; return refreshSkins(); }).catch(() => { /* Comic only, until the next load */ });
+        catalog.then((list) => { offered = list; return refreshSkins(); }).catch(() => { /* the built-in skin stays open */ });
       }
     }
     await refreshSkins();
     // A choice saved before Comic was a package ("default", "classic")
     // opens Comic and is rewritten once; ?skin=default names Comic too.
-    let saved = null, packageChoice = false;
-    try { saved = localStorage.getItem("agentnet.skin"); packageChoice = localStorage.getItem("agentnet.skin.package") === saved; } catch (_) { /* local preference */ }
-    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved, packageChoice });
+    const choice = choose(common.skins, { query, saved, packageChoice });
     const home = choice.home;
-    if (!home) throw new Error("This program has no Comic skin");
-    homeName = home.name;
+    if (!choice.selected || (!home && !choice.selected.builtin)) throw new Error("This program has no Comic skin");
+    if (home) homeName = home.name;
     if (choice.save) try { localStorage.setItem("agentnet.skin", choice.save); } catch (_) { /* local preference */ }
     selected = choice.selected;
 
-    // The switcher over every skin but Comic: before trust is asked, so the
-    // way back is there from the first moment.
-    if (selected.id !== HOME) {
+    // The switcher over every skin not built in (Comic and Office carry
+    // their own skin choice in Settings): before trust is asked, so the way
+    // back is there from the first moment.
+    if (!selected.builtin) {
       const { mountSkinBar } = await import("/assets/skinbar.mjs");
       bar = mountSkinBar(document.body, {
         skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
@@ -481,12 +516,15 @@
     if (selected.local) await localSkins.activate();
     // Versions a gallery update replaced, except the one this page opens.
     if (localSkins) localSkins.prune(selected.local ? [selected.digest] : []).catch(() => { /* next open */ });
-    const base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
+    let base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
     if (selected.document) {
       // A failure seen before the skin mounts stops it, as always; the rules
       // arriving after DOCUMENT_WAIT are adopted then, and a late failure
       // leaves the fallback fonts.
-      const rules = adoptDocument(base + selected.document, base);
+      const opening = selected;
+      const rules = loadDocumentRules(base + selected.document, base).then((sheet) => {
+        if (selected === opening) useDocumentRules(sheet);
+      });
       rules.catch(() => { /* seen by within, or the fallback fonts stay */ });
       await within(rules, DOCUMENT_WAIT);
     }
@@ -494,24 +532,25 @@
     surface = page.attachShadow({ mode: "open" });
     // The host's base sheet (core.css, lowest layer), then the package's own.
     await link("/assets/skin-base.css", surface);
-    if (selected.style) await link(base + selected.style, surface);
-    const module = await import(base + selected.entry);
+    let sheet = selected.style ? await link(base + selected.style, surface) : null;
+    let module = await import(base + selected.entry);
     if (typeof module.mount !== "function") throw new Error("This skin has no mount function");
 
     // mountSkin gives the skin a fresh root over the host of the workspace
     // shown now. On a workspace switch (or a rebind) it is mounted again:
     // unmount first, and what it held for the old membership goes out with
     // its root; operations it started keep the host they started with.
-    let root = null, mounting = Promise.resolve();
+    let root = null, rootModule = null, mounting = Promise.resolve();
     const mountSkin = async () => {
       bar?.reset(); controlsRoot = null;
       openHandler = null; openKinds = new Set();
-      if (root) { if (typeof module.unmount === "function") { try { await module.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
+      if (root) { if (rootModule && typeof rootModule.unmount === "function") { try { await rootModule.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
       root = document.createElement("div");
       root.id = "skin";
       root.className = "skin-root";
       surface.append(root);
       controlsRoot = root;
+      rootModule = module; // the package that draws this root, whose unmount it gets
       await module.mount(root, window.agentnet);
       if (!openHandler) throw new Error("This skin must register notification handling with host.onOpen");
     };
@@ -526,6 +565,102 @@
     remount = () => (mounting = mounting.then(mountSkin).catch(failed));
     await mountSkin();
     if (shell) shell.onChange(() => { remount(); });
+
+    // ---- a gallery update of the skin shown now (MEL-819)
+    //
+    // This open's gallery check can stage a verified compatible replacement
+    // of the skin on screen. The replacement can open in place if the exact
+    // version it replaces is still trusted. It is mounted the way a workspace
+    // switch mounts it, so the skin keeps its open chat, drafts and attached
+    // files in its workspace's state. It waits while that would interrupt
+    // anything: a write or upload under way, a pressed pointer, a dialog or
+    // menu open, or typing in a field of a visible page; each of those
+    // ending tries again (events, never a timer). Without a workspace to keep
+    // that state in, the next open shows it. The installed version and trust
+    // are advanced only after the replacement has mounted successfully.
+    if (selected.local && workspaces && workspaces.state) {
+      let pending = null, pressed = false, finished = false, queued = false;
+      const trustKey = "agentnet.skin.trusted." + selected.id;
+      const trustedDigest = (skin) => {
+        try { return isTrusted(skin, localStorage.getItem(trustKey)); } catch (_) { return false; }
+      };
+      const discard = (next, from) => localSkins.discardUpdate(next.id, from, next.digest).catch(() => { /* prune on a later open */ });
+      const surfaces = [surface, bar?.element.shadowRoot].filter(Boolean);
+      const editing = () => surfaces.some(({ activeElement: a }) => a && (a.isContentEditable || a.matches('input, textarea, select, [role="textbox"]')));
+      const foreground = () => !!root && [...root.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')].some((el) => el.getClientRects().length > 0);
+      const busy = () => writing > 0 || !!rebinding || pressed || bar?.busy() || foreground() || (document.visibilityState === "visible" && editing());
+      const listen = [["pointerdown", () => { pressed = true; }], ["pointerup", () => { setTimeout(() => { pressed = false; attempt(); }); }], ["pointercancel", () => { pressed = false; attempt(); }],
+        ["focusout", () => setTimeout(attempt)], ["keyup", () => attempt()], ["visibilitychange", () => attempt()]];
+      const inside = [["close", () => attempt()], ["animationend", () => attempt()], ["transitionend", () => attempt()]];
+      const stop = () => {
+        finished = true; pending = null;
+        for (const [k, f] of listen) document.removeEventListener(k, f, true);
+        for (const target of surfaces) for (const [k, f] of inside) target.removeEventListener(k, f, true);
+        writeSettled.delete(attempt);
+      };
+      // attempt runs on those events; it swaps at most once per page.
+      const attempt = () => {
+        if (!pending || finished || queued || busy()) return;
+        queued = true;
+        mounting = mounting.then(async () => {
+          if (!pending || finished || busy()) { queued = false; return; }
+          const { next, from, nextBase, nextSheet, nextModule, nextDocument } = pending;
+          const current = await localSkins.hasUpdate(next.id, from, next.digest).catch(() => false);
+          queued = false;
+          if (!current || !trustedDigest(selected)) {
+            stop(); nextSheet?.remove(); await discard(next, from); return;
+          }
+          if (busy()) return;
+          stop();
+          const was = { module, sheet, base, selected, documentSheet };
+          if (was.sheet) was.sheet.media = "not all";
+          if (nextSheet) nextSheet.media = "";
+          useDocumentRules(nextDocument);
+          module = nextModule; sheet = nextSheet; base = nextBase; selected = next;
+          try {
+            await mountSkin();
+            if (!await localSkins.commitUpdate(next.id, was.selected.digest, next.digest, () => trustedDigest(was.selected))) {
+              throw new Error("The installed skin changed during the update");
+            }
+            try { if (trustedDigest(was.selected)) localStorage.setItem(trustKey, next.digest); } catch (_) { /* ask next open */ }
+            was.sheet?.remove();
+            bar?.setSelected(next);
+            refreshSkins().catch(() => { /* next open */ });
+          } catch (_) {
+            module = was.module; sheet = was.sheet; base = was.base; selected = was.selected;
+            nextSheet?.remove();
+            useDocumentRules(was.documentSheet);
+            if (was.sheet) was.sheet.media = "";
+            try { await mountSkin(); } finally { await discard(next, from); }
+          }
+        }).catch(failed);
+      };
+      galleryUpdated = async (next, from) => {
+        if (finished || pending) return;
+        if (next.id !== selected.id || selected.digest !== from || next.api !== 1 ||
+            (next.agentnet && newerRelease && newerRelease(next.agentnet, runningVersion)) || !trustedDigest(selected)) {
+          await discard(next, from); return;
+        }
+        finished = true; // one try per page, whatever happens next
+        const nextBase = "/local-skins/" + next.digest + "/";
+        let nextSheet = null;
+        try {
+          const nextDocument = next.document ? await loadDocumentRules(nextBase + next.document, nextBase) : null;
+          // Loaded now, applied only when it opens: the running version keeps its look.
+          if (next.style) { nextSheet = document.createElement("link"); nextSheet.rel = "stylesheet"; nextSheet.media = "not all"; nextSheet.href = nextBase + next.style;
+            await new Promise((resolve, reject) => { nextSheet.onload = resolve; nextSheet.onerror = () => reject(new Error("Could not load " + nextSheet.href)); surface.append(nextSheet); }); }
+          const nextModule = await import(nextBase + next.entry);
+          if (typeof nextModule.mount !== "function") throw new Error("This skin has no mount function");
+          finished = false;
+          pending = { next, from, nextBase, nextSheet, nextModule, nextDocument };
+          for (const [k, f] of listen) document.addEventListener(k, f, true);
+          for (const target of surfaces) for (const [k, f] of inside) target.addEventListener(k, f, true);
+          writeSettled.add(attempt);
+          attempt();
+        } catch (_) { nextSheet?.remove(); await discard(next, from); /* the installed version stays */ }
+      };
+      if (galleryStored) galleryUpdated(galleryStored.next, galleryStored.from); // stored while the skin was mounting
+    }
 
     // A notification's destination: #conv=<64 hex>, #msg=<32 hex>[&conv=…][&dir=in|out]
     // or #review, each with an optional &workspace=<id>. The workspace must
@@ -627,7 +762,9 @@
     };
     window.addEventListener("hashchange", route);
     route();
-    if (!fallback) try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
+    // Only a skin someone chose is recorded: a new profile's Office is not,
+    // and a saved choice whose package is missing for now is kept.
+    if (!fallback && choice.remember) try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
   } catch (e) {
     bar?.reset(); controlsRoot = null;
     const box = text("div", "");

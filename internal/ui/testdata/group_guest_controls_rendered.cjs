@@ -916,7 +916,9 @@ if(process.env.AGENTNET_TOPIC_INVITE_REGRESSION==='1'){
     await dialog.getByText('Selected messages',{exact:true}).click();
     await dialog.getByRole('checkbox',{name:kind==='main'?/Selected warehouse context/:/Warehouse topic context/}).locator('..').click();
    }else if(mode==='since'){
-    await dialog.getByLabel('Share messages since',{exact:true}).fill('2026-10-05T00:00');
+    // MEL-820: the cutoff is separate Date and Time fields under the option.
+    await dialog.getByText('Share messages since',{exact:true}).click();
+    await dialog.getByLabel('Date',{exact:true}).fill('2026-10-05');await dialog.getByLabel('Time',{exact:true}).fill('00:00');
    }
    const expected=kind==='main'?mode==='selected'?['context']:['context','private']:['topic-message'];
    const preview=dialog.getByRole('region',{name:/ will see$/});

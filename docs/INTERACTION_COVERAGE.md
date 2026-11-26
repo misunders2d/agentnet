@@ -1,5 +1,163 @@
 # Next-release interaction coverage and responsiveness
 
+## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
+
+### MEL-821 Office built in, the default for a new profile; MEL-823 Office gutters
+
+Owner decision (Q1, November 25): bundle Office and open it on a fresh or
+unset profile, keep every saved choice. Office's skin layer moved into core
+(`internal/ui/skins/office/overlay`, from agentnet-skins at 84adba27, one
+maintained copy); `web/build.sh` builds Comic and then Office, deterministic;
+files byte-identical to Comic's are embedded once (`builtinSkin` serves
+Comic's bytes, Office's `SHA256SUMS` still lists them): Office adds 1.61 MB
+(entry.mjs 1.52 MB, style.css, document.css, skin.json) instead of 3.52 MB.
+`skin-choice.mjs`: `BUILT_IN` comic, office; `HOME` stays Comic (way back,
+unknown ids, late-catalog fallback); `FRESH` Office for no choice; a saved
+`local:office` becomes `office` once; `remember` lets the loader record only
+a skin someone chose. Built-in skins carry their own skin choice in
+Settings, so Office gets no host switcher bar. The gallery hides reserved
+ids and names even from an older catalog, and never fetches them to update.
+MEL-822's darker Office list column (`--an-sidebar` #F4F5F7 light, #15181B
+dark; muted text 5.9:1 and 7.2:1) and MEL-823's gutters live in the in-core
+Office theme: Comic now reads `--an-timeline-max` (800px) and
+`--an-bubble-max` (70%) with fallbacks, Office sets 1040px and
+`min(70%, 34rem)`. Left/right space beside the messages at 1280×720 went
+from 102/62 px to 56/16 px, at 1366×768 from 145/105 to 56/16 (the 40 px
+avatar column stays); the longest rendered line is 79 characters (86 with a
+38rem cap, about 70 in Comic);
+1024 and phone unchanged; at 1920 the column stops at 1040 px.
+
+`TestOfficeDefaultRendered` (`office_default_rendered.cjs`, Chromium, every
+non-program request aborted): a new profile opens Office at 1280 light and
+390 dark touch in 355–458 ms with `agentnet.skin` still unset after a
+reload and no switcher bar; saved Comic, Office, `default`, a gallery Office
+with `office.theme` dark (opens built-in Office dark, rewritten to `office`),
+a saved gallery skin that is missing (opens Comic, choice kept), `?skin=comic`
+on a new profile (recorded), and a catalog without Office (Comic, nothing
+recorded); Office's message column equals its pane at 1280 and 390, is
+1040 px centred at 1920, Comic's stays 800 px. `TestSkinChoiceAndTrust`
+covers the same choices in node; `skin_gallery_check.mjs` an older catalog
+listing Office and a lookalike name; `TestBuiltinSkinCatalog` and
+`TestBuiltinSkinServedBytesMatchBuild` the embedded Office. Screenshots of
+Office at 1280, 1366 dark, 1024, 1920 and 390 inspected (scratch, not
+committed). Not yet run: WebKitGTK shell, the Android WebView, an upgrade
+from a browser that really holds a stored gallery Office package (simulated
+by its saved choice and theme; that stored package stays in the browser,
+unlisted, about 3.5 MB), and the late-catalog fallback on a new profile
+(opens Comic, records nothing).
+
+Rendered checks written for Comic keep testing Comic: `TestMain` puts a
+test-only Node preload in `NODE_OPTIONS` (`testdata/comic_preload.cjs`) that
+seeds `agentnet.skin = comic` in each Playwright context when nothing is
+saved, as the loader before MEL-821 did on first open;
+`TestOfficeDefaultRendered` opts out (`AGENTNET_TEST_FRESH_SKIN=1`). Older
+checks updated for this release's behaviour: re-clicking the open rail item
+now hides its list (appcontrols, skin contract: open a section only when it is
+not already open with its list showing), the invite's Date and Time fields
+(group parity, guest controls), a removed skin's fallback no longer rewrites
+the saved choice (skins), and Office's entry joins Comic's React DOM
+allowance in `TestPageInsertsTextOnly`.
+
+### MEL-824 and MEL-822 desktop list column: hide, resize, compact
+
+On desktop, clicking the active **Chats** or **Settings** rail item hides its
+list column and clicking again brings it back (`aria-expanded`,
+`aria-controls`); clicking the other one opens its list. Agents, Review and
+Outbox stay full-width workspaces with no list and no toggle. The column stays
+mounted while hidden (`inert`, `aria-hidden`, zero width, its content keeps
+its own width so nothing reflows); Ctrl K (⌘K) brings a hidden chat list
+back with search focused. The open
+conversation and composer stay in the same grid slot. A separator
+(`list-resize`, `role=separator`) on the column's edge takes a drag (pointer
+capture; the grid's `--an-list-width` follows the pointer without a React
+render, one state commit on release), arrow keys (16 px, Shift 48 px),
+Home/End and double-click (reset to 320). Width stays between 240 and 480 px
+and always leaves the conversation 440 px; width and hidden state are kept
+per skin on this device. The phone keeps its tabs and has no separator.
+MEL-822 compaction (Comic's source, so Office and Pulp inherit it): a 320 px
+default list (was 300–360 px), a 68 px rail (was 76), 40 px desktop
+avatars, tighter list padding,
+and the search hint hidden when the column is narrower than 22rem so the
+placeholder stays whole. `--an-sidebar` lets a skin shade the column.
+
+`TestListPanelCollapseResizeRendered` (`listpanel_rendered.cjs`, Chromium,
+1280×720 light, 1024×700 dark, 1920×1080 light, 390×844 touch): with a chat
+open, a draft and an attached file, hide/show, every key step, Home/End
+bounds (max = min(480, width − 508)), a mouse drag that tracks the pointer and
+stops at 240, double-click reset, Settings open/hide and Chats reopen,
+Ctrl K on a hidden list (search focused), each at
+the next frame in 13–63 ms; the same textarea element stays connected with its
+draft and file; Agents has no list column; width and hidden state survive a
+reload; no page error. `TestComicPanelLayout` checks the column's part and
+separator. Screenshots of each desktop size shown and hidden inspected
+(scratch, not committed). Not yet run: WebKitGTK shell, and Classic, Holonet
+and Zoom (standalone gallery skins; their own list needs the same change in
+the gallery repository).
+
+### MEL-820 invite history: Share messages since
+
+The combined `datetime-local` field became **Share messages since** with
+separate labelled **Date** (typed YYYY-MM-DD, a calendar only on request) and
+**Time** fields, the reminder sheet's existing pattern (`Reminders.tsx`), plus
+the local time zone ("Your time zone: Europe/Kiev (UTC+02:00)") and **Last
+hour**, **Today** and **Yesterday** shortcuts (`aria-pressed` while they match).
+The wall-clock value must round-trip exactly (`sinceAt`, as `scheduleDue`): an
+impossible day, a DST-gap time, a partial value or a future cutoff shares
+nothing, explains itself in the card and beside the invite action, and
+disables the invite (both the guest/agent and team-member branches). A live
+summary beside the invite action names the exact count (newest N of M when
+capped) and the first included message's date and time. Submission sends the
+same `shared` array the preview and summary are computed from; permissions,
+scope and caps are unchanged.
+
+`TestUIResponsivenessRendered` groups suite (Chromium, 1440×960 mouse and
+390×844 touch) taps the mode, each shortcut, a manual time edit, a future date,
+an impossible date (2026-02-30) and a fix: local feedback 3–11 ms each, every
+assertion on fields, summary, alert role and disabled invite. Desktop light
+1366 and phone dark 390 screenshots inspected (scratch, not committed); the
+error text inside the selected yellow card first used the danger colour and
+failed contrast in dark mode, so it now uses the card's ink in bold. Not yet
+run: the same fixture in the installed WebKitGTK shell
+(`AGENTNET_NATIVE_SHELL`), and a submitted invitation compared byte for byte
+with the preview (code shares one array).
+
+### MEL-819 gallery update of the skin on screen opens in place
+
+Owner report: after an update, the selected Office or Pulp still looked like
+the old version until a switch to Comic and back. The once-per-open gallery
+update stored the new package after the page had mounted the old digest.
+Reused: the host's own workspace remount (unmount, fresh root, mount over the
+same host), which Comic already uses to keep its open chat, drafts and File
+objects in `workspaces.state`; Comic's own "reload once nothing unsent would be
+lost" rule for new AgentNet versions, here as host-level event-driven waits.
+Trust, digest and version checks are the open's own (`skin-choice.mjs`
+`trusted`, `skin-gallery.mjs` `newer`).
+
+`TestGallerySkinUpdateActivatesRendered` (`skin_gallery_activate_rendered.cjs`,
+Chromium, WorkspaceHandler fixture, desktop light 1440 and Android-width dark
+412 with touch) installs Comic's real package as gallery "Pulp" v1, trusts and
+selects it, and holds the gallery's answer for v2 until a chat is open with a
+draft and an attached file and the field has focus:
+- v2 is staged while v1 stays installed and trusted; the field stays usable
+  during download and while v2 is ready;
+- leaving the field with a held `host.api` write keeps v1 until the write
+  settles and the open dialog closes. The wide case covers a dialog within
+  the skin and the narrow case covers the host's AgentNet controls. v2 then
+  opens with the same skin selected, only v2's stylesheet applied, the same
+  chat open, draft text and file kept, and the updated name in the host controls.
+  In the focused run the swap took 104 ms on desktop and 81 ms at phone width;
+- bad bytes, gallery offline (503), a version needing v99, a stored version
+  whose digest the person never trusted, and a version whose mount throws
+  each keep the running version with no failure card or leftover update cache.
+  A failed mount leaves the previous digest installed and trusted, including
+  after a reload with the gallery offline;
+- removing the running skin or importing a replacement while the update waits
+  cancels the pending mount. The storage check covers cleanup of abandoned or
+  unreadable update caches without changing the installed digest on discard.
+Before the change the same script fails at "v2 prepared beside v1" (the old
+loader never opens the stored version). Not yet run: the real Android
+WebView and the WebKitGTK app; Office/Pulp gallery builds need no change.
+
 ## MEL-612 Report a message or person — covered, November 25, 2026
 
 **Entry points.** "Report…" sits in a received message's More actions menu
@@ -3733,6 +3891,13 @@ dispatch, then checks that Escape clears the selection while leaving the toast
 visible. That fixture adjustment and the navigation and notification-landing
 tests passed three consecutive runs. Physical phone, native webviews and
 integrated skin qualification remain open.
+
+The v0.11.10 fixture measures Working from the actual Save click to a visible
+frame in Chromium. This keeps the 600 ms product timer and the 1,100 ms bound,
+while excluding Playwright dispatch and return time from this measurement. On
+the Play-compliance merge candidate, Working took 646–681 ms across local
+runs of the four cases. A test-only 1,300 ms timer was rejected. macOS CI is
+still needed.
 
 ## MEL-811 — Full-width sent-message edits
 

@@ -337,7 +337,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
   return (
     <div className="relative min-h-0 flex-1">
       <div ref={box} onWheel={releaseEntry} onTouchMove={releaseEntry} onPointerDown={releaseEntry} onKeyDown={releaseEntry} onScroll={onScroll} className="dots h-full overflow-y-auto overscroll-contain">
-        <div ref={inner} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" data-part="timeline" onKeyDownCapture={keyboard} className="mx-auto flex min-h-full w-full max-w-[800px] flex-col justify-end pb-6 pt-3 [&>[data-mid]]:[contain:layout_style] [&>[data-send-group]]:[contain:layout_style]"
+        <div ref={inner} role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages" data-part="timeline" onKeyDownCapture={keyboard} className="mx-auto flex min-h-full w-full max-w-[var(--an-timeline-max,800px)] flex-col justify-end pb-6 pt-3 [&>[data-mid]]:[contain:layout_style] [&>[data-send-group]]:[contain:layout_style]"
           style={reserve || hasLater ? { paddingBottom: reserve + (hasLater ? 80 : 24) } : undefined}>
           {items.length === 0 && empty}
           {from > 0 ? <button type="button" onClick={earlier} className="mx-auto min-h-11 px-4 text-sm font-semibold underline">Earlier messages</button> : items.length > 0 && start}

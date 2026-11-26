@@ -87,7 +87,7 @@ const plainShellAsk = "ask from your agent's session (Claude Code, Codex, Pi or 
 // that agent; from a person's plain shell it goes in their DM with the
 // person at target, reported as send always was: the copy for target's
 // device, waited for up to wait. It asks for nothing.
-func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, fromAgent string, files []string, wait time.Duration, out, errw io.Writer) error {
+func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, fromAgent, remoteAgent string, files []string, wait time.Duration, out, errw io.Writer) error {
 	host, session, err := protocol.SplitTarget(target)
 	if err != nil {
 		return err
@@ -105,7 +105,7 @@ func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, from
 	}
 	if room {
 		r := client.AgentRoomAsk{From: via.from, SessionKey: via.session, Host: host, Kind: envelope.KindMessage, Body: body, ReplyTo: replyTo, Files: named}
-		if r.AgentID, err = a.RoomTargetAgent(ctx, host, "", r.From.Record.ID); err != nil {
+		if r.AgentID, err = a.RoomTargetAgent(ctx, host, remoteAgent, r.From.Record.ID); err != nil {
 			return err
 		}
 		var sent client.AgentRoomSent
@@ -119,6 +119,9 @@ func sendPlain(ctx context.Context, a *client.Agent, target, body, replyTo, from
 		}
 		fmt.Fprintf(out, "%s %s: sent in %q, topic %s\n", sent.ID, sent.State, client.MyAgentsRoomTitle, sent.Topic)
 		return nil
+	}
+	if remoteAgent != "" {
+		return errors.New("--agent requires an agent session or --from-agent ID")
 	}
 	if inRun() {
 		return errors.New("this run serves no request here, so it has no agent to send as")
