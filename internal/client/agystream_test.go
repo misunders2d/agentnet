@@ -219,26 +219,9 @@ func TestAgyWarmTurnGuards(t *testing.T) {
 	if answering != 1 {
 		t.Fatalf("warm turn activity %d", answering)
 	}
-}
-
-// Output a warm agy process writes between turns makes it unfit for the
-// next one: an event then could be taken for that turn's answer.
-func TestAgyWarmStrayOutputUnfit(t *testing.T) {
-	p := &warmPool{limits: warmLimits{lifetime: time.Hour}}
-	w := &warmProc{pool: p, harness: "agy", fp: "f", born: time.Now(), exited: make(chan struct{})}
-	if ok, why := p.fits(w, "f", time.Minute); !ok {
-		t.Fatalf("clean idle agy unfit: %s", why)
-	}
-	w.out.Write([]byte(`{"event":"result"}` + "\n"))
-	if ok, _ := p.fits(w, "f", time.Minute); ok {
-		t.Fatal("agy that wrote between turns was reused")
-	}
-}
-
-// A reused agy's result counts only after agy reported reading this turn's
-// message (its user_input step): a late result read while the message was
-// being written must not become this turn's answer.
-func TestAgyReusedResultNeedsThisTurnsInput(t *testing.T) {
+	// A reused agy's result counts only after agy reported reading this
+	// turn's message (its user_input step): a late result read while the
+	// message was being written must not become this turn's answer.
 	for _, tc := range []struct {
 		name, input string // input: the conversation of a user_input step, "" for none
 		want        string
@@ -269,5 +252,19 @@ func TestAgyReusedResultNeedsThisTurnsInput(t *testing.T) {
 				t.Fatalf("status %q, want %q (damaged=%v)", status, tc.want, s.damaged)
 			}
 		})
+	}
+}
+
+// Output a warm agy process writes between turns makes it unfit for the
+// next one: an event then could be taken for that turn's answer.
+func TestAgyWarmStrayOutputUnfit(t *testing.T) {
+	p := &warmPool{limits: warmLimits{lifetime: time.Hour}}
+	w := &warmProc{pool: p, harness: "agy", fp: "f", born: time.Now(), exited: make(chan struct{})}
+	if ok, why := p.fits(w, "f", time.Minute); !ok {
+		t.Fatalf("clean idle agy unfit: %s", why)
+	}
+	w.out.Write([]byte(`{"event":"result"}` + "\n"))
+	if ok, _ := p.fits(w, "f", time.Minute); ok {
+		t.Fatal("agy that wrote between turns was reused")
 	}
 }
