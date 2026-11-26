@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -34,6 +35,34 @@ func writeFakeQueue(path string, q []fakeQueueEntry) {
 	tmp := path + ".tmp"
 	os.WriteFile(tmp, raw, 0600)
 	os.Rename(tmp, path)
+}
+
+// appendRollout writes one record after the file's last ordinal, as
+// Codex Desktop does.
+func appendRollout(file string, rec map[string]any) error {
+	raw, _ := os.ReadFile(file)
+	var last int64
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte{'\n'}) {
+		var r struct {
+			Ordinal int64 `json:"ordinal"`
+		}
+		if json.Unmarshal(line, &r) == nil {
+			last = r.Ordinal
+		}
+	}
+	if rec["type"] == "session_meta" {
+		rec["ordinal"] = int64(0)
+	} else {
+		rec["ordinal"] = last + 1
+	}
+	line, _ := json.Marshal(rec)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(line, '\n'))
+	return err
 }
 
 func fakeCodexAppServer() {
@@ -78,6 +107,22 @@ func fakeCodexAppServer() {
 			}
 			result = map[string]any{"queuedSubmission": map[string]any{"id": e.ID, "clientUserMessageId": e.ClientID, "input": []any{}}}
 		case "thread/queue/list":
+			// Desktop starts the entries just as AgentNet looks for them.
+			if rollout, err := os.ReadFile(filepath.Join(home, "dispatch-on-list")); err == nil {
+				var kept []fakeQueueEntry
+				for _, e := range q {
+					if e.Thread != p.Thread {
+						kept = append(kept, e)
+						continue
+					}
+					turn := protocol.NewID()
+					appendRollout(string(rollout), map[string]any{"type": "event_msg", "payload": map[string]any{"type": "task_started", "turn_id": turn}})
+					appendRollout(string(rollout), map[string]any{"type": "event_msg", "payload": map[string]any{"type": "item_completed", "thread_id": e.Thread, "turn_id": turn,
+						"item": map[string]any{"type": "UserMessage", "id": protocol.NewID(), "client_id": e.ClientID, "content": []map[string]any{{"type": "text", "text": e.Text}}}}})
+				}
+				writeFakeQueue(path, kept)
+				q = kept
+			}
 			data := []map[string]any{}
 			for _, e := range q {
 				if e.Thread == p.Thread {
@@ -86,6 +131,10 @@ func fakeCodexAppServer() {
 			}
 			result = map[string]any{"data": data, "nextCursor": nil}
 		case "thread/queue/delete":
+			if _, err := os.Stat(filepath.Join(home, "delete-fails")); err == nil {
+				out.Encode(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "busy"}})
+				continue
+			}
 			deleted, kept := false, q[:0]
 			for _, e := range q {
 				if e.ID == p.QueueID && e.Thread == p.Thread {

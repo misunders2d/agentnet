@@ -426,6 +426,19 @@ func (a *Agent) waitClaudeChat(runCtx context.Context, j job, c ClaudeChat, limi
 	}
 	deadline := time.NewTimer(limit)
 	defer deadline.Stop()
+	// A turn the person stops (Deny on a permission prompt, or Esc) ends
+	// with no Stop hook: its transcript records the interruption.
+	var transcript <-chan struct{}
+	var file string
+	if row, ok, err := chatRowIn(a.store.db, j.ID); err == nil && ok {
+		if reg, err := replySessionIn(a.store.db, row.Handle); err == nil {
+			file = reg.File // read at every wake; its writes wake too when watchable
+			if w, err := watchFileWrites(reg.File); err == nil {
+				defer w.close()
+				transcript = w.changes
+			}
+		}
+	}
 	reported := false
 	gone := err != nil
 	for {
@@ -433,6 +446,11 @@ func (a *Agent) waitClaudeChat(runCtx context.Context, j job, c ClaudeChat, limi
 		row, ok, err := chatRowIn(a.store.db, j.ID)
 		if err != nil || !ok {
 			return chatEnd(stateJobFailed, "the Claude chat delivery record is gone")
+		}
+		if file != "" && (row.State == chatWritten || row.State == chatStarted) && claudeChatInterrupted(file, row) {
+			why := "The turn for this was stopped in the Claude chat (for example, a permission was denied) before it answered. It was not sent again."
+			a.setChatState(j.ID, row.State, chatSuperseded, why)
+			continue
 		}
 		switch row.State {
 		case chatAnswered:
@@ -463,6 +481,7 @@ func (a *Agent) waitClaudeChat(runCtx context.Context, j job, c ClaudeChat, limi
 		case <-runCtx.Done():
 			return chatEnd("", "")
 		case <-changed:
+		case <-transcript:
 		case <-exited:
 			gone, exited = true, nil // read the ledger once more: a last Stop may have landed
 		case s := <-statuses:
@@ -576,6 +595,48 @@ func claudeChatTranscriptHas(file, sid string, row chatRow) (bool, error) {
 		return json.Unmarshal(raw, &rec) == nil && rec.Type == "user" && rec.Origin.Kind == "peer" &&
 			rec.Origin.MsgID == row.MsgID && rec.Origin.From == row.Sender && rec.Origin.VerifiedPeerPid == row.WriterPID
 	})
+}
+
+// claudeChatInterrupted reports whether the transcript, after the row's own
+// peer record, records the person interrupting that turn. A record still
+// being written is read on the next change.
+func claudeChatInterrupted(file string, row chatRow) bool {
+	ours, stopped := false, false
+	nativeRecords(file, row.Offset, func(rec nativeRecord) error {
+		if !rec.Complete || rec.Oversize || stopped {
+			return nil
+		}
+		var r struct {
+			Type    string
+			Session string `json:"sessionId"`
+			Origin  struct {
+				Kind            string
+				From            string
+				MsgID           string `json:"msg_id"`
+				VerifiedPeerPid int    `json:"verifiedPeerPid"`
+			}
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(rec.Line, &r) != nil || r.Type != "user" || r.Session != row.Session {
+			return nil
+		}
+		if !ours {
+			ours = r.Origin.Kind == "peer" && r.Origin.MsgID == row.MsgID && r.Origin.From == row.Sender && r.Origin.VerifiedPeerPid == row.WriterPID
+			return nil
+		}
+		var parts []struct{ Type, Text string }
+		if json.Unmarshal(r.Message.Content, &parts) == nil {
+			for _, p := range parts {
+				if p.Type == "text" && strings.HasPrefix(p.Text, "[Request interrupted by user") {
+					stopped = true
+				}
+			}
+		}
+		return nil
+	})
+	return stopped
 }
 
 // chatListener is a private reply socket for one delivery: the chat sends

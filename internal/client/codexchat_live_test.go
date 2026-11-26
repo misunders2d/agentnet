@@ -142,7 +142,7 @@ func TestCodexDesktopLive(t *testing.T) {
 	}
 	codexChatDeadline = old
 	var left int
-	if err := codexAppServer(tctx(t), engine.Exe, home, func(call func(string, any, any) error) error {
+	if err := codexAppServer(tctx(t), engine.server(home), func(call func(string, any, any) error) error {
 		var page struct {
 			Data []codexQueueEntry `json:"data"`
 		}

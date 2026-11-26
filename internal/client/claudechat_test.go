@@ -501,3 +501,36 @@ func TestClaudeChatRefusesAnAgentAskingForAnotherPerson(t *testing.T) {
 	f.hook("Stop", "", "owner's answer")
 	waitState(t, a, direct.ID, stateAnswered)
 }
+
+func TestClaudeChatDeniedPermissionEndsTheWait(t *testing.T) {
+	f := newChatFixture(t)
+	request := f.ask(t, "PROBE-DENY")
+	if file, err := os.OpenFile(f.owner.File, os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+		file.Close() // the chat's transcript exists while it runs
+	}
+	done := f.run(tctx(t))
+	_, content := f.frame(t)
+	f.hook("UserPromptSubmit", content, "")
+	row, _, _ := chatRowIn(f.w.bob.store.db, request)
+	// The person clicks Deny: Claude Desktop records the rejected tool and
+	// the interruption, and runs no Stop hook.
+	file, err := os.OpenFile(f.owner.File, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range []map[string]any{
+		{"type": "user", "sessionId": f.owner.SessionID, "uuid": protocol.NewID(), "origin": map[string]any{"kind": "peer", "from": row.Sender, "msg_id": row.MsgID, "verifiedPeerPid": row.WriterPID},
+			"message": map[string]any{"role": "user", "content": "x"}},
+		{"type": "user", "sessionId": f.owner.SessionID, "uuid": protocol.NewID(), "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "tool_result", "content": "The user doesn't want to proceed with this tool use."}}}},
+		{"type": "user", "sessionId": f.owner.SessionID, "uuid": protocol.NewID(), "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": "[Request interrupted by user for tool use]"}}}},
+	} {
+		raw, _ := json.Marshal(rec)
+		file.Write(append(raw, '\n'))
+	}
+	file.Close()
+	waitDone(t, done)
+	if r := inboxRow(t, f.w.bob, request); r.State != stateNeedHuman || !strings.Contains(r.Detail, "permission was denied") {
+		t.Fatalf("denied turn %+v", r)
+	}
+	noMoreFrames(t, f.inbox)
+}

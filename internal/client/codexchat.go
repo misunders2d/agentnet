@@ -3,7 +3,9 @@ package client
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -73,6 +76,8 @@ CREATE TABLE codex_chat_deliveries(
  engine_ticks INTEGER NOT NULL,
  engine_exe TEXT NOT NULL,
  offset INTEGER NOT NULL,
+ content_sha TEXT NOT NULL,
+ env TEXT NOT NULL DEFAULT '',
  turn TEXT NOT NULL DEFAULT '',
  state TEXT NOT NULL,
  answer TEXT NOT NULL DEFAULT '',
@@ -91,6 +96,7 @@ const (
 
 type codexChatRow struct {
 	Thread, File, Home, ClientID, QueueID, EngineExe, Turn, State, Answer, Detail string
+	ContentSHA, Env                                                               string
 	EnginePID                                                                     int
 	EngineTicks                                                                   uint64
 	Offset                                                                        int64
@@ -98,12 +104,25 @@ type codexChatRow struct {
 
 func codexChatRowIn(q dbq, request string) (codexChatRow, bool, error) {
 	var r codexChatRow
-	err := q.QueryRow(`SELECT thread,file,home,client_id,queue_id,engine_pid,engine_ticks,engine_exe,offset,turn,state,answer,detail FROM codex_chat_deliveries WHERE request=?`, request).
-		Scan(&r.Thread, &r.File, &r.Home, &r.ClientID, &r.QueueID, &r.EnginePID, &r.EngineTicks, &r.EngineExe, &r.Offset, &r.Turn, &r.State, &r.Answer, &r.Detail)
+	err := q.QueryRow(`SELECT thread,file,home,client_id,queue_id,engine_pid,engine_ticks,engine_exe,offset,content_sha,env,turn,state,answer,detail FROM codex_chat_deliveries WHERE request=?`, request).
+		Scan(&r.Thread, &r.File, &r.Home, &r.ClientID, &r.QueueID, &r.EnginePID, &r.EngineTicks, &r.EngineExe, &r.Offset, &r.ContentSHA, &r.Env, &r.Turn, &r.State, &r.Answer, &r.Detail)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
 	}
 	return r, err == nil, err
+}
+
+// server is the app server the row's request was queued through.
+func (r codexChatRow) server() codexServer {
+	s := codexServer{Exe: r.EngineExe, Home: r.Home}
+	_ = json.Unmarshal([]byte(r.Env), &s.Env)
+	return s
+}
+
+// codexContentSHA identifies the text of a queued request.
+func codexContentSHA(text string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(text)))
+	return hex.EncodeToString(sum[:])
 }
 
 // codexEngine is a running Codex Desktop engine process.
@@ -111,6 +130,18 @@ type codexEngine struct {
 	PID   int
 	Ticks uint64
 	Exe   string
+	Env   []string // its CODEX_* settings other than CODEX_HOME
+}
+
+// codexServer is how to start an app server on Desktop's own state: its
+// engine exe, Codex home and CODEX_* settings.
+type codexServer struct {
+	Exe, Home string
+	Env       []string
+}
+
+func (e codexEngine) server(home string) codexServer {
+	return codexServer{Exe: e.Exe, Home: home, Env: e.Env}
 }
 
 // codexDesktopEngine finds the running Codex Desktop engine whose Codex
@@ -335,12 +366,18 @@ func (a *Agent) ConnectCodexChat(thread, label string) (string, error) {
 
 // codexAppServer runs a short-lived app server of the Desktop engine exe
 // on home and gives fn its calls. It never opens or resumes a thread.
-func codexAppServer(ctx context.Context, exe, home string, fn func(call func(method string, params, out any) error) error) error {
+func codexAppServer(ctx context.Context, srv codexServer, fn func(call func(method string, params, out any) error) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "app-server")
-	cmd.Env = append(os.Environ(), "CODEX_HOME="+home)
-	cmd.Dir = home
+	cmd := exec.CommandContext(ctx, srv.Exe, "app-server")
+	// Desktop's own CODEX_* settings (state and SQLite locations), not ours.
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CODEX_") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(append(cmd.Env, srv.Env...), "CODEX_HOME="+srv.Home)
+	cmd.Dir = srv.Home
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -353,13 +390,17 @@ func codexAppServer(ctx context.Context, exe, home string, fn func(call func(met
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	read := make(chan struct{})
 	defer func() {
+		cancel()
 		stdin.Close()
 		stopGroup(cmd)
+		<-read // every read of stdout ends before Wait closes it
 		cmd.Wait()
 	}()
 	type reply struct {
 		ID     int64           `json:"id"`
+		Method string          `json:"method"`
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
 			Code    int    `json:"code"`
@@ -368,13 +409,19 @@ func codexAppServer(ctx context.Context, exe, home string, fn func(call func(met
 	}
 	replies := make(chan reply, 8)
 	go func() {
+		defer close(read)
 		defer close(replies)
 		s := bufio.NewScanner(stdout)
 		s.Buffer(make([]byte, 64<<10), 16<<20)
 		for s.Scan() {
 			var r reply
-			if json.Unmarshal(s.Bytes(), &r) == nil && r.ID != 0 {
-				replies <- r
+			// A frame with a method is the server's own request or notice.
+			if json.Unmarshal(s.Bytes(), &r) == nil && r.ID != 0 && r.Method == "" {
+				select {
+				case replies <- r:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -443,11 +490,11 @@ type codexQueueEntry struct {
 	ClientID string `json:"clientUserMessageId"`
 }
 
-func codexQueueAdd(ctx context.Context, exe, home, thread, clientID, text string) (string, error) {
+func codexQueueAdd(ctx context.Context, srv codexServer, thread, clientID, text string) (string, error) {
 	var out struct {
 		Queued codexQueueEntry `json:"queuedSubmission"`
 	}
-	err := codexAppServer(ctx, exe, home, func(call func(string, any, any) error) error {
+	err := codexAppServer(ctx, srv, func(call func(string, any, any) error) error {
 		return call("thread/queue/add", map[string]any{"threadId": thread, "clientUserMessageId": clientID,
 			"input": []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}}, &out)
 	})
@@ -458,9 +505,9 @@ func codexQueueAdd(ctx context.Context, exe, home, thread, clientID, text string
 }
 
 // codexQueueFind is the queue entry of clientID, or "" when none is queued.
-func codexQueueFind(ctx context.Context, exe, home, thread, clientID string) (string, error) {
+func codexQueueFind(ctx context.Context, srv codexServer, thread, clientID string) (string, error) {
 	id := ""
-	err := codexAppServer(ctx, exe, home, func(call func(string, any, any) error) error {
+	err := codexAppServer(ctx, srv, func(call func(string, any, any) error) error {
 		cursor := ""
 		for range 100 {
 			params := map[string]any{"threadId": thread, "limit": 100}
@@ -490,11 +537,11 @@ func codexQueueFind(ctx context.Context, exe, home, thread, clientID string) (st
 	return id, err
 }
 
-func codexQueueDelete(ctx context.Context, exe, home, thread, queueID string) (bool, error) {
+func codexQueueDelete(ctx context.Context, srv codexServer, thread, queueID string) (bool, error) {
 	var out struct {
 		Deleted bool `json:"deleted"`
 	}
-	err := codexAppServer(ctx, exe, home, func(call func(string, any, any) error) error {
+	err := codexAppServer(ctx, srv, func(call func(string, any, any) error) error {
 		return call("thread/queue/delete", map[string]any{"threadId": thread, "queuedSubmissionId": queueID}, &out)
 	})
 	return out.Deleted, err
@@ -507,12 +554,18 @@ type codexChatProgress struct {
 	started    bool // the user message with the client ID is recorded
 	done       bool // that turn's task_complete
 	answer     string
-	superseded bool // another turn started, or this one aborted, before it completed
+	superseded bool   // another turn started, or this one aborted, before it completed
+	why        string // set when the turn is not this request's own answer
 }
 
-func codexChatScan(file, thread string, offset int64, clientID string) (codexChatProgress, error) {
+// codexChatScan follows row's request in the rollout. The turn counts only
+// when its user message is the exact text queued (sha) and no other input
+// joins that turn before it completes.
+func codexChatScan(row codexChatRow) (codexChatProgress, error) {
 	var p codexChatProgress
-	_, err := codexNativeScan(file, thread, offset, func(raw json.RawMessage) bool {
+	var item string
+	fresh := map[string]bool{} // turns started after the offset, with no input yet
+	_, err := codexNativeScan(row.File, row.Thread, row.Offset, func(raw json.RawMessage) bool {
 		var v struct {
 			Type    string `json:"type"`
 			Payload struct {
@@ -522,7 +575,12 @@ func codexChatScan(file, thread string, offset int64, clientID string) (codexCha
 				Last   *string `json:"last_agent_message"`
 				Item   struct {
 					Type     string `json:"type"`
+					ID       string `json:"id"`
 					ClientID string `json:"client_id"`
+					Content  []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content"`
 				} `json:"item"`
 			} `json:"payload"`
 		}
@@ -530,11 +588,34 @@ func codexChatScan(file, thread string, offset int64, clientID string) (codexCha
 			return false
 		}
 		e := v.Payload
+		user := e.Type == "item_completed" && e.Item.Type == "UserMessage"
 		switch {
 		case !p.started:
-			if e.Type == "item_completed" && e.Item.Type == "UserMessage" && e.Item.ClientID == clientID && e.Thread == thread && e.Turn != "" {
-				p.started, p.turn = true, e.Turn
+			if e.Type == "task_started" && e.Turn != "" {
+				fresh[e.Turn] = true
+			} else if user && e.Item.ClientID != row.ClientID {
+				delete(fresh, e.Turn) // that turn already has someone else's input
 			}
+			if user && e.Item.ClientID == row.ClientID && e.Thread == row.Thread && e.Turn != "" {
+				p.started, p.turn, item = true, e.Turn, e.Item.ID
+				if !fresh[e.Turn] {
+					// Steered into a turn already running: its answer is
+					// that turn's, not this request's.
+					p.superseded, p.why = true, "Codex Desktop added this to a turn that was already running, so that turn's answer is not this request's alone. It was not sent again."
+					return false
+				}
+				var text strings.Builder
+				for _, c := range e.Item.Content {
+					if c.Type == "text" {
+						text.WriteString(c.Text)
+					}
+				}
+				if codexContentSHA(text.String()) != row.ContentSHA {
+					p.superseded, p.why = true, "The request was changed in Codex Desktop before it ran, so its answer is not this request's. It was not sent again."
+				}
+			}
+		case user && e.Turn == p.turn && e.Item.ID != item:
+			p.superseded, p.why = true, "More input was added to the Codex chat's turn for this before it ended, so its answer is not this request's alone. It was not sent again."
 		case e.Type == "task_complete" && e.Turn == p.turn:
 			p.done = true
 			if e.Last != nil {
@@ -546,6 +627,9 @@ func codexChatScan(file, thread string, offset int64, clientID string) (codexCha
 		}
 		return false
 	})
+	if p.superseded && p.why == "" {
+		p.why = "The Codex chat's turn for this ended without a recorded answer (stopped, or replaced by another turn). It was not sent again."
+	}
 	return p, err
 }
 
@@ -555,16 +639,28 @@ func (a *Agent) runCodexChat(runCtx context.Context, j job, r *Responder, prompt
 	if !a.claudeChatAsker(j) {
 		return chatEnd(stateNotRun, "A Codex Desktop chat agent takes direct requests only from your own devices. Nothing was sent.")
 	}
+	// Requests of earlier runs still in a queue leave it first.
+	a.withdrawCodexChats(runCtx)
 	row, exists, err := codexChatRowIn(a.store.db, j.ID)
 	if err != nil {
 		return chatEnd(stateJobFailed, err.Error())
 	}
 	if exists && (row.State == chatUnsent || row.State == codexRemoved) {
-		// Nothing ran: a rerun the person asked for may queue it.
-		if _, err = a.store.db.Exec(`DELETE FROM codex_chat_deliveries WHERE request=? AND state IN (?,?)`, j.ID, chatUnsent, codexRemoved); err != nil {
-			return chatEnd(stateJobFailed, err.Error())
+		// A delete can cross Desktop starting it: only a request the
+		// history never shows may be queued again on a rerun.
+		p, err := codexChatScan(row)
+		if err != nil {
+			return chatEnd(stateNeedHuman, "The Codex chat's history could not be read ("+err.Error()+"). It is not sent again.")
 		}
-		exists = false
+		if p.started {
+			a.setCodexChat(j.ID, row.State, chatStarted, "", "turn", p.turn)
+			row.State, row.Turn = chatStarted, p.turn
+		} else {
+			if _, err = a.store.db.Exec(`DELETE FROM codex_chat_deliveries WHERE request=? AND state IN (?,?)`, j.ID, chatUnsent, codexRemoved); err != nil {
+				return chatEnd(stateJobFailed, err.Error())
+			}
+			exists = false
+		}
 	}
 	if !exists {
 		if len(prompt) > codexChatMax {
@@ -579,7 +675,7 @@ func (a *Agent) runCodexChat(runCtx context.Context, j job, r *Responder, prompt
 	} else if row.State == chatSending {
 		// A run stopped between committing the row and recording the add:
 		// the rollout and the queue say whether it arrived. Never added again.
-		if out := a.reconcileCodexChat(runCtx, j, &row); out != nil {
+		if out := a.reconcileCodexChat(j, &row); out != nil {
 			return *out
 		}
 	}
@@ -606,8 +702,9 @@ func (a *Agent) deliverCodexChat(runCtx context.Context, j job, c CodexChat, pro
 	if info, err := os.Stat(c.File); err == nil {
 		offset = info.Size()
 	}
+	env, _ := json.Marshal(engine.Env)
 	row := codexChatRow{Thread: c.Thread, File: c.File, Home: c.Home, ClientID: chatUUID(), EnginePID: engine.PID, EngineTicks: engine.Ticks,
-		EngineExe: engine.Exe, Offset: offset, State: chatSending}
+		EngineExe: engine.Exe, Offset: offset, ContentSHA: codexContentSHA(prompt), Env: string(env), State: chatSending}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return fail(stateJobFailed, err.Error())
@@ -617,14 +714,14 @@ func (a *Agent) deliverCodexChat(runCtx context.Context, j job, c CodexChat, pro
 	if err = tx.QueryRow(`SELECT count(*) FROM inbox WHERE id=? AND state=? AND attempts=?`, j.ID, stateRunning, j.nativeAttempt).Scan(&running); err != nil || running != 1 {
 		return fail(stateJobFailed, "not sent to the Codex chat: this attempt is no longer current")
 	}
-	if _, err = tx.Exec(`INSERT INTO codex_chat_deliveries(request,thread,file,home,client_id,engine_pid,engine_ticks,engine_exe,offset,state) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		j.ID, row.Thread, row.File, row.Home, row.ClientID, row.EnginePID, row.EngineTicks, row.EngineExe, row.Offset, row.State); err != nil {
+	if _, err = tx.Exec(`INSERT INTO codex_chat_deliveries(request,thread,file,home,client_id,engine_pid,engine_ticks,engine_exe,offset,content_sha,env,state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		j.ID, row.Thread, row.File, row.Home, row.ClientID, row.EnginePID, row.EngineTicks, row.EngineExe, row.Offset, row.ContentSHA, row.Env, row.State); err != nil {
 		return fail(stateJobFailed, "not sent to the Codex chat: already sent once: "+err.Error())
 	}
 	if err = tx.Commit(); err != nil {
 		return fail(stateJobFailed, err.Error())
 	}
-	id, err := codexQueueAdd(runCtx, engine.Exe, c.Home, c.Thread, row.ClientID, prompt)
+	id, err := codexQueueAdd(runCtx, row.server(), c.Thread, row.ClientID, prompt)
 	if err == nil {
 		a.setCodexChat(j.ID, chatSending, codexQueued, "", "queue_id", id)
 		row.State, row.QueueID = codexQueued, id
@@ -637,7 +734,7 @@ func (a *Agent) deliverCodexChat(runCtx context.Context, j job, c CodexChat, pro
 	}
 	// The add may or may not have happened: reconcile, never add again.
 	a.Logf("%s %s: Codex chat queue add: %v", j.Kind, j.ID, err)
-	if out := a.reconcileCodexChat(runCtx, j, &row); out != nil {
+	if out := a.reconcileCodexChat(j, &row); out != nil {
 		return codexChatRow{}, out
 	}
 	return row, nil
@@ -645,19 +742,36 @@ func (a *Agent) deliverCodexChat(runCtx context.Context, j job, c CodexChat, pro
 
 // reconcileCodexChat settles a "sending" row from the rollout and the
 // queue. It returns an end when whether the request arrived is unknown.
-func (a *Agent) reconcileCodexChat(ctx context.Context, j job, row *codexChatRow) *chatOutcome {
-	if p, err := codexChatScan(row.File, row.Thread, row.Offset, row.ClientID); err == nil && p.started {
+// A row it cannot settle stays "sending", so withdrawCodexChats later
+// takes the request out of the queue if it is there.
+func (a *Agent) reconcileCodexChat(j job, row *codexChatRow) *chatOutcome {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	started := func() bool {
+		p, err := codexChatScan(*row)
+		return err == nil && p.started
+	}
+	if started() {
 		a.setCodexChat(j.ID, chatSending, codexQueued, "")
 		row.State = codexQueued
 		return nil
 	}
-	if id, err := codexQueueFind(ctx, row.EngineExe, row.Home, row.Thread, row.ClientID); err == nil && id != "" {
+	id, err := codexQueueFind(ctx, row.server(), row.Thread, row.ClientID)
+	if err == nil && id != "" {
 		a.setCodexChat(j.ID, chatSending, codexQueued, "", "queue_id", id)
 		row.State, row.QueueID = codexQueued, id
 		return nil
 	}
-	why := "AgentNet stopped while queueing this in the Codex chat; whether it arrived is unknown. It was not sent again."
-	a.setCodexChat(j.ID, chatSending, chatSuperseded, why)
+	if err == nil && started() { // Desktop started it between the two looks
+		a.setCodexChat(j.ID, chatSending, codexQueued, "")
+		row.State = codexQueued
+		return nil
+	}
+	why := "AgentNet stopped while queueing this in the Codex chat; whether it arrived is unknown. It was not sent again, and AgentNet takes it out of the queue if it is there."
+	if err == nil {
+		// Neither queued nor started: the add did not land.
+		a.setCodexChat(j.ID, chatSending, chatUnsent, why)
+	}
 	o := chatEnd(stateNeedHuman, why)
 	return &o
 }
@@ -675,33 +789,149 @@ func (a *Agent) setCodexChat(request, from, to, detail string, extra ...string) 
 	}
 }
 
-// unqueueCodexChat deletes a queued request that Desktop has not started.
-// It reports whether the entry is gone without having run.
-func (a *Agent) unqueueCodexChat(j job, row codexChatRow) bool {
+// codexWithdrawRetries are the waits between attempts to take a request
+// out of the queue; tests shorten them.
+var codexWithdrawRetries = []time.Duration{time.Second, 3 * time.Second}
+
+// codexDeleteSettle is how long a deleted entry is watched for Desktop
+// having started it just before the delete.
+var codexDeleteSettle = 3 * time.Second
+
+// codexStillQueued ends a request AgentNet could not take out of the queue.
+const codexStillQueued = "AgentNet could not take it out of the Codex chat's queue yet, so Codex Desktop may still run it when you open that chat; AgentNet removes it when it next can."
+
+// unqueueCodexChat deletes a queued request that Desktop has not started,
+// with retries when patient. It reports whether the entry is gone without
+// having run; a failure keeps the row queued for withdrawCodexChats.
+func (a *Agent) unqueueCodexChat(request string, row codexChatRow, patient bool) bool {
+	attempts := 1
+	if patient {
+		attempts += len(codexWithdrawRetries)
+	}
+	for i := range attempts {
+		if i > 0 {
+			time.Sleep(codexWithdrawRetries[i-1])
+		}
+		gone, err := a.deleteQueuedCodexChat(row)
+		if err == nil {
+			if !gone {
+				return false
+			}
+			a.setCodexChat(request, row.State, codexRemoved, "")
+			return true
+		}
+		a.Logf("Codex chat %s: taking it out of the queue: %v", request, err)
+	}
+	a.setCodexChat(request, row.State, row.State, codexStillQueued)
+	return false
+}
+
+// deleteQueuedCodexChat deletes row's entry. gone is true only when the
+// entry is no longer queued and the history, after a short settle, shows
+// Desktop never started it.
+func (a *Agent) deleteQueuedCodexChat(row codexChatRow) (gone bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	id := row.QueueID
-	if id == "" {
-		var err error
-		if id, err = codexQueueFind(ctx, row.EngineExe, row.Home, row.Thread, row.ClientID); err != nil || id == "" {
-			return false
+	srv := row.server()
+	id, err := codexQueueFind(ctx, srv, row.Thread, row.ClientID)
+	if err != nil {
+		return false, err
+	}
+	if id != "" {
+		if _, err = codexQueueDelete(ctx, srv, row.Thread, id); err != nil {
+			return false, err
+		}
+		if id, err = codexQueueFind(ctx, srv, row.Thread, row.ClientID); err != nil {
+			return false, err
+		}
+		if id != "" {
+			return false, errors.New("the entry is still queued")
 		}
 	}
-	deleted, err := codexQueueDelete(ctx, row.EngineExe, row.Home, row.Thread, id)
-	if err != nil || !deleted {
-		return false
+	// Desktop takes an entry off the queue as it starts it: its user
+	// message lands in the history right after.
+	watch, werr := watchFileWrites(row.File)
+	if werr == nil {
+		defer watch.close()
 	}
-	if p, err := codexChatScan(row.File, row.Thread, row.Offset, row.ClientID); err != nil || p.started {
-		return false
+	settle := time.NewTimer(codexDeleteSettle)
+	defer settle.Stop()
+	for {
+		p, err := codexChatScan(row)
+		if err != nil {
+			return false, err
+		}
+		if p.started {
+			return false, nil
+		}
+		var changes <-chan struct{}
+		if werr == nil {
+			changes = watch.changes
+		}
+		select {
+		case <-changes:
+		case <-settle.C:
+			return true, nil
+		}
 	}
-	a.setCodexChat(j.ID, codexQueued, codexRemoved, "")
-	return true
+}
+
+var codexWithdrawMu sync.Mutex
+
+// withdrawCodexChats takes requests out of Codex chat queues whose run
+// ended without taking them out (a crash or stop, a failed delete): a
+// request nobody is waiting for must not run later, unseen. It runs at
+// daemon start and before each new Codex chat request.
+func (a *Agent) withdrawCodexChats(ctx context.Context) {
+	codexWithdrawMu.Lock()
+	defer codexWithdrawMu.Unlock()
+	rows, err := a.store.db.Query(`SELECT d.request FROM codex_chat_deliveries d JOIN inbox i ON i.id=d.request
+		WHERE d.state IN (?,?) AND i.state NOT IN (?,?)`, chatSending, codexQueued, stateRunning, stateCancelReq)
+	if err != nil {
+		a.Logf("Codex chat queue check: %v", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		row, ok, err := codexChatRowIn(a.store.db, id)
+		if err != nil || !ok {
+			continue
+		}
+		if !a.unqueueCodexChat(id, row, false) {
+			if p, err := codexChatScan(row); err == nil && p.started {
+				a.setCodexChat(id, row.State, chatSuperseded, "Codex Desktop started it after AgentNet stopped waiting.")
+			}
+		}
+	}
 }
 
 // waitCodexChat waits, without polling, for the request's exact turn to
 // end: rollout writes (inotify), the Desktop engine exiting (pidfd), the
 // run's own stop, or the deadline.
 func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, limit time.Duration, activity *runActivity) chatOutcome {
+	// leave ends a wait that has not seen the request start: it takes the
+	// request out of the queue, or says it may still run.
+	leave := func(removed, kept string) chatOutcome {
+		if row.State == codexQueued {
+			if a.unqueueCodexChat(j.ID, row, true) {
+				return chatEnd(stateNotRun, removed)
+			}
+			if p, err := codexChatScan(row); err != nil || !p.started {
+				return chatEnd(stateNeedHuman, kept+" "+codexStillQueued)
+			}
+		}
+		return chatOutcome{}
+	}
 	exit, err := watchProcessExit(row.EnginePID, row.EngineTicks)
 	var exited <-chan struct{}
 	gone := err != nil
@@ -711,7 +941,11 @@ func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, l
 	}
 	watch, err := watchFileWrites(row.File)
 	if err != nil {
-		return chatEnd(stateNeedHuman, "AgentNet cannot follow the Codex chat's history ("+err.Error()+"). It was queued and is not sent again; look in Codex Desktop.")
+		why := "AgentNet cannot follow the Codex chat's history (" + err.Error() + ")."
+		if o := leave(why+" It was taken out of the chat's queue and not sent.", why); o.state != "" {
+			return o
+		}
+		return chatEnd(stateNeedHuman, why+" It was queued and is not sent again; look in Codex Desktop.")
 	}
 	defer watch.close()
 	if limit <= 0 {
@@ -721,15 +955,22 @@ func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, l
 	defer deadline.Stop()
 	reported := false
 	for {
-		p, err := codexChatScan(row.File, row.Thread, row.Offset, row.ClientID)
+		p, err := codexChatScan(row)
 		if err != nil {
-			return chatEnd(stateNeedHuman, "The Codex chat's history could not be read ("+err.Error()+"). It is not sent again.")
+			why := "The Codex chat's history could not be read (" + err.Error() + ")."
+			if o := leave(why+" It was taken out of the chat's queue and not sent.", why); o.state != "" {
+				return o
+			}
+			return chatEnd(stateNeedHuman, why+" It is not sent again.")
 		}
 		if p.started && row.State == codexQueued {
 			a.setCodexChat(j.ID, codexQueued, chatStarted, "", "turn", p.turn)
 			row.State, row.Turn = chatStarted, p.turn
 		}
 		switch {
+		case p.superseded:
+			a.setCodexChat(j.ID, chatStarted, chatSuperseded, p.why)
+			return chatEnd(stateNeedHuman, p.why)
 		case p.done:
 			answer := p.answer
 			if len(answer) > maxOutput {
@@ -737,17 +978,13 @@ func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, l
 			}
 			a.setCodexChat(j.ID, chatStarted, chatAnswered, "", "answer", answer)
 			return chatOutcome{answer: answer}
-		case p.superseded:
-			why := "The Codex chat's turn for this ended without a recorded answer (stopped, or replaced by another turn). It was not sent again."
-			a.setCodexChat(j.ID, chatStarted, chatSuperseded, why)
-			return chatEnd(stateNeedHuman, why)
 		case p.started && !reported:
 			activity.report(activityWorking)
 			reported = true
 		}
 		if gone {
-			if row.State == codexQueued && a.unqueueCodexChat(j, row) {
-				return chatEnd(stateNotRun, "Codex Desktop closed before it started this. It was taken out of the chat's queue and not sent.")
+			if o := leave("Codex Desktop closed before it started this. It was taken out of the chat's queue and not sent.", "Codex Desktop closed before it started this."); o.state != "" {
+				return o
 			}
 			why := "Codex Desktop closed before it answered. It was not sent again."
 			a.setCodexChat(j.ID, row.State, chatSuperseded, why)
@@ -756,15 +993,16 @@ func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, l
 		select {
 		case <-runCtx.Done():
 			if row.State == codexQueued {
-				a.unqueueCodexChat(j, row)
+				a.unqueueCodexChat(j.ID, row, false)
 			}
 			return chatEnd("", "")
 		case <-watch.changes:
 		case <-exited:
 			gone, exited = true, nil // read the history once more: a last write may have landed
 		case <-deadline.C:
-			if row.State == codexQueued && a.unqueueCodexChat(j, row) {
-				return chatEnd(stateNotRun, fmt.Sprintf("Codex Desktop did not start this within %s. It starts queued requests only for a chat it has opened since it started: open that chat in Codex Desktop, then ask again. It was taken out of the queue and not sent.", limit))
+			if o := leave(fmt.Sprintf("Codex Desktop did not start this within %s. It starts queued requests only for a chat it has opened since it started: open that chat in Codex Desktop, then ask again. It was taken out of the queue and not sent.", limit),
+				fmt.Sprintf("Codex Desktop did not start this within %s.", limit)); o.state != "" {
+				return o
 			}
 			why := fmt.Sprintf("No answer from the Codex chat was recorded within %s. It was queued and is not sent again; look in Codex Desktop.", limit)
 			a.setCodexChat(j.ID, row.State, chatSuperseded, why)
@@ -773,9 +1011,20 @@ func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, l
 	}
 }
 
-// codexChatRemoved reports whether request was taken out of a Codex chat's
-// queue before Desktop started it.
-func (a *Agent) codexChatRemoved(request string) bool {
-	var n int
-	return a.store.db.QueryRow(`SELECT count(*) FROM codex_chat_deliveries WHERE request=? AND state=?`, request, codexRemoved).Scan(&n) == nil && n == 1
+// codexChatReached says, from the ledger, how far request got.
+func (a *Agent) codexChatReached(request string) string {
+	row, ok, err := codexChatRowIn(a.store.db, request)
+	switch {
+	case err != nil:
+		return "Whether it reached the Codex chat is unknown."
+	case !ok || row.State == chatUnsent:
+		return "It was not sent to the Codex chat."
+	case row.State == codexRemoved:
+		return "Codex Desktop had not started it; it was taken out of the chat's queue."
+	case row.State == chatSending:
+		return "Whether it reached the Codex chat is unknown; AgentNet takes it out of the queue if it is there."
+	case row.State == codexQueued:
+		return "Codex Desktop had not started it. " + codexStillQueued
+	}
+	return "Codex Desktop had already started it."
 }

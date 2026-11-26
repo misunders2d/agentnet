@@ -44,7 +44,12 @@ func findCodexDesktopEngine(home string) (codexEngine, error) {
 		if engineHome(pid) != home {
 			continue
 		}
-		found = append(found, codexEngine{PID: pid, Ticks: ticks, Exe: exe})
+		// AgentNet runs this exe itself: only an install this user cannot
+		// change, never a planted copy.
+		if !rootOwned(exe) || !rootOwned(filepath.Dir(exe)) {
+			continue
+		}
+		found = append(found, codexEngine{PID: pid, Ticks: ticks, Exe: exe, Env: engineCodexEnv(pid)})
 	}
 	switch len(found) {
 	case 0:
@@ -62,6 +67,29 @@ func hasArg(cmdline []byte, arg string) bool {
 		}
 	}
 	return false
+}
+
+// rootOwned reports whether path is root's and writable by no one else, as
+// a packaged install is.
+func rootOwned(path string) bool {
+	var st unix.Stat_t
+	return unix.Stat(path, &st) == nil && st.Uid == 0 && st.Mode&0o022 == 0
+}
+
+// engineCodexEnv is pid's CODEX_* settings other than CODEX_HOME, which
+// an app server on the same state needs (such as CODEX_SQLITE_HOME).
+func engineCodexEnv(pid int) []string {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return nil
+	}
+	var env []string
+	for _, kv := range bytes.Split(raw, []byte{0}) {
+		if bytes.HasPrefix(kv, []byte("CODEX_")) && !bytes.HasPrefix(kv, []byte("CODEX_HOME=")) && bytes.IndexByte(kv, '=') > 0 {
+			env = append(env, string(kv))
+		}
+	}
+	return env
 }
 
 // engineHome is the canonical Codex home of pid: its CODEX_HOME, or the
@@ -84,6 +112,13 @@ func engineHome(pid int) string {
 			return ""
 		}
 		codexHome = filepath.Join(home, ".codex")
+	}
+	if !filepath.IsAbs(codexHome) {
+		cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+		if err != nil {
+			return ""
+		}
+		codexHome = filepath.Join(cwd, codexHome)
 	}
 	real, err := filepath.EvalSymlinks(codexHome)
 	if err != nil {

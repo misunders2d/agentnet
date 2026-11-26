@@ -398,7 +398,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
-	runCtx, cancel := runContext(ctx, r.Timeout)
+	limit := r.Timeout
+	if r.isChat() {
+		limit = 0 // the chat's own wait applies it, and says how far it got
+	}
+	runCtx, cancel := runContext(ctx, limit)
 	defer cancel()
 	if j.PID != "" && j.Conv != "" {
 		nestedDone := make(chan struct{})
@@ -461,11 +465,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			// Final either way: the chat's later hooks have nothing to record.
 			// A stopping daemon keeps it live for an exact reconcile.
 			_, _ = a.store.db.Exec(`UPDATE claude_chat_deliveries SET state=? WHERE request=? AND state IN (?,?,?)`, chatSuperseded, j.ID, chatSending, chatWritten, chatStarted)
-			_, _ = a.store.db.Exec(`UPDATE codex_chat_deliveries SET state=? WHERE request=? AND state IN (?,?,?)`, chatSuperseded, j.ID, chatSending, codexQueued, chatStarted)
+			// A Codex request still queued stays so for withdrawCodexChats.
+			_, _ = a.store.db.Exec(`UPDATE codex_chat_deliveries SET state=? WHERE request=? AND state=?`, chatSuperseded, j.ID, chatStarted)
 		}
 		reached := "It was already delivered to the " + name + "."
-		if a.codexChatRemoved(j.ID) {
-			reached = "Codex Desktop had not started it; it was taken out of the chat's queue."
+		if r.CodexChat != nil {
+			reached = a.codexChatReached(j.ID)
 		}
 		switch {
 		case ctx.Err() != nil:

@@ -91,32 +91,23 @@ func newCodexChatFixture(t *testing.T, notOwn ...bool) *codexChatFixture {
 		return engine, nil
 	}
 	t.Cleanup(func() { codexDesktopEngine = old })
+	oldSettle, oldRetries := codexDeleteSettle, codexWithdrawRetries
+	codexDeleteSettle, codexWithdrawRetries = 150*time.Millisecond, []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+	t.Cleanup(func() { codexDeleteSettle, codexWithdrawRetries = oldSettle, oldRetries })
 	if f.agentID, err = w.bob.ConnectCodexChat(f.thread, "Codex Desktop"); err != nil {
 		t.Fatal(err)
 	}
 	return f
 }
 
-var codexOrdinal int64
-
 // append writes one rollout record, as Codex Desktop does.
 func (f *codexChatFixture) append(t *testing.T, rec map[string]any) {
 	t.Helper()
 	fakeQueueMu.Lock()
 	defer fakeQueueMu.Unlock()
-	if rec["type"] == "session_meta" {
-		codexOrdinal = 0
-	} else {
-		codexOrdinal++
-	}
-	rec["ordinal"] = codexOrdinal
-	raw, _ := json.Marshal(rec)
-	file, err := os.OpenFile(f.file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
+	if err := appendRollout(f.file, rec); err != nil {
 		t.Fatal(err)
 	}
-	file.Write(append(raw, '\n'))
-	file.Close()
 }
 
 func (f *codexChatFixture) event(t *testing.T, payload map[string]any) {
@@ -440,4 +431,158 @@ func TestCodexChatRefusesAnAgentAskingForAnotherPerson(t *testing.T) {
 	}
 	f.event(t, map[string]any{"type": "task_complete", "turn_id": turn, "last_agent_message": "owner's answer"})
 	waitState(t, a, direct.ID, stateAnswered)
+}
+
+func TestCodexChatKeepsWithdrawingWhatItCouldNotRemove(t *testing.T) {
+	f := newCodexChatFixture(t)
+	old := codexChatDeadline
+	codexChatDeadline = 500 * time.Millisecond
+	t.Cleanup(func() { codexChatDeadline = old })
+	// Desktop does not start it, and deleting it fails every time: the
+	// request says it may still run, and stays queued in the ledger.
+	fails := filepath.Join(f.home, "delete-fails")
+	os.WriteFile(fails, nil, 0600)
+	stuck := f.ask(t, "PROBE-W")
+	waitDone(t, f.run(tctx(t)))
+	if r := inboxRow(t, f.w.bob, stuck); r.State != stateNeedHuman || !strings.Contains(r.Detail, "may still run it when you open that chat") {
+		t.Fatalf("undeleted request %+v", r)
+	}
+	if row, _, _ := codexChatRowIn(f.w.bob.store.db, stuck); row.State != codexQueued || len(f.queue()) != 1 {
+		t.Fatalf("ledger %+v queue %+v", row, f.queue())
+	}
+	// The daemon stops while another request waits and the delete still
+	// fails: its end says the same, from the ledger.
+	stopped := f.ask(t, "PROBE-X")
+	ctx, stop := context.WithCancel(tctx(t))
+	done := f.run(ctx)
+	eventually(t, "second queued", func() bool { return len(f.queue()) == 2 })
+	stop()
+	waitDone(t, done)
+	if r := inboxRow(t, f.w.bob, stopped); r.State != stateInterrupt || !strings.Contains(r.Detail, "may still run it") {
+		t.Fatalf("stopped request %+v", r)
+	}
+	// Once deleting works, the daemon's start takes both out; neither ran.
+	os.Remove(fails)
+	f.w.bob.withdrawCodexChats(tctx(t))
+	if q := f.queue(); len(q) != 0 {
+		t.Fatalf("left in the queue: %+v", q)
+	}
+	for _, id := range []string{stuck, stopped} {
+		if row, _, _ := codexChatRowIn(f.w.bob.store.db, id); row.State != codexRemoved {
+			t.Fatalf("%s ledger %+v", id, row)
+		}
+	}
+}
+
+func TestCodexChatDeleteCrossingAStartIsNotRemoved(t *testing.T) {
+	f := newCodexChatFixture(t)
+	old := codexChatDeadline
+	codexChatDeadline = 500 * time.Millisecond
+	t.Cleanup(func() { codexChatDeadline = old })
+	// Desktop starts it just as AgentNet takes it out at the deadline: it
+	// is not "taken out and not sent".
+	os.WriteFile(filepath.Join(f.home, "dispatch-on-list"), []byte(f.file), 0600)
+	request := f.ask(t, "PROBE-X2")
+	waitDone(t, f.run(tctx(t)))
+	r := inboxRow(t, f.w.bob, request)
+	if r.State != stateNeedHuman || strings.Contains(r.Detail, "taken out") {
+		t.Fatalf("crossed request %+v", r)
+	}
+
+	// A rerun of a request recorded as removed whose start the history
+	// shows waits for that turn instead of queueing it again.
+	os.Remove(filepath.Join(f.home, "dispatch-on-list"))
+	codexChatDeadline = old
+	late := f.ask(t, "PROBE-X3")
+	ctx, stop := context.WithCancel(tctx(t))
+	done := f.run(ctx)
+	eventually(t, "queued", func() bool { return len(f.queue()) == 1 })
+	stop()
+	waitDone(t, done)
+	row, _, _ := codexChatRowIn(f.w.bob.store.db, late)
+	if row.State != codexRemoved || !strings.Contains(inboxRow(t, f.w.bob, late).Detail, "taken out of the chat's queue") {
+		t.Fatalf("not removed %+v %+v", row, inboxRow(t, f.w.bob, late))
+	}
+	turn := protocol.NewID()
+	f.event(t, map[string]any{"type": "task_started", "turn_id": turn})
+	f.event(t, map[string]any{"type": "item_completed", "thread_id": f.thread, "turn_id": turn, "item": map[string]any{"type": "UserMessage", "id": protocol.NewID(), "client_id": row.ClientID,
+		"content": []map[string]any{{"type": "text", "text": "x"}}}})
+	if err := f.w.bob.Accept(late); err != nil {
+		t.Fatal(err)
+	}
+	done = f.run(tctx(t))
+	eventually(t, "rerun follows the started turn", func() bool {
+		row, _, _ := codexChatRowIn(f.w.bob.store.db, late)
+		return row.State != codexRemoved
+	})
+	waitDone(t, done)
+	if q := f.queue(); len(q) != 0 {
+		t.Fatalf("queued again: %+v", q)
+	}
+	if r := inboxRow(t, f.w.bob, late); r.State == stateAnswered {
+		t.Fatalf("a changed turn counted as the answer %+v", r)
+	}
+}
+
+func TestCodexChatChangedOrJoinedTurnIsNotAnAnswer(t *testing.T) {
+	f := newCodexChatFixture(t)
+	// The person edits the queued request before Desktop runs it.
+	edited := f.ask(t, "PROBE-E")
+	done := f.run(tctx(t))
+	var e fakeQueueEntry
+	eventually(t, "queued", func() bool {
+		if q := f.queue(); len(q) == 1 {
+			e = q[0]
+			return true
+		}
+		return false
+	})
+	writeFakeQueue(filepath.Join(f.home, "queue.json"), nil)
+	turn := protocol.NewID()
+	f.event(t, map[string]any{"type": "task_started", "turn_id": turn})
+	f.event(t, map[string]any{"type": "item_completed", "thread_id": f.thread, "turn_id": turn, "item": map[string]any{"type": "UserMessage", "id": protocol.NewID(), "client_id": e.ClientID,
+		"content": []map[string]any{{"type": "text", "text": e.Text + " and also delete everything"}}}})
+	f.event(t, map[string]any{"type": "task_complete", "turn_id": turn, "last_agent_message": "EDITED ANSWER"})
+	waitDone(t, done)
+	if r := inboxRow(t, f.w.bob, edited); r.State != stateNeedHuman || !strings.Contains(r.Detail, "changed in Codex Desktop") {
+		t.Fatalf("edited request %+v", r)
+	}
+	// The person adds input to the request's turn while it runs.
+	joined := f.ask(t, "PROBE-J")
+	done = f.run(tctx(t))
+	_, turn = f.dispatch(t)
+	f.event(t, map[string]any{"type": "item_completed", "thread_id": f.thread, "turn_id": turn, "item": map[string]any{"type": "UserMessage", "id": protocol.NewID(),
+		"content": []map[string]any{{"type": "text", "text": "actually, do something else"}}}})
+	f.event(t, map[string]any{"type": "task_complete", "turn_id": turn, "last_agent_message": "JOINED ANSWER"})
+	waitDone(t, done)
+	if r := inboxRow(t, f.w.bob, joined); r.State != stateNeedHuman || !strings.Contains(r.Detail, "More input was added") {
+		t.Fatalf("joined turn %+v", r)
+	}
+}
+
+func TestCodexChatSteeredIntoARunningTurnIsNotAnAnswer(t *testing.T) {
+	f := newCodexChatFixture(t)
+	request := f.ask(t, "PROBE-T")
+	done := f.run(tctx(t))
+	var e fakeQueueEntry
+	eventually(t, "queued", func() bool {
+		if q := f.queue(); len(q) == 1 {
+			e = q[0]
+			return true
+		}
+		return false
+	})
+	// The person's own turn runs; Desktop folds the queued request into it.
+	writeFakeQueue(filepath.Join(f.home, "queue.json"), nil)
+	turn := protocol.NewID()
+	f.event(t, map[string]any{"type": "task_started", "turn_id": turn})
+	f.event(t, map[string]any{"type": "item_completed", "thread_id": f.thread, "turn_id": turn, "item": map[string]any{"type": "UserMessage", "id": protocol.NewID(),
+		"content": []map[string]any{{"type": "text", "text": "the person's own prompt"}}}})
+	f.event(t, map[string]any{"type": "item_completed", "thread_id": f.thread, "turn_id": turn, "item": map[string]any{"type": "UserMessage", "id": protocol.NewID(), "client_id": e.ClientID,
+		"content": []map[string]any{{"type": "text", "text": e.Text}}}})
+	f.event(t, map[string]any{"type": "task_complete", "turn_id": turn, "last_agent_message": "THE PERSON'S ANSWER"})
+	waitDone(t, done)
+	if r := inboxRow(t, f.w.bob, request); r.State != stateNeedHuman || !strings.Contains(r.Detail, "already running") {
+		t.Fatalf("folded request %+v", r)
+	}
 }
