@@ -662,7 +662,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity, first: first}
 	}
 	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity, first: first}
-	if agy != nil {
+	if agy != nil && !reused {
+		// A reused agy's stderr is not tied to this turn (a late notice of
+		// the previous one): its result alone classifies it, denied_actions
+		// and sign-in errors included.
 		cmd.Stderr = activityWriter{Writer: io.MultiWriter(&stderr, &agyErr), activity: activity, first: first}
 	}
 	var roomBridge *codexRoomBridge
@@ -852,6 +855,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		if runErr != nil {
 			a.Logf("%s %s: launch failed: setup_ms=%d start_ms=%d (%v)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds(), runErr)
+			// Nothing the process writes now reaches this turn's decoders.
+			wp.out.set(nil)
+			wp.errOut.set(nil)
+			if agyTurn != nil {
+				*agy = agyStream{}
+				agyErr.reset()
+			}
 		} else {
 			if reused {
 				a.Logf("%s %s: warm %s session %s continued: setup_ms=%d turn=%d", j.Kind, j.ID, r.Harness, key.session, setupMS, wp.turns+1)
@@ -878,6 +888,18 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			case <-writeFailed:
 			}
 			if agyTurn != nil {
+				if !agyTurn.strict && isClosed(agyTurn.failed) && runCtx.Err() == nil {
+					// A new agy that failed at launch (sign-in) may exit
+					// before reading its message: its stderr says why, and
+					// is complete once the process has exited.
+					drain := time.NewTimer(2 * time.Second)
+					select {
+					case <-wp.exited:
+					case <-runCtx.Done():
+					case <-drain.C:
+					}
+					drain.Stop()
+				}
 				// The turn's decoders are read below and here: nothing more
 				// reaches them once detached (set waits for a write in
 				// progress).

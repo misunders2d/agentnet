@@ -191,8 +191,8 @@ func (t *agyWarmTurn) begin() {
 // It does not wait for the write to report completion: agy may read the
 // event and answer before the writing goroutine resumes.
 func (t *agyWarmTurn) settle() bool {
+	t.state.CompareAndSwap(agyTurnWaiting, agyTurnRefused) // before the worker can wake
 	t.once.Do(func() { close(t.settled) })
-	t.state.CompareAndSwap(agyTurnWaiting, agyTurnRefused)
 	return t.begun()
 }
 
@@ -268,7 +268,7 @@ func (s *agyStream) result(runErr error, d *agyDiagnostics) (body, status, atten
 	status = envelope.StatusFailed
 	detail := strings.ToLower(s.detail)
 	switch {
-	case d.permission || s.denied:
+	case d.permission || s.denied && !s.damaged:
 		return "", status, nativeStatusPrefix + "Antigravity could not obtain a native tool approval. Review the request in your native setup; AgentNet did not change permissions or retry it."
 	case d.auth || s.complete && !s.damaged && (strings.Contains(detail, "authentication required") || strings.Contains(detail, "unauthenticated")):
 		return "", status, nativeStatusPrefix + "Antigravity requires sign-in. Open agy in its configured directory and sign in, then explicitly retry this request."

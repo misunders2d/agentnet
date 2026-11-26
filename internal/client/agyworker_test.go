@@ -27,6 +27,15 @@ func TestAgyProcessHelper(t *testing.T) {
 		t.Skip("native stand-in only")
 	}
 	args := os.Args[slices.Index(os.Args, "--")+1:]
+	if os.Getenv("AGENTNET_TEST_AGY_MODE") == "authearly" {
+		// A sign-in failure before agy reads its message.
+		if f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+			json.NewEncoder(f).Encode(agyTestRun{Args: args})
+			f.Close()
+		}
+		fmt.Fprintln(os.Stderr, "authentication required")
+		os.Exit(1)
+	}
 	// One user event per line, as agy reads them: a cold run's input ends
 	// after its event, a warm process's stays open for the next turn.
 	stdin := bufio.NewReader(os.Stdin)
@@ -252,7 +261,7 @@ func TestAgyWorkerStrayEventNotReused(t *testing.T) {
 }
 
 func TestAgyWorkerRefusesFalseSuccess(t *testing.T) {
-	for _, tc := range []struct{ mode, state string }{{"deny", stateNeedHuman}, {"auth", stateNeedHuman}, {"partial", stateJobFailed}} {
+	for _, tc := range []struct{ mode, state string }{{"deny", stateNeedHuman}, {"auth", stateNeedHuman}, {"authearly", stateNeedHuman}, {"partial", stateJobFailed}} {
 		t.Run(tc.mode, func(t *testing.T) {
 			log, dir := agyFixture(t, tc.mode)
 			w := newWorld(t, "")
