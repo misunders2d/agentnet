@@ -26,10 +26,12 @@ var ErrAgentCatalogFull = errors.New("local agent catalog is full; choose an exi
 var ErrAgentHarnessConflict = errors.New("this harness already has an enabled agent on this device; update that agent instead")
 var ErrAgentHarnessAmbiguous = errors.New("choose the current agent for this harness before using its legacy configurations")
 
-func enabledHarnessCount(entries []LocalAgentInfo, harness string) int {
+// enabledHarnessCount counts the enabled agents in r's lane: one per
+// harness, and one per opted-in Claude chat.
+func enabledHarnessCount(entries []LocalAgentInfo, r Responder) int {
 	n := 0
 	for _, entry := range entries {
-		if entry.Responder != nil && entry.Responder.Harness == harness {
+		if e := entry.Responder; e != nil && e.Harness == r.Harness && (r.Chat == nil || e.Chat != nil && e.Chat.Handle == r.Chat.Handle) {
 			n++
 		}
 	}
@@ -86,7 +88,14 @@ func (a *Agent) LocalAgents() ([]LocalAgentInfo, error) {
 	return entries, err
 }
 
-func copyResponder(r Responder) Responder { r.Context = append([]string(nil), r.Context...); return r }
+func copyResponder(r Responder) Responder {
+	r.Context = append([]string(nil), r.Context...)
+	if r.Chat != nil {
+		chat := *r.Chat
+		r.Chat = &chat
+	}
+	return r
+}
 func (a *Agent) CreateLocalAgent(label string, r Responder) (protocol.AgentRecord, error) {
 	r = copyResponder(r)
 	if err := validateResponder(&r); err != nil {
@@ -109,7 +118,7 @@ func (a *Agent) CreateLocalAgent(label string, r Responder) (protocol.AgentRecor
 	if err != nil {
 		return protocol.AgentRecord{}, err
 	}
-	if enabledHarnessCount(entries, r.Harness) != 0 {
+	if enabledHarnessCount(entries, r) != 0 {
 		return protocol.AgentRecord{}, ErrAgentHarnessConflict
 	}
 	if len(entries) >= protocol.MaxAgentCatalog {
@@ -163,7 +172,7 @@ func (a *Agent) SetLocalAgentResponder(id string, r *Responder) error {
 	if !found {
 		return ErrUnknownAgent
 	}
-	if normalized != nil && enabledHarnessCount(entries, normalized.Harness) > 1 {
+	if normalized != nil && enabledHarnessCount(entries, *normalized) > 1 {
 		return ErrAgentHarnessConflict
 	}
 	raw, _ := json.Marshal(entries)
@@ -203,14 +212,14 @@ func (a *Agent) ResolveExecutorIn(q dbq, id string, defaultResponder *Responder)
 		if defaultResponder == nil {
 			return nil, nil
 		}
-		if enabledHarnessCount(entries, defaultResponder.Harness) > 1 {
+		if enabledHarnessCount(entries, *defaultResponder) > 1 {
 			return nil, ErrAgentHarnessAmbiguous
 		}
 		return &ExecutorStamp{Responder: copyResponder(*defaultResponder)}, nil
 	}
 	for _, entry := range entries {
 		if entry.Record.ID == id && entry.Responder != nil {
-			if enabledHarnessCount(entries, entry.Responder.Harness) > 1 {
+			if enabledHarnessCount(entries, *entry.Responder) > 1 {
 				return nil, ErrAgentHarnessAmbiguous
 			}
 			r := copyResponder(*entry.Responder)
@@ -233,7 +242,7 @@ func (a *Agent) PublicAgentCatalog() ([]protocol.AgentRecord, error) {
 	}
 	records := make([]protocol.AgentRecord, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Responder != nil && enabledHarnessCount(entries, entry.Responder.Harness) == 1 {
+		if entry.Responder != nil && enabledHarnessCount(entries, *entry.Responder) == 1 {
 			records = append(records, entry.Record)
 		}
 	}

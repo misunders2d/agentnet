@@ -87,7 +87,13 @@ func (a *Agent) readiness(humanOnly bool) (DaemonReadiness, error) {
 		default:
 			r.Harness = entry.Responder.Harness
 			h, ok := Harnesses[r.Harness]
-			if !ok {
+			if chat := entry.Responder.Chat; chat != nil {
+				if _, err := a.claudeChatTarget(a.store.db, *chat); err != nil {
+					r.Problem = err.Error()
+				} else {
+					r.Available = true
+				}
+			} else if !ok {
 				r.Problem = "unsupported harness"
 			} else if _, err := resolveNativeLaunch(h.bin); err != nil {
 				r.Problem = "harness is not available in the daemon's launch environment"

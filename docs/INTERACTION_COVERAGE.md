@@ -4357,8 +4357,11 @@ within 2 s and the real agy reply in its topic at 38 s. From the linked phone
 device, a reply follow-up in that topic was answered by the same native agy
 conversation, which recalled the earlier answer. The phone's own
 "Chat with" start was held as "Not sent … joins when its computer connects":
-it asks before the laptop has admitted the new topic invite. That held send
-is not agy-specific and remains open. Focused regression:
+it asks before the laptop has admitted the new topic invite. A no-model
+Claude fixture showed the same hold. Retry about 8 s later sent the ask, and
+real agy answered in the phone's topic at 48 s. The first-attempt hold remains
+open. The opt-in native catalog browser test also failed on base while
+waiting for the removed “Set up harnesses” button. Focused regression:
 `TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
 
 Holonet and the legacy interface initially disabled agent-only rows on the

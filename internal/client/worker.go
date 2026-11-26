@@ -322,11 +322,27 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		return
 	}
 	h := Harnesses[r.Harness]
+	chat := r.Chat != nil
+	if chat {
+		// An opted-in Claude chat takes one plain message: no files, no
+		// run folder, no edit of a message it already has (claudechat.go).
+		switch {
+		case j.Receiver != nil:
+			a.endJob(j.ID, stateNotRun, "a Claude chat agent is not a reply receiver", j.nativeAttempt)
+			return
+		case j.Attachments > 0:
+			a.endJob(j.ID, stateNeedHuman, "This request has files, which cannot be passed to a Claude chat. Nothing was sent.", j.nativeAttempt)
+			return
+		case j.editOf != "":
+			a.endJob(j.ID, stateNotRun, "Edit follow-up did not run: the Claude chat already has the original message", j.nativeAttempt)
+			return
+		}
+	}
 	// The session is planned first: whether the run gets an outbox, and its
 	// prompt names one, depends on it (runfiles.go). A planning error ends
 	// the job below, after the checks that come first.
 	plan, planErr := a.planSession(j, r, h)
-	if j.run = a.newRun(j, planErr == nil && outboxFor(j, h, plan.resume)); j.run != nil {
+	if j.run = a.newRun(j, !chat && planErr == nil && outboxFor(j, h, plan.resume)); j.run != nil {
 		defer func() {
 			if err := j.run.remove(); err != nil {
 				a.Logf("%s %s: run folder not removed: %v", j.Kind, j.ID, err)
@@ -353,7 +369,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	if err == nil {
 		prompt += followupContext + a.requestFollowupFiles(ctx, j)
-		if j.Executor != nil && j.Receiver == nil {
+		if j.Executor != nil && j.Receiver == nil && !chat {
 			prompt += modelReportPrompt
 		}
 		if err = j.run.seal(); err != nil {
@@ -429,6 +445,33 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		})
 	}()
 
+	if chat {
+		out := a.runClaudeChat(runCtx, j, r, prompt, activity)
+		cancel()
+		<-watchDone
+		if ctx.Err() == nil && out.answer == "" {
+			// Final either way: the chat's later hooks have nothing to record.
+			// A stopping daemon keeps it live for an exact reconcile.
+			_, _ = a.store.db.Exec(`UPDATE claude_chat_deliveries SET state=? WHERE request=? AND state IN (?,?,?)`, chatSuperseded, j.ID, chatSending, chatWritten, chatStarted)
+		}
+		switch {
+		case ctx.Err() != nil:
+			a.endJob(j.ID, stateInterrupt, "the daemon stopped while waiting for the Claude chat; it is not sent again", j.nativeAttempt)
+		case stopWhy != "":
+			a.endJob(j.ID, stateNotDelivered, "stopped and not sent: "+stopWhy+". It was already delivered to the Claude chat.", j.nativeAttempt)
+		case cancelled.Load():
+			a.finishRun(ctx, j, r, envelope.StatusCancelled, "cancelled by the recipient", "", false, false, func(bool) {})
+		case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+			a.finishRun(ctx, j, r, envelope.StatusTimeout, fmt.Sprintf("stopped after %s", r.Timeout), "", false, false, func(bool) {})
+		case out.state != "":
+			a.endJob(j.ID, out.state, out.detail, j.nativeAttempt)
+		case strings.TrimSpace(out.answer) == "":
+			a.endJob(j.ID, stateNeedHuman, "The Claude chat's turn ended without an answer.", j.nativeAttempt)
+		default:
+			a.finishRun(ctx, j, r, envelope.StatusDone, strings.TrimSpace(out.answer), out.answer, false, true, func(bool) {})
+		}
+		return
+	}
 	var stdout, stderr limitedBuffer
 	stdout.max, stderr.max = maxOutput, 4<<10
 	outPath := ""
@@ -997,8 +1040,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			}
 		}
 	}
-	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
 	cleanTurn := !stdout.truncated && nativeFailure == "" && runErr == nil && !cancelled.Load() && stopWhy == "" && ctx.Err() == nil
+	a.finishRun(ctx, j, r, status, body, output, stdout.truncated, cleanTurn, endWarm)
+}
+
+// finishRun ends a run that produced its output: the agent's own question
+// or proposal, waiting for other agents, or the reply (worker.go, claudechat.go).
+func (a *Agent) finishRun(ctx context.Context, j job, r *Responder, status, body, output string, truncated, cleanTurn bool, endWarm func(bool)) {
+	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
 	if outcome == outcomeNeedsHuman && status == envelope.StatusDone {
 		// The agent's own question to its person ended its turn cleanly: its
 		// warm worker stays for the answer (MEL-746). AgentNet's own
@@ -1034,7 +1083,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		switch {
 		case !j.proposalEligible():
 			why = r.Harness + " proposed an action, which only a question's own answer can carry, so nothing was sent. Its proposal:\n" + rest
-		case stdout.truncated:
+		case truncated:
 			why = r.Harness + " proposed an action, but its text was cut off, so nothing was sent. What it wrote:\n" + rest
 		case strings.TrimSpace(rest) == "":
 			why = r.Harness + " proposed an action but wrote no task"
@@ -1050,8 +1099,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	// Asks to other agents still out (MEL-540): the request waits for them
 	// and runs again with their results, instead of answering now. A reply
-	// tagging present agents asks them first (agenttags.go).
-	if status == envelope.StatusDone && j.Receiver == nil {
+	// tagging present agents asks them first (agenttags.go). A Claude chat
+	// is never written a second time, so its rerun could not read their
+	// results: its answer is sent as it is.
+	if status == envelope.StatusDone && j.Receiver == nil && r.Chat == nil {
 		a.routeAgentTags(ctx, j, r.Harness, body)
 		if parked, err := a.parkForHelpers(j, body); err != nil {
 			a.Logf("%s %s: could not wait for other agents' results: %v", j.Kind, j.ID, err)
