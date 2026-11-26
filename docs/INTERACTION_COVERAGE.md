@@ -4354,3 +4354,11 @@ conversation, which recalled the earlier answer. The phone's own
 it asks before the laptop has admitted the new topic invite. That held send
 is not agy-specific and remains open. Focused regression:
 `TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
+
+Holonet and the legacy interface initially disabled agent-only rows on the
+same native-hook check. Both now use Classic's managed-agent selection and
+native-only review and apply flow from gallery revision `73fc2da`. The
+rendered regression exercised Antigravity alone at 1280 px and alongside
+Claude at 390 px in both interfaces. Antigravity was selectable, its agent
+was created in the chosen folder, and the mixed flow sent only Claude to
+native review and apply. A tool with neither route remained disabled.
