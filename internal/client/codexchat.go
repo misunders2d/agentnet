@@ -29,8 +29,9 @@ import (
 // Codex Desktop runs its engine over private stdio, so AgentNet never joins
 // its session: a short-lived app server of Desktop's own bundled engine,
 // on the same Codex home, adds to the queue, lists it and deletes from it.
-// Desktop starts a queued entry only while that chat is open in its window;
-// an entry it has not started by the deadline, or when Desktop closes, is
+// Desktop starts a queued entry only for a chat it has opened since it
+// started (switching to another chat afterwards does not stop it); an
+// entry it has not started by the deadline, or when Desktop closes, is
 // deleted from the queue, so it never runs later unseen.
 //
 // The ledger row, with the client ID, is committed before the add; a run
@@ -763,7 +764,7 @@ func (a *Agent) waitCodexChat(runCtx context.Context, j job, row codexChatRow, l
 			gone, exited = true, nil // read the history once more: a last write may have landed
 		case <-deadline.C:
 			if row.State == codexQueued && a.unqueueCodexChat(j, row) {
-				return chatEnd(stateNotRun, fmt.Sprintf("Codex Desktop did not start this within %s. It runs queued requests only while that chat is open in its window. It was taken out of the queue and not sent.", limit))
+				return chatEnd(stateNotRun, fmt.Sprintf("Codex Desktop did not start this within %s. It starts queued requests only for a chat it has opened since it started: open that chat in Codex Desktop, then ask again. It was taken out of the queue and not sent.", limit))
 			}
 			why := fmt.Sprintf("No answer from the Codex chat was recorded within %s. It was queued and is not sent again; look in Codex Desktop.", limit)
 			a.setCodexChat(j.ID, row.State, chatSuperseded, why)

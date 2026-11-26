@@ -466,9 +466,9 @@ AgentNet run.
 
 Requests from your own devices that name this agent are added once to that
 chat's own queue, as Codex Desktop's own queued messages are; requests from
-other people are not sent. Codex Desktop runs a queued request only while
-that chat is open in its window, with the chat's own model, settings, tools
-and approvals; AgentNet sends no permission mode or bypass. Its answer is
+other people are not sent. Codex Desktop runs a queued request once it
+has opened that chat since it started, with the chat's own model, settings,
+tools and approvals; AgentNet sends no permission mode or bypass. Its answer is
 the turn that request starts. A request Codex Desktop has not started by the
 deadline, or when it closes, is taken out of the queue and not sent. A turn
 stopped or replaced first, or a Desktop that closes mid-turn, ends as "not

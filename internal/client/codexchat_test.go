@@ -250,7 +250,7 @@ func TestCodexChatUnstartedRequestLeavesTheQueue(t *testing.T) {
 	// The chat is not open in Desktop: nothing starts it before the deadline.
 	request := f.ask(t, "PROBE-D")
 	waitDone(t, f.run(tctx(t)))
-	if r := inboxRow(t, f.w.bob, request); r.State != stateNotRun || !strings.Contains(r.Detail, "only while that chat is open") {
+	if r := inboxRow(t, f.w.bob, request); r.State != stateNotRun || !strings.Contains(r.Detail, "only for a chat it has opened") {
 		t.Fatalf("unstarted request %+v", r)
 	}
 	if q := f.queue(); len(q) != 0 {

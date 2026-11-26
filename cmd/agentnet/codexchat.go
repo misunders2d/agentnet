@@ -52,7 +52,7 @@ func runCodexChatCmd(a *client.Agent, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Connected as agent %s. Keep that chat open in Codex Desktop to run requests; disable it in Agents to stop.\n", id)
+		fmt.Fprintf(out, "Connected as agent %s. Codex Desktop runs requests once it has opened that chat since it started; disable the agent in Agents to stop.\n", id)
 		return nil
 	}
 	return usage
