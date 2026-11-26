@@ -40,6 +40,7 @@ run_partition() {
 				if ($0=="TestWorkerStartupTimingAndLaunchFailure") part=23
 				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=2
 				if ($0=="TestRoomReciprocalRootQuestions") part=19
+				if ($0=="TestRoomBusyAncestorCallback") part=4
 				if ($0=="TestGroupParticipationHistoryInvalidUpgradeRecovery") part=21
 			}
 			if (client && n==12) {

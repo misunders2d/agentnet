@@ -27,7 +27,9 @@ sections, with a chronological Recent view and a flat search.
 at claim, duplicate delivery and out-of-order revisions.
 `TestEditRemoteGroupRequestSteersOrFollowsUp` covers a signed edit crossing
 devices, acknowledged native input, an original finishing before handover,
-a follow-up with earlier result context, and the stopped-run boundary.
+a follow-up with earlier result context, delivery after a transport outage,
+and the stopped-run boundary. The retry uses the exact edit job's stored
+result and checks participation again while quoting the original turn.
 `TestEditFollowsUpCompletedRequest` exercises the direct worker path.
 `TestLocalChangesRendered` checks immediate editing under a held write,
 failure, retry, concurrent linked-device text, and all five edit outcomes at

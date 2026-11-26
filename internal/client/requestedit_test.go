@@ -66,7 +66,12 @@ func TestEditRemoteGroupRequestSteersOrFollowsUp(t *testing.T) {
 	for _, mode := range []string{"native", "finished", "finished-before-handover", "stopped"} {
 		t.Run(mode, func(t *testing.T) {
 			stub := installAgentStub(t)
-			w, _, packet, _ := groupTurnsFixture(t)
+			var faults *faults
+			w, _, packet, _ := groupTurnsFixture(t, func(a *Agent) {
+				if a.Address == "bob/laptop" && mode == "finished" {
+					faults = injectFaults(a)
+				}
+			})
 			a := w.bob
 			p := p6Member(t, w.alice, a, packet.State.Conv)
 			if err := a.Approve(w.alice.Address); err != nil {
@@ -154,6 +159,13 @@ func TestEditRemoteGroupRequestSteersOrFollowsUp(t *testing.T) {
 				if err != nil || !found || child.editOf != id || child.Body != "Write the comparison in English" {
 					t.Fatalf("follow-up was not bound to the original run: %+v %t %v", child, found, err)
 				}
+				if mode == "finished" {
+					if faults == nil {
+						t.Fatal("missing transport fault fixture")
+					}
+					t.Setenv("AGENT_ANSWER", "Corrected result in English")
+					faults.add("POST", "/v1/messages", 1<<20, false)
+				}
 				a.runJob(tctx(t), child, responder, nil)
 				if stub.runs() != wantRuns {
 					var state, detail string
@@ -162,6 +174,27 @@ func TestEditRemoteGroupRequestSteersOrFollowsUp(t *testing.T) {
 				}
 				if mode == "finished" && !strings.Contains(stub.last(), "Earlier result: blue had the clearer contrast") {
 					t.Fatal("follow-up lost the original result")
+				}
+				if mode == "finished" {
+					var result, state string
+					err := a.store.db.QueryRow(`SELECT o.id,o.state FROM inbox i JOIN outbox o ON o.id=i.result_id WHERE i.id=?`, child.ID).Scan(&result, &state)
+					if err != nil || state != stateQueued {
+						t.Fatalf("edit answer did not stay queued during the outage: %s %v", state, err)
+					}
+					if held, err := a.holdEndedOutputs(result); err != nil || held != 0 {
+						t.Fatalf("valid edit answer held at retry: %d %v", held, err)
+					}
+					faults.mu.Lock()
+					faults.rules = nil
+					faults.mu.Unlock()
+					if err := a.FlushOutbox(tctx(t)); err != nil {
+						t.Fatal(err)
+					}
+					eventually(t, "queued edit answer delivered to the requester", func() bool {
+						var got bool
+						err := w.alice.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM inbox WHERE conv=? AND reply_to=? AND body LIKE ?)`, ref.Conv, ref.ID, "%Corrected result in English%").Scan(&got)
+						return err == nil && got
+					})
 				}
 			}
 			want := "answered"

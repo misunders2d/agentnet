@@ -1116,10 +1116,21 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	// An edit's answer quotes the signed original. The locally created edit
+	// job still has to own this exact result, under the original participation.
 	rows, err := tx.Query(`SELECT o.id, o.conv, o.pid, coalesce(i.id, ''), coalesce(i.sender, ''), coalesce(i.verified_by, ''),
-		coalesce(i.kind, ''), coalesce(i.local, 0), coalesce(i.target, ''),
+		coalesce(i.kind, ''), CASE WHEN i.sub='`+requestEditJob+`' THEN
+		 coalesce((SELECT original.local FROM inbox original WHERE original.id=i.reply_to),0) ELSE coalesce(i.local,0) END,
+		coalesce(i.target, ''), CASE WHEN i.sub='`+requestEditJob+`' THEN i.reply_to ELSE '' END,
 		CASE WHEN coalesce(o.status,'') <> 'progress' THEN coalesce(i.state,'') ELSE '' END
-		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.kind IN ('answer','result') AND i.lid=o.reply_to AND i.conv=o.conv AND i.pid=o.pid) AND (coalesce(o.status,'') = 'progress' OR EXISTS (
+		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.kind IN ('answer','result') AND i.conv=o.conv AND i.pid=o.pid AND (
+		 i.lid=o.reply_to OR (i.sub='`+requestEditJob+`' AND i.replica=0 AND coalesce(o.status,'')<>'progress'
+		 AND i.queued_followup_parent=i.reply_to AND EXISTS (SELECT 1 FROM inbox original WHERE original.id=i.reply_to
+		 AND (original.id=o.reply_to OR original.lid=o.reply_to) AND original.conv=i.conv AND original.pid=i.pid
+		 AND original.ref_id IS NULL AND original.replica=0 AND original.verified_by=i.verified_by
+		 AND original.sender=i.sender AND original.attempts=i.queued_followup_attempt
+		 AND original.state IN ('answered','needs_human','resolved')))))
+		 AND (coalesce(o.status,'') = 'progress' OR EXISTS (
 		 SELECT 1 FROM outbox first WHERE first.id = i.result_id AND first.conv = o.conv AND first.pid = o.pid
 		 AND first.lid = o.lid AND first.reply_to = o.reply_to AND first.body = o.body
 		 AND coalesce(first.agent_id,'') = coalesce(o.agent_id,'')))
@@ -1135,7 +1146,7 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 	for rows.Next() {
 		var o out
 		var target string
-		if err := rows.Scan(&o.id, &o.req.Conv, &o.req.PID, &o.req.ID, &o.req.Sender, &o.req.Key, &o.req.Kind, &o.req.Local, &target, &o.req.State); err != nil {
+		if err := rows.Scan(&o.id, &o.req.Conv, &o.req.PID, &o.req.ID, &o.req.Sender, &o.req.Key, &o.req.Kind, &o.req.Local, &target, &o.req.EditOf, &o.req.State); err != nil {
 			rows.Close()
 			return 0, err
 		}
