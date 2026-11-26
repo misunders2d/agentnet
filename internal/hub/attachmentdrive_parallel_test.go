@@ -141,7 +141,7 @@ func TestRelayAttachmentDriveSmallFileThroughput(t *testing.T) {
 	peak := delayed.peak
 	delayed.mu.Unlock()
 	t.Logf("delayed-provider %d files %d bytes: %.2f files/s %.0f bytes/s elapsed=%s live-local-custody=%s live-remote=%s peak=%d", total, size, float64(total)/elapsed.Seconds(), float64(size)/elapsed.Seconds(), elapsed, localLatency, liveLatency, peak)
-	if peak > 4 {
+	if peak > attachmentDriveTransfers {
 		t.Fatalf("unbounded transfers: %d", peak)
 	}
 	if localLatency > time.Second {
@@ -154,15 +154,16 @@ func TestRelayAttachmentDriveBoundedParallelProgress(t *testing.T) {
 	h, a, b, _ := attachmentDriveHub(t, p, true)
 	delayed := attachmentProviderDelay(t, h, 0)
 	gate := make(chan struct{})
-	delayed.gate, delayed.started = gate, make(chan struct{}, 8)
+	const queued = attachmentDriveTransfers + 4
+	delayed.gate, delayed.started = gate, make(chan struct{}, queued)
 	var once sync.Once
 	defer once.Do(func() { close(gate) })
-	for range 8 {
+	for range queued {
 		a.upload(t, h, b.addr, []byte("small encrypted attachment"))
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	for range 4 {
+	for range attachmentDriveTransfers {
 		select {
 		case <-delayed.started:
 		case <-ctx.Done():
@@ -172,11 +173,11 @@ func TestRelayAttachmentDriveBoundedParallelProgress(t *testing.T) {
 	delayed.mu.Lock()
 	peak := delayed.peak
 	delayed.mu.Unlock()
-	if peak != 4 {
-		t.Fatalf("active provider requests=%d, want four bounded transfers", peak)
+	if peak != attachmentDriveTransfers {
+		t.Fatalf("active provider requests=%d, want %d bounded transfers", peak, attachmentDriveTransfers)
 	}
 	once.Do(func() { close(gate) })
-	awaitRelayDriveStatus(t, h, func(s drivecontract.RelayStorageStatus) bool { return !s.Migration.Running && s.Remote.Files == 8 })
+	awaitRelayDriveStatus(t, h, func(s drivecontract.RelayStorageStatus) bool { return !s.Migration.Running && s.Remote.Files == queued })
 }
 
 func TestRelayAttachmentDriveArrivalsRespectProviderBackoff(t *testing.T) {

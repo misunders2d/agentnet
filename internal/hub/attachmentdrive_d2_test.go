@@ -97,6 +97,9 @@ func TestRelayAttachmentDriveMissingChecksumRetainsLocalUntilMove(t *testing.T) 
 }
 
 func TestRelayAttachmentDriveRateLimitsRetryButQuotaWaitsForMove(t *testing.T) {
+	old := attachmentDriveSlowDown
+	attachmentDriveSlowDown = 10 * time.Millisecond
+	t.Cleanup(func() { attachmentDriveSlowDown = old })
 	for _, reason := range []string{"rateLimitExceeded", "userRateLimitExceeded", "storageQuotaExceeded"} {
 		t.Run(reason, func(t *testing.T) {
 			p := newRelayDriveProvider(t)
@@ -105,6 +108,14 @@ func TestRelayAttachmentDriveRateLimitsRetryButQuotaWaitsForMove(t *testing.T) {
 			id := a.upload(t, h, b.addr, []byte("encrypted quota fixture"))
 			if reason != "storageQuotaExceeded" {
 				awaitAttachmentState(t, h, id, "retry")
+				// Drive's rate limit first slows the move (halving 32 → 1, one
+				// retry each), and pauses it only when it persists at a pace of one.
+				p.mu.Lock()
+				calls := p.uploadCalls
+				p.mu.Unlock()
+				if calls != 6 {
+					t.Fatalf("rate-limited uploads before the pause: %d, want 6 (32, 16, 8, 4, 2, 1)", calls)
+				}
 				awaitRelayDriveStatus(t, h, func(s drivecontract.RelayStorageStatus) bool { return s.State == "offline" })
 				p.mu.Lock()
 				p.uploadReason = ""

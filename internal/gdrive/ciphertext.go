@@ -29,15 +29,32 @@ var cipherDefaultTransport = func() *http.Transport {
 	return t
 }()
 
+// cipherChunk caps one upload's in-memory chunk (googleapi rounds it up to a
+// 256 KiB multiple).
+const cipherChunk = 2 << 20
+
+// ErrRateLimited: Drive asked this account to slow down (HTTP 429, or 403
+// rateLimitExceeded/userRateLimitExceeded). It is a temporary ErrOffline, so
+// callers that do not adapt their pace keep retrying it with backoff.
+var ErrRateLimited error = rateLimited{}
+
+type rateLimited struct{}
+
+func (rateLimited) Error() string     { return "Google Drive asked to slow down; retrying" }
+func (rateLimited) Is(err error) bool { return err == ErrOffline }
+
 // Drive uses HTTP 403 for both transient limits and actual permission errors.
 // Keep this distinction specific to the relay ciphertext path.
 func cipherError(err error) error {
-	for _, known := range []error{ErrMissing, ErrCiphertext, ErrChecksumUnavailable, ErrStorageFull} {
+	for _, known := range []error{ErrMissing, ErrCiphertext, ErrChecksumUnavailable, ErrStorageFull, ErrRateLimited} {
 		if errors.Is(err, known) {
 			return known
 		}
 	}
 	var provider *googleapi.Error
+	if errors.As(err, &provider) && provider.Code == 429 {
+		return ErrRateLimited
+	}
 	if errors.As(err, &provider) && provider.Code == 403 {
 		for _, detail := range provider.Errors {
 			if detail.Reason == "storageQuotaExceeded" {
@@ -46,7 +63,7 @@ func cipherError(err error) error {
 		}
 		for _, detail := range provider.Errors {
 			if detail.Reason == "rateLimitExceeded" || detail.Reason == "userRateLimitExceeded" {
-				return ErrOffline
+				return ErrRateLimited
 			}
 		}
 	}
@@ -199,9 +216,12 @@ func checkCipherMeta(f *drive.File, realm, blob, sha string, size int64) error {
 	return nil
 }
 
-// PutCiphertext streams a resumable upload with at most one 8 MiB SDK chunk in
-// memory. A prior completed create is reused only with matching immutable tags,
-// size and provider checksum before the caller may drop its verified local copy.
+// PutCiphertext streams an upload with at most one SDK chunk in memory: the
+// file's size plus one (so the file ends inside the chunk), capped at
+// cipherChunk. A file under that cap is one multipart request, and many
+// parallel transfers stay within bounded memory. A prior completed create is
+// reused only with matching immutable tags, size and provider checksum before
+// the caller may drop its verified local copy.
 func (c *Client) PutCiphertext(ctx context.Context, id, folder, realm, blob, sha string, size int64, data io.Reader) error {
 	if !ValidID(id) || !ValidID(folder) || size <= 0 {
 		return ErrCiphertext
@@ -218,7 +238,7 @@ func (c *Client) PutCiphertext(ctx context.Context, id, folder, realm, blob, sha
 		return cipherError(err)
 	}
 	_, err = s.Files.Create(&drive.File{Id: id, Name: blob + ".age", MimeType: "application/octet-stream", Parents: []string{folder}, AppProperties: cipherTags(realm, blob, sha)}).
-		Media(io.LimitReader(data, size), googleapi.ChunkSize(8<<20), googleapi.ChunkTransferTimeout(5*time.Minute), googleapi.ChunkRetryDeadline(10*time.Minute), googleapi.ContentType("application/octet-stream")).Fields(cipherFields).Context(ctx).Do()
+		Media(io.LimitReader(data, size), googleapi.ChunkSize(int(min(size+1, cipherChunk))), googleapi.ChunkTransferTimeout(5*time.Minute), googleapi.ChunkRetryDeadline(10*time.Minute), googleapi.ContentType("application/octet-stream")).Fields(cipherFields).Context(ctx).Do()
 	if err != nil {
 		// A response may be lost after creation; a stable ID prevents duplicates.
 		var api *googleapi.Error
