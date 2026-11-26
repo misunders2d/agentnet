@@ -318,9 +318,12 @@ unaffected.
 - `author` is `human` only when the request was signed by the person's own
   current verified human device (the same roster human-key check that lets
   own-device requests run without approval) and the daemon's own person is
-  that person. Requests from agents or agent hosts (the person's own too),
-  other people, continuations, replies and asks typed on the daemon's own
-  device (its key is shared with local agents) are `agent`. Heimdall acts
+  that person, and the stored request does not say an agent wrote it: an
+  `agent:` origin, or an author participation without the human role, such
+  as an agent's room ask (`agentnet room ask`) signed by the human device
+  that hosts that agent. Requests from agents or agent hosts (the person's
+  own too), other people, continuations, replies and asks typed on the
+  daemon's own device (its key is shared with local agents) are `agent`. Heimdall acts
   only on `human`. So the serving installation must be a device of that
   person's own roster (`agentnet person` there prints their person); a
   service installation with a steward answers `agent` for everyone.
