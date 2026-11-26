@@ -451,8 +451,10 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       const from = ta.selectionStart, to = ta.selectionEnd;
       edit(value.slice(0, from) + s + value.slice(to), from + s.length);
     };
-    if (pasteTable(e, insertText, plain) || !filesAllowed) return;
+    if (pasteTable(e, insertText, plain)) return;
+    // A box that takes no files still recovers clipboard text (WPS cells).
     void pastePictures(e, (list) => { if (here()) addFiles(list, true); }, {
+      files: filesAllowed,
       clipboardImage: host.clipboardImage ? () => host.clipboardImage!() : undefined,
       clipboardText: host.clipboardText ? () => host.clipboardText!() : undefined,
       insertText,

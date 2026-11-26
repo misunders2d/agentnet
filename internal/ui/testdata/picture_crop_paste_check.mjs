@@ -48,8 +48,18 @@ e=event([],"standalone browser text");await pastePictures(e,add,options);assert.
   opts.clipboardText=async()=>{textReads++;return null;};opts.clipboardImage=async()=>{nativeReads++;return file;};
   ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(att.length,1,"a screenshot still attaches");
   textReads=0;ev=event([],"image URL");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(textReads,0,"browser text present: native text unread");assert.equal(att.length,2,"a browser image copy still attaches");
-  opts.clipboardText=async()=>{throw Error("This text is too long to paste.");};opts.clipboardImage=async()=>null;
-  ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(got.length,2);
+  const errs=[];opts.error=s=>errs.push(s);
+  opts.clipboardText=async()=>{throw Error("This text is too long to paste.");};opts.clipboardImage=async()=>{nativeReads++;return file;};
+  const readsNow=nativeReads,attNow=att.length;
+  ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(got.length,2);assert.equal(att.length,attNow,"too-long text never attaches a picture instead");assert.equal(nativeReads,readsNow);assert.equal(errs.length,1);
+  // A box that takes no files still recovers the text, and leaves files alone.
+  opts.clipboardText=async()=>null;const before=nativeReads;ev=event([],"");await pastePictures(ev,f=>att.push(...f),{...opts,files:false});assert.equal(nativeReads,before,"no picture read where files are refused");assert.equal(att.length,attNow);
+  opts.clipboardText=async()=>"cells";ev=event([],"");await pastePictures(ev,f=>att.push(...f),{...opts,files:false});assert.deepEqual(got.at(-1),"cells");
+  ev=event([file],"");await pastePictures(ev,f=>att.push(...f),{...opts,files:false});assert.equal(ev.prevented,false);assert.equal(att.length,attNow);
+  // A browser (no native reads) still attaches a pasted file.
+  ev=event([file],"");await pastePictures(ev,f=>att.push(...f),{insertText:()=>{}});assert.equal(att.length,attNow+1);
+  // One trailing line break (a spreadsheet row end) is dropped, others kept.
+  opts.clipboardText=async()=>"a\n\n";ev=event([],"");await pastePictures(ev,f=>att.push(...f),opts);assert.equal(got.at(-1),"a\n");
 }
 // MEL-714: spreadsheet cells (an HTML table on the clipboard) paste as a
 // Markdown table, as GitHub's composer does; one column stays plain lines;

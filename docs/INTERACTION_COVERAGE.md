@@ -3667,9 +3667,17 @@ text first (`host.clipboardText`, `agentnet_clipboard_text`, same origin
 check as the picture read) and inserts it; only when there is none is the
 picture read, so a screenshot still attaches. Browser text keeps the earlier
 order (a browser image copy still attaches). Local feedback is the inserted
-text, immediately after the one native read. Checks:
+text, immediately after the one native read. The native text read answers
+once per trusted paste event within 2 s (a script's synthetic paste gets
+`null`); that keeps the bridge from widening what page code could already
+read, and is not claimed as more. A text read that fails (too long) shows a
+notice and attaches no picture instead. A box that takes no files still
+recovers the text and reads no picture. One trailing row end is dropped,
+other line breaks kept. Checks:
 `internal/ui/testdata/picture_crop_paste_check.mjs` (WPS case, plain paste,
-screenshot, browser image copy, too-long text) and the desktop
+screenshot, browser image copy, too-long text, no-file box, trailing line
+breaks), agentnet-skins `tests/paste-native-text.test.mjs` (Classic,
+Holonet, Zoom) and the desktop
 `clipboard_only_from_current_main_page` origin test. Outstanding: a rendered
 paste in the installed app with real WPS cells.
 

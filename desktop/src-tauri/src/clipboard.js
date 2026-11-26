@@ -31,7 +31,19 @@
       return file;
     }) ?? null;
   }});
-  Object.defineProperty(window, '__agentnetNativeClipboardText', { value: async () => (await invoke('agentnet_clipboard_text')) || null });
+  // Clipboard text is read only for the person's own paste: a trusted paste
+  // event (never a script's synthetic one), at most once, within 2 s. Page
+  // code that already runs here can read the clipboard through the web view
+  // itself (clipboard access is on for Copy link), so this keeps the bridge
+  // from widening that, without claiming more.
+  let trustedPaste = 0;
+  window.addEventListener('paste', e => { if (e.isTrusted) trustedPaste = performance.now(); }, true);
+  Object.defineProperty(window, '__agentnetNativeClipboardText', { value: async () => {
+    const at = trustedPaste;
+    trustedPaste = 0;
+    if (!at || performance.now() - at > 2000) return null;
+    return (await invoke('agentnet_clipboard_text')) || null;
+  }});
   Object.defineProperty(window, '__agentnetNativeClipboardImage', { value: async () => {
     const image = await invoke('agentnet_clipboard_image');
     if (!image) return null;

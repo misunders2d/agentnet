@@ -78,23 +78,32 @@ export function tableMarkdown(text) {
 // web view did not offer: WebKitGTK gives none for WPS Office cells, whose
 // picture flavour is unreadable, so nothing was pasted. The native shell's
 // clipboard text then wins over its picture; a picture with no text (a
-// screenshot) still attaches.
-export function pastePictures(e, add, {clipboardImage:read, clipboardText:readText, insertText=()=>{}, error=()=>{}, plain=false}={}) {
+// screenshot) still attaches. A box that takes no files (files:false) only
+// recovers the text.
+export function pastePictures(e, add, {clipboardImage:read, clipboardText:readText, insertText=()=>{}, error=()=>{}, plain=false, files:takeFiles=true}={}) {
   // Paste as plain text (Ctrl+Shift+V) keeps the clipboard's text, even when
   // it also holds a picture, as Excel cells do (MEL-714).
   if(plain&&e.clipboardData?.getData("text/plain"))return;
+  if(!takeFiles)read=undefined;
   const files=[...(e.clipboardData?.files||[])];
-  if(files.length){e.preventDefault();add(files);return;}
-  if(typeof read!=="function")return;
+  if(files.length){if(!takeFiles)return;e.preventDefault();add(files);return;}
   const text=e.clipboardData?.getData("text/plain")||"";
+  const recover=!text&&typeof readText==="function";
+  if(typeof read!=="function"&&!recover)return;
   e.preventDefault();
-  const nativeText=text||typeof readText!=="function"?Promise.resolve(""):Promise.resolve().then(()=>readText()).then(s=>typeof s==="string"?s:"",()=>"");
-  return nativeText.then(native=>{
-    if(native){insertText(native.replace(/\r\n?/g,"\n").replace(/\n+$/,""));return;}
+  const picture=()=>{
+    if(typeof read!=="function")return;
     return Promise.resolve().then(()=>read()).then(file=>{
       if(file)add([file]);else if(text)insertText(text);
     }).catch(()=>{if(text)insertText(text);else error("Could not paste the picture. Choose it with Add files instead.");});
-  });
+  };
+  if(!recover)return picture();
+  // A text read that fails (too long) shows why and attaches nothing: the
+  // clipboard holds text, so its picture is not what the person pasted.
+  return Promise.resolve().then(()=>readText()).then(native=>{
+    if(typeof native==="string"&&native)insertText(native.replace(/\r\n?/g,"\n").replace(/\n$/,""));
+    else return picture();
+  },()=>error("Could not paste this text. It may be too long; paste a smaller part."));
 }
 
 export function pictureCrop(width,height,zoom=1,x=width/2,y=height/2) {
