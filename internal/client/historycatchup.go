@@ -424,16 +424,20 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	// timestamp index, never repeatedly rank the whole message corpus.
 	if p.phase == "recent" && !full {
 		for conversations := 0; conversations < limit; conversations++ {
-			latest, e := a.ownHistorySourceRows(a.store.db, dev, "conv>? AND arrival<=? AND outseq<=?", "conv,ms DESC,id DESC", 1, p.pos.Conv, p.inbox, p.outbox)
-			if e != nil {
-				return false, e
-			}
-			if len(latest) == 0 {
+			// The next conversation comes from the conversation lists the source
+			// rows are restricted to: ranking the whole corpus to find it read
+			// every outbox envelope once per conversation per page.
+			var next string
+			e := a.store.db.QueryRow(`SELECT id FROM (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) WHERE id>? ORDER BY id LIMIT 1`, p.pos.Conv).Scan(&next)
+			if errors.Is(e, sql.ErrNoRows) {
 				p.phase = "older"
 				p.pos = historyPos{}
 				break
 			}
-			page, e := a.ownHistorySourceRows(a.store.db, dev, "conv=? AND arrival<=? AND outseq<=?", "ms DESC,id DESC", limit, latest[0].conv, p.inbox, p.outbox)
+			if e != nil {
+				return false, e
+			}
+			page, e := a.ownHistorySourceRows(a.store.db, dev, "conv=? AND arrival<=? AND outseq<=?", "ms DESC,id DESC", limit, next, p.inbox, p.outbox)
 			if e != nil {
 				return false, e
 			}
@@ -442,7 +446,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 				break
 			}
 			items = append(items, page...)
-			p.pos = historyPos{Conv: latest[0].conv}
+			p.pos = historyPos{Conv: next}
 			// At most one full page, or up to 50 sparse conversations, per pass.
 			if len(items)-len(tail) >= limit {
 				more = true
