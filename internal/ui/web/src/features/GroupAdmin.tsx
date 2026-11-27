@@ -25,8 +25,14 @@ export function groupRights(t: T.DMThread | null, o: T.Overview | null) {
   const member = !!t && t.kind === "group" && !t.frozen && (!t.role || t.role === "member");
   const me = o?.person?.person;
   const admin = member && !!me && (t!.members || []).some((m) => m.person === me && m.admin);
-  return { member, admin };
+  // The person's built-in "My agents" room (client.MyAgentsRoom, MEL-713):
+  // their own group with nobody else in it. It is never left.
+  const builtIn = member && !!me && t!.title === MY_AGENTS_ROOM && (t!.members || []).length === 1 && t!.members![0].person === me;
+  return { member, admin, builtIn };
 }
+
+export const MY_AGENTS_ROOM = "My agents";
+export const BUILT_IN_NOTE = "This is your built-in group where your own agents talk with you and each other. It can’t be left.";
 
 /** GroupChangeSheet asks for one group change in plain words and makes it. */
 export function GroupChangeSheet({ open, onOpenChange, t, action, member }: {
@@ -158,12 +164,14 @@ export function MemberMenu({ t, member, me, onPick }: { t: T.DMThread; member: T
   );
 }
 
-/** GroupFooter: "Rename group…" for an admin and "Leave group…" for anyone in it. */
-export function GroupFooter({ admin, onPick }: { admin: boolean; onPick: (a: GroupAction) => void }) {
+/** GroupFooter: "Rename group…" for an admin and "Leave group…" for anyone
+ * in it; the built-in "My agents" group says what it is instead of Leave. */
+export function GroupFooter({ admin, builtIn = false, onPick }: { admin: boolean; builtIn?: boolean; onPick: (a: GroupAction) => void }) {
   return (
     <div className="mt-2.5 flex flex-wrap gap-2">
       {admin && <Button size="sm" variant="outline" icon={<IconPencil size={18} />} onClick={() => onPick("rename")}>Rename group…</Button>}
-      <Button size="sm" variant="danger" icon={<IconDoorExit size={18} />} onClick={() => onPick("leave")}>Leave group…</Button>
+      {builtIn ? <p className="w-full text-[13px] text-muted" data-built-in-group>{BUILT_IN_NOTE}</p>
+        : <Button size="sm" variant="danger" icon={<IconDoorExit size={18} />} onClick={() => onPick("leave")}>Leave group…</Button>}
     </div>
   );
 }

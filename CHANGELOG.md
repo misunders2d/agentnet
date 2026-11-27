@@ -6,6 +6,23 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Your own agents work in "My agents" when you have only one device
+  (MEL-840). With only you in the group and your agent on the same
+  computer, messages, inviting the agent and asking it all failed with
+  "no recipient". They now go through.
+- A guest invitation that was cancelled can no longer be accepted
+  (MEL-841).
+- "My agents" is your built-in group for your agents. It no longer offers
+  Leave, and says what it is (MEL-842). A group change that was refused can
+  now be dismissed instead of staying on screen.
+- Settings → Coding agents → Desktop chats connects an open Claude chat or a
+  recent Codex Desktop chat as one of your agents, with a confirmation
+  (Linux; MEL-829, MEL-830).
+- The message box at the bottom is one clean frame, without the doubled
+  line.
+- "Save a readable copy to Google Drive" shows under a file only when it
+  can actually save one; the dead "Google Drive off" label is gone.
+
 - Photos attached to the same message can be browsed in one viewer. Use
   Previous and Next, the arrow keys, or swipe at fit zoom.
 - Office gives long messages more room and uses smaller, quieter desktop

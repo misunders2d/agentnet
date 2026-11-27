@@ -8,7 +8,7 @@ import {Store,useStore,unsentIn} from './src/store';import {StoreContext} from '
 import {RoomPanel,RoomSheet} from './src/features/RoomPanel';import {GroupChanges,groupRights} from './src/features/GroupAdmin';
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const action=new URL(location.href).searchParams.get('action'),self={person:'self',label:'Fixture owner',address:'self/laptop',state:'self',admin:true},other={person:'peer',label:'Fixture peer',address:'peer/laptop',state:'pinned',admin:action==='demote'};
-const group={seq:1,id:'group-one',kind:'group',title:'Fixture group',role:'member',members:[self,other],peer:other,created:'2026-01-01T00:00:00Z',messages:[],agents:[],guests:[]};
+const builtin=action==='builtin',group={seq:1,id:'group-one',kind:'group',title:builtin?'My agents':'Fixture group',role:'member',members:builtin?[self]:[self,other],peer:other,created:'2026-01-01T00:00:00Z',messages:[],agents:[],guests:[]};
 const second={...group,id:'group-two',title:'Other group',members:structuredClone(group.members)};
 const overview={seq:1,version:'fixture',role:'person',groups:true,me:{address:self.address},person:{...self,devices:[]},people:[other],dms:[group,second],threads:[],needs_you:[]};
 const f=window.fixture={writes:[],reads:0,group,overview};
@@ -80,6 +80,36 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   const before=await page.evaluate(()=>fixture.reads);await page.getByRole('button',{name:'Check group change',exact:true}).click();await page.waitForFunction(n=>fixture.reads>n,before);assert.equal(await page.evaluate(()=>fixture.writes.length),2,'confirmation is read only');
   await page.evaluate(()=>{fixture.finish(1,false,true)});await page.getByRole('button',{name:'Check group change',exact:true}).click();await page.getByRole('region',{name:'Group changes',exact:true}).waitFor({state:'hidden'});
   assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Keep through group change');assert.deepEqual(errors,[]);reports.push({width,action,feedbackMs,eventToFeedbackMs:input.feedbackAt-input.at,trustedInput:input.trusted});await page.close();
+ }
+ // MEL-842: the person's own "My agents" group offers no Leave and says what
+ // it is; a refused change elsewhere can be dismissed, sending nothing.
+ for(const width of [1440,390]){
+  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));page.setDefaultTimeout(5000);
+  await page.goto('http://127.0.0.1:'+server.address().port+'/?action=builtin');
+  const panel=width===390?page.getByRole('dialog',{name:'In this chat',exact:true}):page.getByRole('complementary',{name:'In this chat'});
+  await page.getByRole('button',{name:'Open members',exact:true}).click();await panel.waitFor();
+  await panel.getByText('This is your built-in group where your own agents talk with you and each other. It can’t be left.',{exact:true}).waitFor();
+  assert.equal(await panel.getByRole('button',{name:'Leave group…',exact:true}).count(),0,'no Leave in My agents');
+  assert.equal(await page.evaluate(()=>fixture.rights().builtIn),true);
+  await panel.getByRole('button',{name:'Rename group…',exact:true}).waitFor();
+  assert.deepEqual(errors,[]);await page.close();
+ }
+ {
+  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));page.setDefaultTimeout(5000);
+  await page.goto('http://127.0.0.1:'+server.address().port+'/?action=leave');
+  const panel=page.getByRole('complementary',{name:'In this chat'});
+  await page.getByRole('button',{name:'Open members',exact:true}).click();await panel.waitFor();
+  assert.equal(await page.evaluate(()=>fixture.rights().builtIn),false,'an ordinary group is not built in');
+  await panel.getByRole('button',{name:'Leave group…',exact:true}).click();
+  await page.getByRole('dialog').getByRole('button',{name:'Leave group',exact:true}).click();
+  await page.waitForFunction(()=>fixture.writes.length===1);await page.evaluate(()=>fixture.finish(0,true));
+  await page.getByRole('alert').filter({hasText:'Invented group mutation refusal'}).waitFor();
+  await page.getByRole('button',{name:'Dismiss',exact:true}).click();
+  await page.getByRole('alert').filter({hasText:'Invented group mutation refusal'}).waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>Object.keys(fixture.store.get().groupChanges||{}).length),0,'dismissed');
+  assert.equal(await page.evaluate(()=>fixture.writes.length),1,'Dismiss sends nothing');
+  assert.equal(await page.evaluate(()=>fixture.store.get().views['group-one'].role),'member','the group stays as it was');
+  assert.deepEqual(errors,[]);await page.close();
  }
  // New signed state and workspace teardown defeat late mutation replies.
  for(const teardown of [false,true]){

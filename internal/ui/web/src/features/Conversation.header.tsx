@@ -249,7 +249,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
               {dmPeer?.person && overview?.block && (blocked
                 ? <Menu.Item className={item} onClick={() => void store.setBlocked(dmPeer.person!, false, personName(dmPeer))}><IconBan size={20} />Unblock {personName(dmPeer)}</Menu.Item>
                 : <Menu.Item className={item + " text-danger"} onClick={() => setBlock(true)}><IconBan size={20} />Block {personName(dmPeer)}…</Menu.Item>)}
-              {rights.member && <Menu.Item className={item + " text-danger"} onClick={() => change.pick("leave")}><IconDoorExit size={20} />Leave group…</Menu.Item>}
+              {rights.member && !rights.builtIn && <Menu.Item className={item + " text-danger"} onClick={() => change.pick("leave")}><IconDoorExit size={20} />Leave group…</Menu.Item>}
               {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />{th ? "Delete topic…" : "Delete conversation…"}</Menu.Item>}
             </Menu.Popup>
           </Menu.Positioner>
