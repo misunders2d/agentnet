@@ -1188,3 +1188,15 @@ July 14, 2021). Both posts were read on November 27.
 - The device that holds the history picks each page from per-side indexes
   instead of sorting both sides of a busy chat, which kept large parts
   from filling.
+- Three per-message costs grew with history size and made a long copy
+  slow down as it went (measured with CPU profiles of the real daemons):
+  every receipt flush on the new device walked each imported copy, the
+  review check scanned the whole inbox, and the sending device re-read a
+  part's worth of copies on every page just to decide it should wait.
+  Imported copies now record that they owe no receipt of their own (a
+  relay arrival of the same message still sends one), the review check
+  uses the state index, and the sender counts before it reads.
+- Measured on one laptop with a real relay and three separate daemons,
+  70,000 text messages in one chat: before, 33,353 copied in 30 minutes
+  and slowing (about 62 minutes in all by extrapolation); after, all
+  70,000 in 11 minutes 34 seconds. The new device peaked at 61 MB.

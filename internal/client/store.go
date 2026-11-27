@@ -1103,6 +1103,19 @@ func (s *store) unsentReceipts() ([]receipt, error) {
 	return out, rows.Err()
 }
 
+// archivedChildNeedsNoReceipt records that an archive-imported copy owes no
+// receipt of its own, while it is still only an archive copy. One statement
+// per table, each conditional on the archive row, so a relay arrival that
+// removed that row (and reset the receipt) is never overridden.
+func (s *store) archivedChildNeedsNoReceipt(id string) error {
+	for _, table := range []string{"inbox", "quarantine", "history_receipts"} {
+		if _, err := s.db.Exec(`UPDATE `+table+` SET acked = 1 WHERE id = ? AND acked = 0 AND EXISTS(SELECT 1 FROM history_archive_children c WHERE c.id = ?)`, id, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // resendReceipt marks id's receipt unsent again; used when the Hub pushes a
 // message we already processed, which means it never recorded our receipt.
 func (s *store) resendReceipt(id string) error {
@@ -1686,8 +1699,10 @@ func needsHumanUnread(tx *sql.Tx, id, writer string) error {
 // waiting here.
 func (s *store) unnotified() (ids []string, total int, err error) {
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE (`+inAlertReview+` AND NOT (`+receivedNotice+`) AND (state != 'running' OR detail LIKE 'Seems stuck:%' OR EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000))))
- OR (state='running' AND replica=0 AND EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id AND x.state='accepted') AND EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000)))`, args...)
+	// Every alternative below needs one of these states; saying so first
+	// lets the state index answer instead of a scan of the whole inbox.
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE state IN (?, ?, ?, ?, 'running') AND ((`+inAlertReview+` AND NOT (`+receivedNotice+`) AND (state != 'running' OR detail LIKE 'Seems stuck:%' OR EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000))))
+ OR (state='running' AND replica=0 AND EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id AND x.state='accepted') AND EXISTS(SELECT 1 FROM native_requests n WHERE n.request=inbox.id AND n.attempt=inbox.attempts AND n.state='pending' AND (n.deadline=0 OR n.deadline>unixepoch('subsec')*1000))))`, append([]any{stateHeld, stateAwaiting, stateNeedHuman, stateInterrupt}, args...)...)
 	if err != nil {
 		return nil, 0, err
 	}

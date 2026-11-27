@@ -199,7 +199,7 @@ const archiveInFlight = `('archive_uploading','queued','waiting','custody')`
 // partial part follows its predecessors; meanwhile production fills the next
 // part instead of each small page becoming its own round trip.
 func (a *Agent) archivePack(ctx context.Context) error {
-	rows, err := a.store.db.Query(`SELECT o.recipient,o.recipient_fp,(SELECT count(*) FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN `+archiveInFlight+`) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) GROUP BY o.recipient,o.recipient_fp ORDER BY min(o.rowid)`, envelope.SubHistoryArchive, archiveStaged)
+	rows, err := a.store.db.Query(`SELECT o.recipient,o.recipient_fp,(SELECT count(*) FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN `+archiveInFlight+`),count(*),sum(length(o.envelope)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) GROUP BY o.recipient,o.recipient_fp ORDER BY min(o.rowid)`, envelope.SubHistoryArchive, archiveStaged)
 	if err != nil {
 		return err
 	}
@@ -210,10 +210,16 @@ func (a *Agent) archivePack(ctx context.Context) error {
 	var targets []target
 	for rows.Next() {
 		var t target
-		if err = rows.Scan(&t.address, &t.fp, &t.inFlight); err != nil {
+		var staged, size int
+		if err = rows.Scan(&t.address, &t.fp, &t.inFlight, &staged, &size); err != nil {
 			break
 		}
-		if t.inFlight < protocol.HistoryArchiveWindow {
+		// While a part is in flight only a full part is packed. Skip reading
+		// a part that cannot be full yet (embedded structural files make a
+		// part slightly larger than its envelopes, so this may wait one
+		// part longer, never pack early).
+		waiting := t.inFlight > 0 && staged < protocol.MaxHistoryArchiveEntries && size < protocol.MaxHistoryArchivePlaintext
+		if t.inFlight < protocol.HistoryArchiveWindow && !waiting {
 			targets = append(targets, t)
 		}
 	}
@@ -700,6 +706,14 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 				return failed(e)
 			}
 			if e = a.verifyAndStore(ctx, child); e != nil {
+				return failed(e)
+			}
+			// The descriptor's receipt covers this copy: no relay holds it,
+			// so it has no receipt of its own. Recording that keeps receipt
+			// flushes from walking every imported copy. A relay arrival of
+			// the same message first removes its archive row (daemon.go), so
+			// a real receipt is never suppressed.
+			if e = a.store.archivedChildNeedsNoReceipt(child.ID); e != nil {
 				return failed(e)
 			}
 		}

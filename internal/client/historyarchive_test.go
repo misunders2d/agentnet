@@ -555,6 +555,11 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	if childReceipts != 0 {
 		t.Fatal("fabricated relay receipts for imported children")
 	}
+	// Imported copies owe no receipt, so receipt flushes never walk them.
+	var owed int
+	if err = phone.store.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE acked=0 AND id IN (SELECT id FROM history_archive_children))+(SELECT count(*) FROM quarantine WHERE acked=0 AND id IN (SELECT id FROM history_archive_children))+(SELECT count(*) FROM history_receipts WHERE acked=0 AND id IN (SELECT id FROM history_archive_children))`).Scan(&owed); err != nil || owed != 0 {
+		t.Fatalf("imported copies left %d unacknowledged rows for receipt flushes: %v", owed, err)
+	}
 }
 
 func TestHistoryArchiveBlockedUploadDoesNotBlockSamePhoneLive(t *testing.T) {
