@@ -1040,7 +1040,32 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 	if info.Held != 0 { // evidence that may end or change it waits: decided once it counts
 		return info, errors.New("the invite waits for verified participation evidence, not decided yet")
 	}
-	decided, err := a.signWith(ctx, info, typ, info.Invite, undecidedHere(info.Conv, pid, a.Self().Fingerprint()))
+	m, err := a.dmMembers(info.Conv)
+	if err != nil {
+		return info, err
+	}
+	if decidePreSign != nil {
+		decidePreSign(pid)
+	}
+	undecided := undecidedHere(info.Conv, pid, a.Self().Fingerprint())
+	decided, err := a.signWith(ctx, info, typ, info.Invite, func(tx *sql.Tx) error {
+		if e := undecided(tx); e != nil {
+			return e
+		}
+		// What committed since the checks above (a cancellation, say) counts
+		// in the same transaction as the decision (MEL-841).
+		current, e := participationIn(tx, info.Conv, pid, m, a.Address)
+		if e != nil {
+			return e
+		}
+		if current.Invite != info.Invite || current.State != PartInvited {
+			return fmt.Errorf("the invite is %s, not waiting for a decision", current.State)
+		}
+		if current.Held != 0 {
+			return errors.New("the invite waits for verified participation evidence, not decided yet")
+		}
+		return nil
+	})
 	if errors.Is(err, errDecidedHere) { // decided meanwhile, without a click or by another process: as a retry, once
 		own, e := a.ownEvent(info.Conv, pid, typ, protocol.EventAccept, protocol.EventDecline)
 		if e == nil && own == nil { // a decision of this key that is not this installation's own event
@@ -1050,6 +1075,10 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 	}
 	return decided, err
 }
+
+// decidePreSign, set only by tests, runs after a decision's checks and
+// before its transaction.
+var decidePreSign func(pid string)
 
 // admitHeldDismissalsOf admits the held dismissals of info's invitation by
 // its exact author device (admitHeldDismissals) and reads info again.

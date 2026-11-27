@@ -1041,3 +1041,61 @@ func TestGroupUnlistedSenderTurnBeforeReaderContext(t *testing.T) {
 		t.Fatal("turn of an unlisted sender shown once both joined")
 	}
 }
+
+// Codex review (P2): the inviter's cancellation commits after the guest's
+// checks and before its decision commits. The decision's transaction sees
+// it: nothing is decided, stored or sent, and the invitation reads
+// dismissed.
+func TestGroupGuestCancellationDuringDecision(t *testing.T) {
+	for _, typ := range []string{protocol.EventAccept, protocol.EventDecline} {
+		t.Run(typ, func(t *testing.T) {
+			w, conv := offlineGroupGuestFixture(t)
+			first, err := w.alice.InviteHuman(tctx(t), conv, w.bob.Address, nil, "first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = w.alice.DismissParticipation(tctx(t), first.PID); err != nil {
+				t.Fatal(err)
+			}
+			events := pidCopies(t, w.alice, w.bob, first.PID, envelope.SubEvent) // invite, scope, dismissal
+			deliverCopies(t, w.alice, w.bob, events[:len(events)-1])
+			deliverPIDCopies(t, w.alice, w.bob, first.PID, envelope.SubGroupProof)
+			deliverPIDCopies(t, w.alice, w.bob, first.PID, envelope.SubGroupContext)
+			if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartInvited || got.Held != 0 {
+				t.Fatalf("before the decision: %+v %v", got, e)
+			}
+			landed := false
+			decidePreSign = func(pid string) {
+				if pid == first.PID && !landed {
+					landed = true
+					deliverCopies(t, w.alice, w.bob, events[len(events)-1:])
+				}
+			}
+			t.Cleanup(func() { decidePreSign = nil })
+			decide := w.bob.AcceptParticipation
+			if typ == protocol.EventDecline {
+				decide = w.bob.DeclineParticipation
+			}
+			if got, e := decide(tctx(t), first.PID); e == nil {
+				t.Fatalf("decided an invitation cancelled meanwhile: %+v", got)
+			}
+			if !landed {
+				t.Fatal("the cancellation did not land between the checks and the commit")
+			}
+			if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartDismissed {
+				t.Fatalf("after the refused decision: %+v %v", got, e)
+			}
+			evs, err := w.bob.store.participationEvents(conv, first.PID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slices.ContainsFunc(evs, func(ev protocol.ParticipationEvent) bool { return ev.Type == typ }) {
+				t.Fatal("refused decision stored")
+			}
+			var n int
+			if err = w.bob.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid=? AND sub=?`, first.PID, envelope.SubEvent).Scan(&n); err != nil || n != 0 {
+				t.Fatalf("refused decision queued: %d %v", n, err)
+			}
+		})
+	}
+}
