@@ -127,6 +127,16 @@ func (a *Agent) CreateGroup(ctx context.Context, title string) (GroupContext, er
 	if !ok || !self.has(a.Address, a.Self().Fingerprint()) {
 		return packet, ErrGroupContextPending
 	}
+	// One "My agents" room per person: asking for another (a skin that
+	// looked for it only among listed chats, while it is deleted here)
+	// gets the existing one (MyAgentsRoomIn), never a second.
+	if title == MyAgentsRoomTitle {
+		if room, err := a.myAgentsRoomID(self.roster.Person); err != nil {
+			return packet, err
+		} else if room != "" {
+			return a.GroupContext(room)
+		}
+	}
 	realm, err := a.RealmID()
 	if err != nil {
 		return packet, err

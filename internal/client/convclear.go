@@ -34,6 +34,14 @@ import (
 // named, so a device that holds it keeps it (and shows it), as any later
 // turn. No order or time decides what is erased.
 //
+// A DM or group with no turn yet (started, nothing said) is deleted too, as
+// TDLib's delete_dialog_history removes an empty chat from the list (owner,
+// 2026-11-27, for groups too): the deletion then names one marker turn,
+// keyed by this device and the deletion's own id, which matches no message
+// anywhere. It travels and is replayed like any named turn, so every own
+// device leaves the chat out until a turn arrives. The people, membership,
+// keys, grants, blocks and agents stay as they are.
+//
 // A body that unfinished work still needs (a request the worker or a person
 // still has to deal with, a reply a selected receiver has not taken, a copy
 // not yet sent) is hidden at once and erased by the local change that ends
@@ -130,6 +138,17 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 		return ConversationDeleted{}, ErrNoConversation
 	}
 	selfFP := a.Self().Fingerprint()
+	// A recovered person's chat shows its earlier DMs too: read its family
+	// only when this row holds no turn, before the transaction.
+	var family []ConversationInfo
+	empty := false
+	if turns, err := convTurns(a.store.db, conv, selfFP); err != nil {
+		return ConversationDeleted{}, err
+	} else if empty = len(turns) == 0; empty {
+		if family, err = a.continuityDMs(conv); err != nil {
+			return ConversationDeleted{}, err
+		}
+	}
 	out := ConversationDeleted{Deletion: protocol.NewID()}
 	tx, err := a.store.db.Begin()
 	if err != nil {
@@ -140,8 +159,21 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if err != nil {
 		return out, err
 	}
+	marker := false
 	if len(turns) == 0 {
-		return out, ErrNothingToDelete
+		// A DM or group that never had a turn here: its deletion names a
+		// marker turn of its own (see the top of this file). One deleted
+		// already, or a recovered person's chat (it shows its earlier DMs
+		// too), has nothing to delete. The "My agents" room is hidden the
+		// same way: its agents still find it (MyAgentsRoomIn).
+		var erased int
+		if err := tx.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&erased); err != nil {
+			return out, err
+		}
+		if erased > 0 || !empty || len(family) > 1 { // !empty: its turns went meanwhile
+			return out, ErrNothingToDelete
+		}
+		turns, marker = []envelope.Ref{{Fingerprint: selfFP, ID: out.Deletion}}, true
 	}
 	for _, t := range turns {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared) VALUES(?, ?, ?, ?, 0)`, conv, t.Fingerprint, t.ID, out.Deletion); err != nil {
@@ -151,7 +183,9 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if err := eraseCoveredIn(tx, conv, selfFP); err != nil {
 		return out, err
 	}
-	out.Erased = len(turns)
+	if !marker {
+		out.Erased = len(turns)
+	}
 	if out.Kept, err = retainedCount(tx, conv, selfFP); err != nil {
 		return out, err
 	}

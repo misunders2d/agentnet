@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { Engine, memoryStore } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
+import { world as groupWorld } from './human_engine_check.mjs';
 let checks = 0, sequence = 1;
 const id = () => (sequence++).toString(16).padStart(32, '0');
 const now = 1790000000123;
@@ -219,5 +220,80 @@ check(/stored on this device only/.test(td.note), 'thread deletion says this dev
 const threads = (await a.overview()).threads;
 check(!threads.some((t) => t.id === t1) && threads.some((t) => t.id === t2), 'exactly that thread is gone; the other stays');
 check((await a.store.all('outbox')).length === before, 'a thread deletion tells no one');
+
+// A DM never written in (nothing said, only its root) is deleted too, on
+// every own device, and nothing else changes: the people stay.
+{
+  const w2 = await world(), { alice: a2, bob: b2 } = w2;
+  const phone2 = await w2.sibling(a2, 'alice/phone');
+  const empty = await a2.newDM(b2.address);
+  // The phone holds the same root, as root-sync leaves it (this world has
+  // no human keys for root-sync itself; its own checks cover it).
+  await phone2.store.write([{ s: 'convs', k: empty, v: await a2.store.get('convs', empty) }]);
+  check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'the empty DM is listed on both own devices');
+  const people = JSON.stringify(await a2.store.all('persons'));
+  await w2.caps(phone2, [...defaults, wire.CapConvClear]);
+  const gone = await a2.api('/api/conversation/delete', { conv: empty });
+  check(/Queued for your 1 other device/.test(gone.note), 'an empty DM deletes with a truthful note: ' + gone.note);
+  check(!(await a2.overview()).dms.some((d) => d.id === empty), 'the empty DM leaves the list here');
+  check(JSON.stringify(await a2.store.all('persons')) === people, 'the people stay as they are');
+  await refuses(() => a2.deleteConversation({ conv: empty }), /nothing here to delete/);
+  check((await a2.store.all('erased')).filter((r) => r.conv === empty).length === 1, 'a second deletion adds no marker');
+  await a2.flushOutbox(); await w2.drain(phone2); await w2.settle(phone2);
+  check(!(await phone2.overview()).dms.some((d) => d.id === empty), 'the empty DM leaves the list on the own phone');
+  await a2.sendDM({ conv: empty, body: 'HELLO AGAIN' });
+  await w2.drain(phone2);
+  check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'a new turn brings it back on both');
+}
+
+// An empty group leaves the list too, membership kept; the built-in
+// "My agents" room is kept (its agents find it there). The group world of
+// human_engine_check.mjs, whose synthetic server carries groups.
+{
+  const gw = await groupWorld(), ga = gw.alice;
+  for (const e of gw.users) { e.realm = 'f'.repeat(32); await gw.caps(e, [...defaults, wire.CapGroup, wire.CapConvClear]); }
+  const group = await ga.createGroup('Empty group');
+  const context = (await ga.store.get('kv', 'group/' + group))?.context;
+  check(!!context && (await ga.overview()).dms.some((d) => d.id === group), 'the empty group is listed');
+  await ga.deleteConversation({ conv: group });
+  check(!(await ga.overview()).dms.some((d) => d.id === group), 'the empty group leaves the list');
+  check((await ga.store.get('kv', 'group/' + group))?.context === context, 'its membership stays as it was');
+  await refuses(() => ga.deleteConversation({ conv: group }), /nothing here to delete/);
+  await ga.sendDM({ conv: group, body: 'GROUP HELLO' });
+  check((await ga.overview()).dms.some((d) => d.id === group), 'a turn brings the group back');
+  // My agents, empty and then with a message: hidden, still named by
+  // overview.my_agents and still the built-in group, back with a turn.
+  const room = await ga.createGroup('My agents');
+  check(await ga.builtInGroup(room) && (await ga.overview()).my_agents === room, 'the fixture room is the built-in My agents');
+  for (const body of ['', 'A JOB']) {
+    if (body) await ga.sendDM({ conv: room, body });
+    await ga.deleteConversation({ conv: room });
+    const o = await ga.overview();
+    check(!o.dms.some((d) => d.id === room) && o.my_agents === room, 'My agents leaves the list and stays named ' + (body ? 'with a message' : 'empty'));
+    check(await ga.builtInGroup(room), 'a deleted My agents is still the built-in group');
+    await refuses(() => ga.manageGroup({ action: 'rename', conv: room, title: 'Renamed' }), /built-in group/);
+  }
+  await ga.sendDM({ conv: room, body: 'NEXT JOB' });
+  check((await ga.overview()).dms.some((d) => d.id === room && d.title === 'My agents'), 'the next turn brings the same room back');
+  // A skin that looks only among listed chats asks for a new "My agents"
+  // while it is deleted: it gets the same room, and no second one is made.
+  const rooms = async () => (await ga.store.all('kv')).filter((v) => v?.context && wire.parseGroupContext(v.context).state.title === 'My agents').map((v) => wire.parseGroupContext(v.context).state.conv);
+  await ga.deleteConversation({ conv: room });
+  check(await ga.createGroup('My agents') === room && (await rooms()).length === 1, 'creating "My agents" while it is deleted returns the same room');
+  // Two rooms from before the guard (overview hidden from createGroup):
+  // the oldest listed one wins over an older deleted one; when all are
+  // deleted, the oldest.
+  const overview = ga.overview, now = ga.now;
+  ga.overview = async (...args) => { const o = await overview.apply(ga, args); delete o.my_agents; return o; };
+  ga.now = () => now() + 60_000;
+  const second = await ga.createGroup('My agents');
+  ga.overview = overview; ga.now = now;
+  check(second !== room && (await rooms()).length === 2, 'the fixture has a second, newer My agents');
+  check((await ga.overview()).my_agents === second, 'a listed newer room wins over the older deleted one');
+  await ga.deleteConversation({ conv: second });
+  check((await ga.overview()).my_agents === room, 'with both deleted, the oldest wins');
+  await ga.sendDM({ conv: room, body: 'BACK' });
+  check((await ga.overview()).my_agents === room, 'with both listed, the oldest wins');
+}
 
 console.log(JSON.stringify({ shapes, checks }));

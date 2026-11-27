@@ -1,5 +1,97 @@
 # Next-release interaction coverage and responsiveness
 
+## Delete an empty DM or group — unreleased, November 27, 2026
+
+Reported: a DM with a pinned person where nothing was ever said ("Nothing
+said yet") answered "Delete conversation…" with "There is nothing here to
+delete." and stayed in the list, with no other way to remove it. Cause: the
+conversation row exists (its signed root, synced to the own devices by
+root-sync controls), but it holds no turn, so `DeleteConversation` named zero
+turns and refused (`ErrNothingToDelete`; the browser engine refused the same
+way).
+
+Counterpart: TDLib `4c6377aa`, `MessagesManager.cpp:8613`
+`delete_dialog_history`. With `remove_from_chat_list` an empty chat is still
+removed: `allow_error = d->messages.empty()` (line 8658) tolerates a server
+error, the early "nothing to do" return applies only when the chat is not
+being removed from the list (`!(old_order != DEFAULT_ORDER && remove_from_dialog_list)`),
+and `clear_dialog_message_list` (line 8887) sets the chat's order to
+`DEFAULT_ORDER`, which takes it off the list. A later message brings the
+chat back. Contacts are not part of that call; that the contact stays saved
+is observed Telegram behavior, not checked in source here.
+
+Reused: the existing deletion. A DM with no turn names one marker turn (this
+device's key and the deletion's own id, matching no message) in `conv_erased`;
+it is shared, replayed to devices linked later and applied by the existing
+clr1 `clear` control, and the existing list rule leaves the chat out until a
+turn arrives. No schema step, no new control. The web store's existing
+immediate removal (`deleteChat`, measured by the latency fixture's chat-delete
+cells) now ends in success instead of a restore. People, keys, grants and
+blocks are untouched (keys, grants and blocks by code reading: the path
+writes only `conv_erased` and the `clear` copies). Owner decision, same day:
+an empty group leaves the list the same way; membership, keys, grants and
+its agents stay, and its other members keep it listed. Still refused as
+before: a repeat deletion and a recovered person's chat (its earlier DMs
+show in it). Owner decision (Option A), same day: the built-in My agents
+room, empty or not, is hidden the same way and is still found. The room was
+found only among listed chats (Go `myAgentsRoomID` skipped a deleted chat;
+web `myAgentsRoomId` and the engine's `builtInGroup` read `overview.dms`), so
+deleting a My agents room with messages made the next agent ask create a
+second room (reproduced by `TestDeletedMyAgentsRoomIsReused` on the old
+code). Now Go `MyAgentsRoomIn` keeps a deleted room, and the new
+`overview.my_agents` field (docs/HOST_API_ROUTES.md, docs/UI_SKINS.md) names
+it for the web ("Chat with", Assign, built-in rules) and the browser engine.
+The next agent message reuses it and its turn brings it back; deleted
+messages stay deleted, as in any deletion. After review: creating a group
+titled "My agents" while one exists, deleted here or not, returns that room
+in both hosts (Go `CreateGroup`, engine `createGroup`), so a skin that looks
+only among listed chats cannot make a second one; and when older copies
+exist, the oldest listed room wins, the oldest deleted one only when all are
+deleted.
+Starting a chat with the person again creates a new DM, as after any
+deletion; a turn in the old one brings it back.
+
+Evidence: `TestDeleteEmptyDMOnAllOwnDevices` (client: laptop and linked
+phone; no error, left out on both, people unchanged, a repeat adds no marker,
+a new DM with the person is listed, a turn in the old one brings it back on
+both); `TestDeleteEmptyGroupHidesItOnly` (client: an empty group leaves the
+list, membership hash unchanged, others keep it, a repeat refuses, a turn
+brings it back); `TestDeletedMyAgentsRoomIsReused` (client: My agents
+deleted with a message and empty is still the room the next ask gets, still
+the built-in group, and a turn brings it back; creating "My agents" while
+it is deleted returns the same room and no second one); `TestMyAgentsRoomInPrefersListed`
+(client: of two rooms, the listed one over an older deleted one; the oldest
+when all are listed or all deleted); `TestDeletedEmptyChatsOnOwnDevices`
+(client: an empty group and My agents deleted on the laptop leave the list on
+the linked agent-host device, whose `MyAgentsRoom()` is still the same room;
+a device linked after the deletion of an empty DM and an empty group shows
+neither, nor My agents, and its `MyAgentsRoom()` is the same room; the
+deleted DM's root is not synced to it at all, root-sync leaving deleted
+chats out); `TestDeletedMyAgentsRoomStaysNamed`
+(ui `Live`: after deletion the room is out of `dms` and still `my_agents`);
+`TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
+overview, deleted with a note, gone from the next overview, people kept);
+`TestBrowserConversationDeletionMatchesGo` (browser engine: deleted on the
+desk and the linked phone, people kept, a repeat adds no marker, a turn
+brings it back; the phone's root is seeded as root-sync leaves it, and no
+new-chat step; an empty group leaves the list with its group context
+unchanged and comes back with a turn; My agents, empty and with a message,
+leaves the list, stays `my_agents` and the built-in group, and comes back;
+`createGroup('My agents')` while it is deleted returns it; of two rooms, the
+listed newer one over the older deleted one, the oldest when both are
+deleted or both listed); `TestAgentChatStarterRendered` (rendered Comic,
+opt-in Playwright: with the My agents room out of `dms` and named by
+`my_agents`, "Chat with" asks in that room, makes no second room, and the
+question brings it back).
+The new client, ui `Live`, browser and rendered checks fail on the code
+before each fix (the reported refusal, a second My agents room, a missing
+`my_agents`, a newer deleted room winning, or "Chat with" asking in a new
+room). Not rendered: Assign into a hidden room (same `myAgentsRoomId`). The
+skins gate (agentnet-skins `npm test` against the candidate) must be rerun
+before release for the new overview field.
+Not rerun: the rendered latency suite (web code unchanged this round); not
+checked on the real installed app or Android.
+
 ## Next release after v0.11.10 — MEL-825 and MEL-826
 
 MEL-825 keeps a revision on the original message. The first claim reads the

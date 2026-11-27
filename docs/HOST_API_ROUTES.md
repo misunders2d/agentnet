@@ -133,6 +133,7 @@ and catch the error. Failures differ by platform.
 | `workspace` | D B | `{name, server}`: the admin's name for the workspace and the relay host. |
 | `role` | D B | `unset`, `person` or `service`. |
 | `person`, `people`, `dms` | D B | This installation's person, the known people, and the conversations (`DMSummary`, with `unread`, `held`, `decide` and `waiting` counts). |
+| `my_agents` | D B | The id of this person's built-in "My agents" room, absent when none has reached this device. It is named also while the room is deleted here and so left out of `dms`: use it, not a search of `dms`, to find the room for "Chat with", Assign and the built-in-group rules, so a deleted room is reused (a new turn brings it back) and a second one is never created. |
 | `threads`, `topics` | D B | Device threads (`ThreadSummary`), and per-peer topic counts `{peer, total, archived, archived_unread, latest}`. |
 | `needs_you`, `held` | D B | `ConvItem`s that wait for this person: decisions, and held person turns. See Request states. |
 | `review`, `quarantine` | D B | Received device items and review notices, and held envelopes with `code` and `action`. |
@@ -154,7 +155,7 @@ and catch the error. Failures differ by platform.
 | `POST /api/message/react` | D B | Add or remove a reaction. | `{id, dir, conv?, emoji, remove?}` | `{note}` |
 | `POST /api/message/edit` | D B | Edit your own message. A running question or task keeps its original body. | `{id, dir, conv?, text}` | `{note}` |
 | `POST /api/message/delete` | D B | Delete your own message. This hides it and cancels nothing. | `{id, dir, conv?}` | `{note}` |
-| `POST /api/conversation/delete` | D B | Delete a conversation on all of this person's devices, or a device thread on this device. | `{conv}` or `{peer, thread}` | `{note}` |
+| `POST /api/conversation/delete` | D B | Delete a conversation on all of this person's devices, or a device thread on this device. A DM or group with no message yet, the "My agents" room included, leaves the list the same way until a new turn; membership and agents stay. | `{conv}` or `{peer, thread}` | `{note}` |
 | `POST /api/history/contribution/preview` | D B | Review quoting selected messages from one chat into another. | `{source, ids:[id], destination, topic?, new_topic?, title?, files?:[{id, index}]}` | review: the request plus `{operation, token, body, items, audience, imported_at, audience_pending}` |
 | `POST /api/history/contribution/apply` | D B | Send exactly the reviewed contribution. If anything changed, it is refused: review again. | the review, unchanged | D: `{ID, LID, State, Detail, Copies}` (Go field names). B: `{id, lid, state, detail?, copies?}` (a repeated apply answers without `detail`) |
 | `POST /api/topic/transfer/preview` | D B | Freeze a whole authorized topic as inert quotations into another existing full-member DM or group. | `{source,topic?,destination,destination_topic?,new_topic?,title?}` or `{peer,thread,destination,...}` for one concrete direct-agent thread | durable review `{id,token,created_at,cutoff,total_items,total_batches,total_files,total_bytes,cursor,state,audience,audience_total,audience_next,audience_pending,...request}`; first 16 recipients, no preview plaintext retained; `total_bytes` counts source text and files |

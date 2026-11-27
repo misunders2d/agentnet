@@ -5730,6 +5730,8 @@ export class Engine {
   async createGroup(title) {
     const checks=[], me=await this.groupRead(checks,"kv","person");
     if(!me || me.state!=="self" || !wire.validID(this.realm || "")) throw Error("Set up and connect your person before creating a group.");
+    // One "My agents" room per person (client.CreateGroup): a skin that looked only among listed chats gets the existing one, deleted here or not.
+    if(title==="My agents"){const room=(await this.overview()).my_agents;if(room)return room;}
     const root=await wire.signGroupRoot(this.keys,{v:wire.GroupRootVersion,kind:"group",realm:this.realm,title,creator:{person:me.person,roster:me.hash,address:this.address,fingerprint:this.fp},members:[{person:me.person,roster:me.hash}],admins:[me.person],nonce:wire.newID(),created:Math.floor(this.now()/1000)});
     const conv=await wire.rootID(root), admission=await wire.signGroupAdmission(this.keys,{conv,realm:this.realm,person:me.person,roster:me.hash,seq:0,prev:"",history:null,by:this.fp});
     const state=await wire.signGroupState(this.keys,{v:1,conv,realm:this.realm,seq:0,prev:"",title,members:[{person:me.person,roster:me.hash,admin:true,admission}],actor:me.person,actor_roster:me.hash,by:this.fp});
@@ -5896,10 +5898,8 @@ export class Engine {
   // builtInGroup: conv is the person's "My agents" room, chosen as
   // client.MyAgentsRoom chooses it (the oldest solo group of theirs by that title).
   async builtInGroup(conv) {
-    const o=await this.overview(),me=o.person?.person;if(!me)return false;
-    const at=d=>Date.parse(d.created)||0;
-    const room=(o.dms||[]).filter(d=>d.kind==="group"&&d.title==="My agents"&&!d.frozen&&d.members?.length===1&&d.members[0].person===me).sort((a,b)=>at(a)-at(b)||(a.id<b.id?-1:1))[0];
-    return !!room&&room.id===conv;
+    const o=await this.overview();
+    return !!o.my_agents&&o.my_agents===conv; // also while deleted here
   }
 
   async leaveGroup(conv) {
@@ -10105,8 +10105,12 @@ export class Engine {
       const n = this.rowName(r);
       if (n.key && n.lid) names.set(erasedKey(conv, n.key, n.lid), n);
     }
-    if (!names.size) throw new Error("There is nothing here to delete.");
     const deletion = wire.newID(), ops = [], checks = [];
+    if (!names.size) { // a DM or group never written in: its deletion names a marker turn (client convclear.go), as TDLib removes an empty chat from the list
+      // Not a recovered person's chat (it shows earlier DMs). The "My agents" room is hidden too: overview.my_agents still names it.
+      if (this.erasedConv(conv) || (await this.continuityDMs(conv)).length > 1) throw new Error("There is nothing here to delete.");
+      names.set(erasedKey(conv, this.fp, deletion), { key: this.fp, lid: deletion });
+    }
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv, key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); }
     let kept = 0;
     try {
@@ -10613,6 +10617,7 @@ export class Engine {
         ...(last ? { last_event: last } : {}) });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
+    let myAgents=null,myAgentsDeleted=null; // the person's "My agents" room, also while deleted here (client.MyAgentsRoomIn): the oldest listed, else the oldest deleted
     for(const g of (read.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,read));
       const view=await this.groupThread(conv,read), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
@@ -10625,7 +10630,12 @@ export class Engine {
       }
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},read).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
-      if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
+      const hiddenHere=this.erasedConv(conv)&&!visible.some(m=>!m.sub);
+      if(packet.state.title==="My agents"&&!view.frozen&&view.members?.length===1&&view.members[0].person===this.me?.person){
+        const best=hiddenHere?myAgentsDeleted:myAgents;
+        if(!best||packet.root.created<best.created||packet.root.created===best.created&&conv<best.id){if(hiddenHere)myAgentsDeleted={id:conv,created:packet.root.created};else myAgents={id:conv,created:packet.root.created};}
+      }
+      if(hiddenHere)continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : latestView.edited ? bodyPreview(latestView.text || "") : latestView.event ? firstLine(latestView.event) : bodyPreview(latestView.body);
       const previewText=wire.topicOrganization(visible.at(-1)?.topic_event)?await this.topicOrganizationNotice(conv,visible.at(-1).topic):latestText;
@@ -10691,7 +10701,7 @@ export class Engine {
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       groups:true, group_invitations:await this.groupInvitations(),
-      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
+      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms, ...((myAgents||myAgentsDeleted) ? { my_agents: (myAgents||myAgentsDeleted).id } : {}),
       // A browser is always a person's device (never a service).
       role: this.me ? "person" : "unset", link, links: asks.length ? asks : undefined, history: history.length ? history : undefined,
     };

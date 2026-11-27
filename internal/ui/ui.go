@@ -111,6 +111,10 @@ type Overview struct {
 	Person  *PersonView  `json:"person,omitempty"`
 	People  []PersonView `json:"people"`
 	DMs     []DMSummary  `json:"dms"`
+	// MyAgents is this person's built-in "My agents" room, also while it
+	// is deleted here and so left out of DMs: agents and "Chat with" reuse
+	// it, never a second one ("" when none has reached this device).
+	MyAgents string `json:"my_agents,omitempty"`
 	// One person on several devices (Identity providers, MEL-433): what
 	// this installation is (RoleUnset, RolePerson, RoleService), this
 	// device's own request to join its person while it is not done, new

@@ -484,6 +484,9 @@ types are the Go structs in `internal/ui/*.go`, generated into
 `internal/ui/web/src/api.ts` and `model.ts`:
 
 - Reads: `/api/overview`, `/api/thread?id=...`, `/api/dm?id=...`.
+  The built-in "My agents" room is `overview.my_agents`, named also while
+  it is deleted here and left out of `dms`: reuse it, never create a second
+  "My agents" group when it is missing from `dms`.
   Private `overview.model_reports` are last reported runtime observations, not
   settings or availability. Match exact `host`, `host_key` and `agent_id`
   (empty identifies an unnamed legacy executor, not today's concrete default),
