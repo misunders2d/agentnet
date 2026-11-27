@@ -34,6 +34,13 @@ import (
 // named, so a device that holds it keeps it (and shows it), as any later
 // turn. No order or time decides what is erased.
 //
+// A DM with no turn yet (started, nothing said) is deleted too, as TDLib's
+// delete_dialog_history removes an empty chat from the list: the deletion
+// then names one marker turn, keyed by this device and the deletion's own
+// id, which matches no message anywhere. It travels and is replayed like
+// any named turn, so every own device leaves the chat out until a turn
+// arrives. The people, keys, grants and blocks stay as they are.
+//
 // A body that unfinished work still needs (a request the worker or a person
 // still has to deal with, a reply a selected receiver has not taken, a copy
 // not yet sent) is hidden at once and erased by the local change that ends
@@ -124,7 +131,8 @@ func convTurns(q dbq, conv, selfFP string) ([]envelope.Ref, error) {
 // every turn of it held here, by name, and queues those names for this
 // person's other devices.
 func (a *Agent) DeleteConversation(ctx context.Context, conv string) (ConversationDeleted, error) {
-	if _, _, found, err := a.store.conversation(conv); err != nil {
+	root, _, found, err := a.store.conversation(conv)
+	if err != nil {
 		return ConversationDeleted{}, err
 	} else if !found {
 		return ConversationDeleted{}, ErrNoConversation
@@ -140,8 +148,19 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if err != nil {
 		return out, err
 	}
+	marker := false
 	if len(turns) == 0 {
-		return out, ErrNothingToDelete
+		// A DM that never had a turn here: its deletion names a marker
+		// turn of its own (see the top of this file). One deleted already,
+		// or a group, has nothing to delete.
+		var erased int
+		if err := tx.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&erased); err != nil {
+			return out, err
+		}
+		if erased > 0 || root.Kind != protocol.ConvKindDM {
+			return out, ErrNothingToDelete
+		}
+		turns, marker = []envelope.Ref{{Fingerprint: selfFP, ID: out.Deletion}}, true
 	}
 	for _, t := range turns {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared) VALUES(?, ?, ?, ?, 0)`, conv, t.Fingerprint, t.ID, out.Deletion); err != nil {
@@ -151,7 +170,9 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if err := eraseCoveredIn(tx, conv, selfFP); err != nil {
 		return out, err
 	}
-	out.Erased = len(turns)
+	if !marker {
+		out.Erased = len(turns)
+	}
 	if out.Kept, err = retainedCount(tx, conv, selfFP); err != nil {
 		return out, err
 	}

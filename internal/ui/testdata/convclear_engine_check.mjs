@@ -193,4 +193,29 @@ const threads = (await a.overview()).threads;
 check(!threads.some((t) => t.id === t1) && threads.some((t) => t.id === t2), 'exactly that thread is gone; the other stays');
 check((await a.store.all('outbox')).length === before, 'a thread deletion tells no one');
 
+// A DM never written in (nothing said, only its root) is deleted too, on
+// every own device, and nothing else changes: the people stay.
+{
+  const w2 = await world(), { alice: a2, bob: b2 } = w2;
+  const phone2 = await w2.sibling(a2, 'alice/phone');
+  const empty = await a2.newDM(b2.address);
+  // The phone holds the same root, as root-sync leaves it (this world has
+  // no human keys for root-sync itself; its own checks cover it).
+  await phone2.store.write([{ s: 'convs', k: empty, v: await a2.store.get('convs', empty) }]);
+  check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'the empty DM is listed on both own devices');
+  const people = JSON.stringify(await a2.store.all('persons'));
+  await w2.caps(phone2, [...defaults, wire.CapConvClear]);
+  const gone = await a2.api('/api/conversation/delete', { conv: empty });
+  check(/Queued for your 1 other device/.test(gone.note), 'an empty DM deletes with a truthful note: ' + gone.note);
+  check(!(await a2.overview()).dms.some((d) => d.id === empty), 'the empty DM leaves the list here');
+  check(JSON.stringify(await a2.store.all('persons')) === people, 'the people stay as they are');
+  await refuses(() => a2.deleteConversation({ conv: empty }), /nothing here to delete/);
+  check((await a2.store.all('erased')).filter((r) => r.conv === empty).length === 1, 'a second deletion adds no marker');
+  await a2.flushOutbox(); await w2.drain(phone2); await w2.settle(phone2);
+  check(!(await phone2.overview()).dms.some((d) => d.id === empty), 'the empty DM leaves the list on the own phone');
+  await a2.sendDM({ conv: empty, body: 'HELLO AGAIN' });
+  await w2.drain(phone2);
+  check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'a new turn brings it back on both');
+}
+
 console.log(JSON.stringify({ shapes, checks }));

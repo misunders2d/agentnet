@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,71 @@ func TestDeleteConversationOnAllOwnDevices(t *testing.T) {
 	})
 	if convInfo(t, w.alice, conv).Deleted || convInfo(t, phone, conv).Deleted {
 		t.Fatal("a reopened conversation is still left out")
+	}
+}
+
+// A DM started but never written in (nothing said, only its root synced to
+// the own devices) is deleted too, as TDLib removes an empty chat from the
+// list: no error, left out on every own device, the person kept, and the
+// other person's first turn brings it back.
+func TestDeleteEmptyDMOnAllOwnDevices(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.alice)
+	dumpClears(t, w.alice, phone)
+	conv := newDM(t, w.alice, w.bob)
+	eventually(t, "the empty DM on the phone", func() bool {
+		convs, err := phone.Conversations()
+		return err == nil && slices.ContainsFunc(convs, func(c ConversationInfo) bool { return c.ID == conv })
+	})
+	if convInfo(t, w.alice, conv).Deleted || len(convBodies(t, w.alice, conv)) != 0 {
+		t.Fatal("the fixture DM is not empty and listed")
+	}
+	people := func(a *Agent) string {
+		ps, err := a.MessagingPersons()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(ps)
+		return string(raw)
+	}
+	before := people(w.alice)
+	withConvClear(t, w.alice, phone)
+
+	done, err := w.alice.DeleteConversation(tctx(t), conv)
+	if err != nil || done.Erased != 0 || done.Devices != 1 || done.ThisOnly {
+		t.Fatalf("delete: %+v %v", done, err)
+	}
+	if !convInfo(t, w.alice, conv).Deleted {
+		t.Fatal("the empty DM is still listed")
+	}
+	if after := people(w.alice); after != before {
+		t.Fatalf("the people changed:\n%s\n%s", before, after)
+	}
+	var markers int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&markers)
+	if _, err := w.alice.DeleteConversation(tctx(t), conv); !errors.Is(err, ErrNothingToDelete) {
+		t.Fatalf("a second deletion: %v", err)
+	}
+	if n := count(t, w.alice, "conv_erased WHERE conv = '"+conv+"'"); markers != 1 || n != 1 {
+		t.Fatalf("deletion markers: %d then %d", markers, n)
+	}
+	eventually(t, "the phone to leave it out too", func() bool { return convInfo(t, phone, conv).Deleted })
+	// Bob never received this root (no turn carried it). Starting a chat
+	// with him again works as after any deletion: a new DM, listed.
+	if again := newDM(t, w.alice, w.bob); again == conv || convInfo(t, w.alice, again).Deleted {
+		t.Fatalf("a new chat with bob: %s", again)
+	}
+	// A turn in the deleted one brings it back on both own devices.
+	sendConv(t, w.alice, conv, ConvOutgoing{Body: "hello again"})
+	eventually(t, "the turn on both devices and at bob", func() bool {
+		return strings.Join(convBodies(t, w.alice, conv), "|") == "out:hello again" && strings.Join(convBodies(t, phone, conv), "|") == "out:hello again" &&
+			strings.Join(convBodies(t, w.bob, conv), "|") == "in:hello again"
+	})
+	if convInfo(t, w.alice, conv).Deleted || convInfo(t, phone, conv).Deleted {
+		t.Fatal("the DM is still left out after a turn")
 	}
 }
 
