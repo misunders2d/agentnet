@@ -116,9 +116,18 @@ func (a *Agent) myAgentsRoomID(person string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return MyAgentsRoomIn(convs, person), nil
+}
+
+// MyAgentsRoomIn is person's "My agents" room among convs, or "": the oldest
+// current group of theirs, with no other person, by that title. A room
+// deleted here (left out of the list until a turn) is still the room, so
+// its agents and the person's next ask reuse it and bring it back, never a
+// second one (owner, 2026-11-27).
+func MyAgentsRoomIn(convs []ConversationInfo, person string) string {
 	var room *ConversationInfo
 	for i, c := range convs {
-		if c.Kind != protocol.ConvKindGroup || c.Title != MyAgentsRoomTitle || c.Deleted || c.Frozen != "" ||
+		if c.Kind != protocol.ConvKindGroup || c.Title != MyAgentsRoomTitle || c.Frozen != "" ||
 			len(c.Members) != 1 || c.Members[0].Person != person {
 			continue
 		}
@@ -127,9 +136,9 @@ func (a *Agent) myAgentsRoomID(person string) (string, error) {
 		}
 	}
 	if room == nil {
-		return "", nil
+		return ""
 	}
-	return room.ID, nil
+	return room.ID
 }
 
 // agentRoomTopic is the job's topic: the replied-to message's topic, else

@@ -5894,10 +5894,8 @@ export class Engine {
   // builtInGroup: conv is the person's "My agents" room, chosen as
   // client.MyAgentsRoom chooses it (the oldest solo group of theirs by that title).
   async builtInGroup(conv) {
-    const o=await this.overview(),me=o.person?.person;if(!me)return false;
-    const at=d=>Date.parse(d.created)||0;
-    const room=(o.dms||[]).filter(d=>d.kind==="group"&&d.title==="My agents"&&!d.frozen&&d.members?.length===1&&d.members[0].person===me).sort((a,b)=>at(a)-at(b)||(a.id<b.id?-1:1))[0];
-    return !!room&&room.id===conv;
+    const o=await this.overview();
+    return !!o.my_agents&&o.my_agents===conv; // also while deleted here
   }
 
   async leaveGroup(conv) {
@@ -10105,8 +10103,8 @@ export class Engine {
     }
     const deletion = wire.newID(), ops = [], checks = [];
     if (!names.size) { // a DM or group never written in: its deletion names a marker turn (client convclear.go), as TDLib removes an empty chat from the list
-      // Not a recovered person's chat (it shows earlier DMs) or the "My agents" room (its agents find it there).
-      if (this.erasedConv(conv) || (await this.continuityDMs(conv)).length > 1 || await this.builtInGroup(conv)) throw new Error("There is nothing here to delete.");
+      // Not a recovered person's chat (it shows earlier DMs). The "My agents" room is hidden too: overview.my_agents still names it.
+      if (this.erasedConv(conv) || (await this.continuityDMs(conv)).length > 1) throw new Error("There is nothing here to delete.");
       names.set(erasedKey(conv, this.fp, deletion), { key: this.fp, lid: deletion });
     }
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv, key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); }
@@ -10615,6 +10613,7 @@ export class Engine {
         ...(last ? { last_event: last } : {}) });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
+    let myAgents=null; // the person's "My agents" room, also while deleted here (client.MyAgentsRoomIn)
     for(const g of (read.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,read));
       const view=await this.groupThread(conv,read), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
@@ -10627,6 +10626,7 @@ export class Engine {
       }
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},read).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
+      if(packet.state.title==="My agents"&&!view.frozen&&view.members?.length===1&&view.members[0].person===this.me?.person&&(!myAgents||packet.root.created<myAgents.created||packet.root.created===myAgents.created&&conv<myAgents.id))myAgents={id:conv,created:packet.root.created};
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : latestView.edited ? bodyPreview(latestView.text || "") : latestView.event ? firstLine(latestView.event) : bodyPreview(latestView.body);
@@ -10693,7 +10693,7 @@ export class Engine {
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       groups:true, group_invitations:await this.groupInvitations(),
-      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
+      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms, ...(myAgents ? { my_agents: myAgents.id } : {}),
       // A browser is always a person's device (never a service).
       role: this.me ? "person" : "unset", link, links: asks.length ? asks : undefined, history: history.length ? history : undefined,
     };

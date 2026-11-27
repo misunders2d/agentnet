@@ -234,10 +234,20 @@ check((await a.store.all('outbox')).length === before, 'a thread deletion tells 
   await refuses(() => ga.deleteConversation({ conv: group }), /nothing here to delete/);
   await ga.sendDM({ conv: group, body: 'GROUP HELLO' });
   check((await ga.overview()).dms.some((d) => d.id === group), 'a turn brings the group back');
+  // My agents, empty and then with a message: hidden, still named by
+  // overview.my_agents and still the built-in group, back with a turn.
   const room = await ga.createGroup('My agents');
-  check(await ga.builtInGroup(room), 'the fixture room is the built-in My agents');
-  await refuses(() => ga.deleteConversation({ conv: room }), /nothing here to delete/);
-  check((await ga.overview()).dms.some((d) => d.id === room), 'My agents stays listed');
+  check(await ga.builtInGroup(room) && (await ga.overview()).my_agents === room, 'the fixture room is the built-in My agents');
+  for (const body of ['', 'A JOB']) {
+    if (body) await ga.sendDM({ conv: room, body });
+    await ga.deleteConversation({ conv: room });
+    const o = await ga.overview();
+    check(!o.dms.some((d) => d.id === room) && o.my_agents === room, 'My agents leaves the list and stays named ' + (body ? 'with a message' : 'empty'));
+    check(await ga.builtInGroup(room), 'a deleted My agents is still the built-in group');
+    await refuses(() => ga.manageGroup({ action: 'rename', conv: room, title: 'Renamed' }), /built-in group/);
+  }
+  await ga.sendDM({ conv: room, body: 'NEXT JOB' });
+  check((await ga.overview()).dms.some((d) => d.id === room && d.title === 'My agents'), 'the next turn brings the same room back');
 }
 
 console.log(JSON.stringify({ shapes, checks }));

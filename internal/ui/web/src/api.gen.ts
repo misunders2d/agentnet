@@ -909,6 +909,7 @@ export interface Overview {
   person?: PersonView;
   people: PersonView[] | null;
   dms: DMSummary[] | null;
+  my_agents?: string;
   role?: string;
   link?: LinkState;
   links?: LinkRequest[];

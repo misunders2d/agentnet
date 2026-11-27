@@ -58,3 +58,37 @@ func TestDeleteEmptyDMLeavesTheList(t *testing.T) {
 		t.Fatalf("the people changed: %+v then %+v", before, after)
 	}
 }
+
+// The deleted "My agents" room leaves the list but overview.my_agents
+// still names it, so "Chat with" and Assign reuse it, never a second room.
+func TestDeletedMyAgentsRoomStaysNamed(t *testing.T) {
+	_, bob, live := liveWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if _, err := bob.CreatePerson(ctx, "Person of "+bob.Address); err != nil {
+		t.Fatal(err)
+	}
+	room, err := bob.MyAgentsRoom(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := func() (bool, string) {
+		o, err := live.Overview()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(o.DMs, func(d DMSummary) bool { return d.ID == room }), o.MyAgents
+	}
+	if listed, named := view(); !listed || named != room {
+		t.Fatalf("before: listed %v, my_agents %q, room %s", listed, named, room)
+	}
+	if _, err := live.DeleteConversation(DeleteConversationAction{Conv: room}); err != nil {
+		t.Fatal(err)
+	}
+	if listed, named := view(); listed || named != room {
+		t.Fatalf("after: listed %v, my_agents %q, room %s", listed, named, room)
+	}
+	if again, err := bob.MyAgentsRoom(ctx); err != nil || again != room {
+		t.Fatalf("the next ask's room: %s %v", again, err)
+	}
+}

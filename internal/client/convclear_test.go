@@ -597,8 +597,7 @@ func TestDeleteGroupConversationKeepsMembership(t *testing.T) {
 
 // An empty group leaves the list too (owner, 2026-11-27), with nothing
 // else changed: membership stays, the others keep it listed, and a turn
-// brings it back. The built-in "My agents" room is kept: its agents find it
-// by that room (agentroom.go).
+// brings it back.
 func TestDeleteEmptyGroupHidesItOnly(t *testing.T) {
 	w, carol, p, _ := groupTurnsFixture(t)
 	conv := p.State.Conv
@@ -628,15 +627,58 @@ func TestDeleteEmptyGroupHidesItOnly(t *testing.T) {
 		return strings.Join(convBodies(t, w.alice, conv), "|") == "in:group hello" && !convInfo(t, w.alice, conv).Deleted
 	})
 
+}
+
+// Deleting the "My agents" room, with messages or without, only hides it:
+// the person's next ask finds the same room (no second one), it is still
+// the built-in group, and a turn brings it back (owner, 2026-11-27).
+func TestDeletedMyAgentsRoomIsReused(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	persons(t, w.alice)
 	room, err := w.alice.MyAgentsRoom(tctx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.alice.DeleteConversation(tctx(t), room); !errors.Is(err, ErrNothingToDelete) {
-		t.Fatalf("the empty My agents room's deletion: %v", err)
+	reused := func(why string) {
+		t.Helper()
+		if again, err := w.alice.MyAgentsRoom(tctx(t)); err != nil || again != room {
+			t.Fatalf("%s: My agents is %s, not %s: %v", why, again, room, err)
+		}
+		if built, err := w.alice.builtInGroup(room); err != nil || !built {
+			t.Fatalf("%s: the room is no longer the built-in group: %v", why, err)
+		}
+		if _, err := w.alice.RenameGroup(tctx(t), room, "Renamed"); !errors.Is(err, ErrBuiltInGroup) {
+			t.Fatalf("%s: rename: %v", why, err)
+		}
 	}
-	if again, err := w.alice.MyAgentsRoom(tctx(t)); err != nil || again != room || convInfo(t, w.alice, room).Deleted {
-		t.Fatalf("My agents after the refusal: %s %v", again, err)
+	sendConv(t, w.alice, room, ConvOutgoing{Body: "a job"})
+	eventually(t, "the turn in the room", func() bool { return strings.Join(convBodies(t, w.alice, room), "|") == "out:a job" })
+	if done, err := w.alice.DeleteConversation(tctx(t), room); err != nil || done.Erased != 1 {
+		t.Fatalf("delete with a message: %+v %v", done, err)
+	}
+	if !convInfo(t, w.alice, room).Deleted {
+		t.Fatal("the deleted room is still listed")
+	}
+	reused("deleted with a message")
+	sendConv(t, w.alice, room, ConvOutgoing{Body: "next job"})
+	eventually(t, "the room back with the next turn", func() bool {
+		return strings.Join(convBodies(t, w.alice, room), "|") == "out:next job" && !convInfo(t, w.alice, room).Deleted
+	})
+
+	// Empty: a fresh person's room with nothing said leaves the list too.
+	w2 := newWorld(t, "")
+	runAgent(t, w2.alice)
+	persons(t, w2.alice)
+	empty, err := w2.alice.MyAgentsRoom(tctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := w2.alice.DeleteConversation(tctx(t), empty); err != nil || done.Erased != 0 || !convInfo(t, w2.alice, empty).Deleted {
+		t.Fatalf("delete of the empty room: %+v %v", done, err)
+	}
+	if again, err := w2.alice.MyAgentsRoom(tctx(t)); err != nil || again != empty {
+		t.Fatalf("after the empty room's deletion: %s, not %s: %v", again, empty, err)
 	}
 }
 

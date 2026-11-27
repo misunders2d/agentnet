@@ -31,13 +31,18 @@ blocks are untouched (keys, grants and blocks by code reading: the path
 writes only `conv_erased` and the `clear` copies). Owner decision, same day:
 an empty group leaves the list the same way; membership, keys, grants and
 its agents stay, and its other members keep it listed. Still refused as
-before: a repeat deletion, a recovered person's chat (its earlier DMs show
-in it) and the built-in My agents room. My agents is held for an owner
-decision: the room is found from the listed chats (Go `myAgentsRoomID`
-skips a deleted chat; web `myAgentsRoomId` and the engine's `builtInGroup`
-read `overview.dms`), so a hidden room would make the next agent ask or
-"Chat with" create a second "My agents" room. That already happens when a
-My agents room with messages is deleted (code reading, not tested).
+before: a repeat deletion and a recovered person's chat (its earlier DMs
+show in it). Owner decision (Option A), same day: the built-in My agents
+room, empty or not, is hidden the same way and is still found. The room was
+found only among listed chats (Go `myAgentsRoomID` skipped a deleted chat;
+web `myAgentsRoomId` and the engine's `builtInGroup` read `overview.dms`), so
+deleting a My agents room with messages made the next agent ask create a
+second room (reproduced by `TestDeletedMyAgentsRoomIsReused` on the old
+code). Now Go `MyAgentsRoomIn` keeps a deleted room, and the new
+`overview.my_agents` field (docs/HOST_API_ROUTES.md, docs/UI_SKINS.md) names
+it for the web ("Chat with", Assign, built-in rules) and the browser engine.
+The next agent message reuses it and its turn brings it back; deleted
+messages stay deleted, as in any deletion.
 Starting a chat with the person again creates a new DM, as after any
 deletion; a turn in the old one brings it back.
 
@@ -46,17 +51,24 @@ phone; no error, left out on both, people unchanged, a repeat adds no marker,
 a new DM with the person is listed, a turn in the old one brings it back on
 both); `TestDeleteEmptyGroupHidesItOnly` (client: an empty group leaves the
 list, membership hash unchanged, others keep it, a repeat refuses, a turn
-brings it back; the empty My agents room refuses and stays the room);
+brings it back); `TestDeletedMyAgentsRoomIsReused` (client: My agents
+deleted with a message and empty is still the room the next ask gets, still
+the built-in group, and a turn brings it back); `TestDeletedMyAgentsRoomStaysNamed`
+(ui `Live`: after deletion the room is out of `dms` and still `my_agents`);
 `TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
 overview, deleted with a note, gone from the next overview, people kept);
 `TestBrowserConversationDeletionMatchesGo` (browser engine: deleted on the
 desk and the linked phone, people kept, a repeat adds no marker, a turn
 brings it back; the phone's root is seeded as root-sync leaves it, and no
 new-chat step; an empty group leaves the list with its group context
-unchanged and comes back with a turn, and My agents refuses).
+unchanged and comes back with a turn; My agents, empty and with a message,
+leaves the list, stays `my_agents` and the built-in group, and comes back).
 The new client, ui `Live` and browser checks fail on the code before each
-fix with the reported refusal; the My agents lines pass there too, and guard
-that refusal. Group own-device sync uses the DM's tested path; it has no
+fix (the reported refusal, a second My agents room, or a missing
+`my_agents`). Not rendered: "Chat with" and Assign reopening a hidden room in
+the web UI (the model reads `my_agents`; the latency fixture's mocked
+overview has none and falls back to `dms`). The skins gate must be rerun
+before release for the new overview field. Group own-device sync uses the DM's tested path; it has no
 two-device group test.
 Not rerun: the rendered latency suite (web code unchanged); not checked on the
 real installed app.
