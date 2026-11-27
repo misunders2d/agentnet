@@ -248,8 +248,8 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
 // ---- confirm ----------------------------------------------------------------------------
 
 /** Confirm: a plain question with the change it makes, and a clear way out. */
-export function Confirm({ open, onOpenChange, title, children, ok, onOk, danger = true }: {
-  open: boolean; onOpenChange: (o: boolean) => void; title: string; children: ReactNode; ok: string; onOk: () => void; danger?: boolean;
+export function Confirm({ open, onOpenChange, title, children, ok, onOk, danger = true, cancel = "Keep it" }: {
+  open: boolean; onOpenChange: (o: boolean) => void; title: string; children: ReactNode; ok: string; onOk: () => void; danger?: boolean; cancel?: string;
 }) {
   const portal = usePortal();
   const modal = useModal(open);
@@ -261,7 +261,7 @@ export function Confirm({ open, onOpenChange, title, children, ok, onOk, danger 
           <Dialog.Title className="font-display text-[22px] font-extrabold leading-tight">{title}</Dialog.Title>
           <Dialog.Description render={<div />} className="mt-2 space-y-2 text-[15px] text-text-2">{children}</Dialog.Description>
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Dialog.Close render={<Button variant="outline">Keep it</Button>} />
+            <Dialog.Close render={<Button variant="outline">{cancel}</Button>} />
             <Button variant={danger ? "danger" : "act"} onClick={() => { onOpenChange(false); onOk(); }}>{ok}</Button>
           </div>
         </Dialog.Popup>

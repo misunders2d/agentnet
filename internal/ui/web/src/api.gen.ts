@@ -382,6 +382,29 @@ export interface DeleteConversationAction {
   thread?: string;
 }
 
+export interface DesktopChat {
+  kind: string;
+  id: string;
+  name?: string;
+  dir: string;
+  ready: boolean;
+  updated?: number;
+  agent_id?: string;
+  agent_label?: string;
+}
+
+export interface DesktopChatConnect {
+  kind: string;
+  id: string;
+  label: string;
+}
+
+export interface DesktopChatsView {
+  supported: boolean;
+  note?: string;
+  chats: DesktopChat[] | null;
+}
+
 export interface DeviceLink {
   url: string;
   expires: string;

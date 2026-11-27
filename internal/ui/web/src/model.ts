@@ -15,16 +15,20 @@ export function messageTarget<M extends { id: string; lid?: string }>(messages: 
 }
 
 export function concreteAgentLabel(record: {id:string;label:string;harness?:string}, _agents: {record:{id:string;label:string;harness?:string}}[] = []): string {
-  const harness=({pi:"Pi",claude:"Claude",codex:"Codex",omp:"OMP",agy:"Antigravity"} as Record<string,string>)[record.harness||""]||record.harness||"";
+  const harness=({pi:"Pi",claude:"Claude",codex:"Codex",omp:"OMP",agy:"Antigravity","claude-chat":"Claude chat","codex-chat":"Codex Desktop chat"} as Record<string,string>)[record.harness||""]||record.harness||"";
   const label=harness ? record.label.toLowerCase()===harness.toLowerCase()?harness:record.label+" · "+harness : record.label+" · program unavailable";
   return label;
 }
 
 /** One enabled instance per harness/device. Legacy ambiguity needs an exact
- * current default pointer; neither order nor historical labels select it. */
+ * current default pointer; neither order nor historical labels select it.
+ * A connected desktop chat (claude-chat, codex-chat) is bound to one exact
+ * chat and is never a default, so each one stays its own agent. */
+export const desktopChatHarness=(h?:string)=>h==="claude-chat"||h==="codex-chat";
 export function currentCatalogAgents(agents:T.CatalogAgent[], local=false):T.CatalogAgent[] {
   const enabled=agents.filter(a=>a.enabled===true&&!!a.record?.harness);
   return enabled.filter(a=>{
+    if(desktopChatHarness(a.record.harness)) return !local||a.responder?.ready===true;
     const same=enabled.filter(b=>b.record.host===a.record.host&&b.record.host_key===a.record.host_key&&b.record.harness===a.record.harness);
     return (same.length===1||a.default===true&&same.filter(b=>b.default===true).length===1)&&(!local||a.responder?.ready===true);
   });

@@ -14,6 +14,7 @@ import { AppControls } from "./AppControls";
 import { AssistantSetup } from "./AssistantSetup";
 import { browserDevice as isBrowser } from "./AssistantSetup.model";
 import { DefaultAgentChoice, harnessName, MANUAL } from "./DefaultAgent";
+import { DesktopChats } from "./DesktopChats";
 
 export { harnessName };
 
@@ -35,7 +36,7 @@ export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadin
   const setup = <div className="space-y-4"><AssistantSetup /></div>;
   if (browser) return <>{head}{setup}<AppControls command /></>;
   const defaults = r.error && !r.data ? <Failed text={r.error} retry={r.reload} /> : r.data ? <AssistantForm view={r.data} saved={r.reload} /> : <Skeleton lines={4} />;
-  return <>{head}{setup}<div className="mt-6 space-y-4"><Details label="Default agent">{defaults}</Details><AppControls command /></div></>;
+  return <>{head}{setup}<div className="mt-6 space-y-4"><DesktopChats /><Details label="Default agent">{defaults}</Details><AppControls command /></div></>;
 
 }
 

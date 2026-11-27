@@ -94,6 +94,9 @@ export function api(host: Host) {
     askAgent: (a: T.AgentAsk) => post<T.Sent>("/api/dm/agent/ask", a),
     agents: (hostAddress?: string) => get<T.AgentCatalogView>(hostAddress ? q("/api/agents", { host: hostAddress }) : "/api/agents"),
     changeAgents: (c: T.AgentCatalogChange) => post<T.AgentCatalogChangeResult>("/api/agents", c),
+    // Open Claude chats and recent Codex Desktop chats on this computer (Linux), connectable as named agents
+    desktopChats: () => get<T.DesktopChatsView>("/api/desktop-chats"),
+    connectDesktopChat: (c: T.DesktopChatConnect) => post<T.AgentCatalogChangeResult>("/api/desktop-chats", c),
 
     // People invited as guests in a DM or group
     checkGuest: (c: T.GuestCheckRequest) => post<T.GuestCheck>("/api/dm/guest/check", c),

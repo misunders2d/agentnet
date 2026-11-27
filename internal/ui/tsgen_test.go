@@ -41,12 +41,13 @@ var tsRoots = []any{
 	drivecontract.RelayStorageStatus{},
 	client.StorageCacheSelection{}, client.StorageCacheResult{}, client.StorageSendRetried{},
 	client.NotificationSound{}, client.NotificationSoundChange{},
+	DesktopChatsView{}, // Settings → Coding agents → Desktop chats (MEL-829/830)
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
 	ScheduleDraft{}, ScheduleAction{}, ConversationResourcesChange{}, ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{}, InviteRequest{},
-	drivecontract.RelayStorageAction{},
+	drivecontract.RelayStorageAction{}, DesktopChatConnect{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {

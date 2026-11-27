@@ -4406,3 +4406,31 @@ rendered regression exercised Antigravity alone at 1280 px and alongside
 Claude at 390 px in both interfaces. Antigravity was selectable, its agent
 was created in the chosen folder, and the mixed flow sent only Claude to
 native review and apply. A tool with neither route remained disabled.
+
+## Desktop chats in Settings and a quiet Drive offer (November 27, 2026)
+
+Settings > Coding agents > Desktop chats lists the open Claude chats and
+recent Codex Desktop chats on this computer (Linux), as `agentnet
+claude-chat|codex-chat connect` finds them, and connects one as a named
+agent. Reuse: the existing Confirm dialog (Message.actions, now with an
+optional cancel label), the Settings card and hint parts, and the agent
+name field's limit and style from Connect an agent. AgentNet-specific: the
+connect itself is the existing client call; the chat stays owner-only.
+
+`TestDesktopChatsConnectRendered` (light and dark, 1280 px, Chromium):
+Connect opens the confirm with the folder or chat name filled in; Cancel
+sends nothing; an empty name shows its error locally and sends nothing;
+Connect shows a disabled “Connecting…” within 47 ms while the backend takes
+1.5 s, another row stays usable meanwhile, and the row then says
+“Connected as …”. A refused connect shows the reason and Try again and is
+never shown as connected. A chat that can't receive requests has Connect
+disabled with the reason; a connected chat shows its agent name and no
+button. The fixture records exactly one success and one refused call per
+pass. `TestDesktopChatsRoutesGuarded` checks the token and origin guard;
+`TestLiveDesktopChatsListAndRefuse` lists a real Codex Desktop rollout and
+shows a refused connect creates no agent.
+
+Under a file, “Save a readable copy to Google Drive” now appears only when
+that copy can be saved; an off, unconfigured or unavailable Drive shows
+nothing instead of a dead “Google Drive off” label
+(`review_topics_ui_check.mjs`, `review_unread_rendered.cjs`).
