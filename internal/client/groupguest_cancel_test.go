@@ -891,6 +891,71 @@ func TestGroupRemovedSenderTurnStaysRefused(t *testing.T) {
 	}
 }
 
+// agy re-check (A): a turn written while the reader was removed waits for
+// no newer context; re-invited with no history, the reader still never
+// sees it.
+func TestGroupRemovedReaderTurnStaysRefused(t *testing.T) {
+	w, p := groupLifecycleFixture(t, false)
+	runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	conv := p.Root.ID()
+	first := groupLifecycleInvite(t, w, p, nil)
+	awaitGroupInvitation(t, w.bob, first.ID, "pending")
+	if err := w.bob.DecideGroupInvitation(tctx(t), first.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "member context", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 2 })
+	bob, _, err := w.bob.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.alice.RemoveGroupMember(tctx(t), conv, bob.Person); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "removal at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
+	stopB()
+	root, _, _, err := w.alice.store.conversation(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRaw, _ := json.Marshal(root)
+	key, err := w.bob.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: protocol.NewID(), From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: rootRaw, Body: "written while removed", Origin: envelope.OriginUI}
+	turn, err := envelope.Seal(in, w.alice.id.Sign, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.bob.accept(tctx(t), turn); err != nil {
+		t.Fatal(err)
+	}
+	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
+		t.Fatalf("turn written while the reader was removed held as %q", got)
+	}
+	runAgent(t, w.bob)
+	again, err := w.alice.InviteGroup(tctx(t), conv, bob.Person, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitGroupInvitation(t, w.bob, again.ID, "pending")
+	if err = w.bob.DecideGroupInvitation(tctx(t), again.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "member again at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 2 })
+	for w.bob.retryProof(tctx(t)) {
+	}
+	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
+		t.Fatalf("turn written while the reader was removed held as %q once re-invited", got)
+	}
+	if slices.Contains(convBodies(t, w.bob, conv), "in:written while removed") {
+		t.Fatal("turn written while the reader was removed shown once re-invited")
+	}
+}
+
 // The decision's own guards, reached directly: with the invitation and its
 // context held, (a) the exact cancellation still waiting held counts before
 // the decision, which is refused; (b) a stored event that does not count

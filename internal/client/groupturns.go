@@ -195,7 +195,7 @@ func sameGroupRoot(a, b protocol.ConvRoot) bool {
 // can come before the context that admits it (carriers wait for their
 // upload, a turn does not). The turn waits for context and is checked again,
 // never admitted before. Only the reader's own device: a sender its context
-// does not list stays refused.
+// does not list stays refused, and so does a reader its context removed.
 type groupReaderBehind struct{ error }
 
 func (e groupReaderBehind) Unwrap() error { return e.error }
@@ -574,7 +574,9 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		// absence wait for a newer context (groupReaderBehind).
 		for i, d := range []identity.Public{sender, a.Self()} {
 			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
-				if i == 1 && errors.Is(e, errGroupRecipientNotCurrent) {
+				// A reader this context removed is not behind: what was
+				// written while it was out never reaches it (MEL-841).
+				if i == 1 && errors.Is(e, errGroupRecipientNotCurrent) && groupRemovalNotice(q, current, me.roster.Person) == "" {
 					return groupReaderBehind{e}
 				}
 				return e
