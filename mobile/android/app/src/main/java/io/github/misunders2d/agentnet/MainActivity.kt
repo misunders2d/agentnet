@@ -324,9 +324,16 @@ class MainActivity : Activity() {
         try {
             when (request.optString("type")) {
                 "app:status", "app:check", "app:update" -> {
-                    require(BuildConfig.SELF_UPDATE) { "This installation is updated through its app store." }
                     require(request.keys().asSequence().all { it == "id" || it == "type" }) { "Update requests cannot select an installation source." }
                     val action = request.getString("type")
+                    if (!BuildConfig.SELF_UPDATE) {
+                        // A store install answers its status, so About explains where updates
+                        // come from instead of showing a failed native request.
+                        if (action == "app:status") reply(JSONObject().put("result", JSONObject().put("version", BuildConfig.UPDATE_VERSION)
+                            .put("app_update_supported", false).put("problem", STORE_UPDATES).put("cli_path", "").put("cli_state", "custom")))
+                        else reply(error = STORE_UPDATES)
+                        return
+                    }
                     if (action == "app:status") { reply(JSONObject().put("result", updater.status())); return }
                     if (!resumed) { reply(error = "Return to AgentNet and try again."); return }
                     // A second tap while a download runs says so, not "Invalid native request".
@@ -545,5 +552,6 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, results)
         if (requestCode == NOTIFICATIONS) { val callback = permissionReply; permissionReply = null; callback?.invoke(permitted()) }
     }
-    companion object { private const val PICK_FILES = 10; private const val SAVE_FILE = 11; private const val NOTIFICATIONS = 12; private const val SCAN_QR = 13; private const val INSTALL_PERMISSION = 14 }
+    companion object { private const val PICK_FILES = 10; private const val SAVE_FILE = 11; private const val NOTIFICATIONS = 12; private const val SCAN_QR = 13; private const val INSTALL_PERMISSION = 14
+        private const val STORE_UPDATES = "This app updates through Google Play." }
 }

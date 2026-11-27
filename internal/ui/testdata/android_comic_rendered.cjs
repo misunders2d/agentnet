@@ -29,7 +29,7 @@ const fs = require('node:fs');
           if (request.type.startsWith('app:')) {
             window.androidAppCalls.push(request.type);
             let result;
-            if(request.type==='app:status') result={version:'v0.8.17',app_update_supported:true,update_result:window.androidUpdateResult};
+            if(request.type==='app:status') result=window.androidStoreBuild?{version:'v0.8.17',app_update_supported:false,problem:'This app updates through Google Play.',cli_path:'',cli_state:'custom'}:{version:'v0.8.17',app_update_supported:true,update_result:window.androidUpdateResult};
             if(request.type==='app:check') result={state:'available',version:'v0.8.17',latest:'v0.8.18'};
             if(request.type==='app:update') {
               updateCalls++;
@@ -136,6 +136,17 @@ const fs = require('node:fs');
       assert.deepEqual(await page.evaluate(()=>window.androidAppCalls),['app:status','app:check','app:update','app:update','app:status']);
       assert.deepEqual(appHTTP,[],'Android updates must not call the absent desktop HTTP routes');
       await fits('About native update failure and retry'); await snap('about-update');
+      await back();
+      // A Google Play install answers its status: About says Play updates it,
+      // with no APK text, no check button and no error.
+      await page.evaluate(()=>{window.androidStoreBuild=true;window.androidAppCalls=[];});
+      await page.getByRole('button',{name:/About/}).first().click();
+      await page.getByText('This app updates through Google Play.',{exact:true}).waitFor();
+      assert.equal(await page.getByRole('button',{name:'Check for updates',exact:true}).count(),0);
+      assert.equal(await page.getByText(/release APK/).count(),0);
+      assert.equal(await page.getByText(/native request|Couldn.t check|app store/).count(),0,'a store install shows no update error');
+      assert.deepEqual(await page.evaluate(()=>window.androidAppCalls),['app:status']);
+      await page.evaluate(()=>{window.androidStoreBuild=false;});
       await back();
       await page.evaluate(()=>{window.androidNotificationGranted=false;window.agentnetNativeVisibility(true);});
       await page.getByRole('button',{name:/Notifications/}).first().click();
