@@ -1356,6 +1356,21 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    check(refused,'browser cancelled room invitation cannot be accepted ('+label+')');
    await w.close();
   }
+  // The decision's own guard: the exact cancellation still held when the
+  // decision is made counts first (nothing reconciled it at ingress here).
+  {
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};w.e.admitHeldDismissals=async()=>{};
+   for(const name of ['human-dismiss','human-invite','human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   const before=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(before?.state==='invited'&&(await w.st.get('held',outside['human-dismiss'].inner.id))?.reason==='proof_pending','browser fixture: cancellation still held when deciding');
+   delete w.e.admitHeldDismissals;
+   try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept:true});}catch{}
+   const after=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(after?.state==='dismissed'&&!after.can_decide&&!await w.st.get('held',outside['human-dismiss'].inner.id),'browser decision counts the held exact cancellation first');
+   check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser decision of a cancelled room invitation sends nothing');
+   await w.close();
+  }
   w=await world();const ownRoster=await wire.parseRoster(v.challenge.rosters[0]),ownNext={...ownRoster,seq:1,prev:await wire.rosterHash(ownRoster),devices:[...ownRoster.devices,pub],by:await wire.fingerprint(alicePub),sig:null,join:await wire.joinConsent(keys,address,ownRoster.person,1,await wire.rosterHash(ownRoster))};
   const ownUnsigned=JSON.parse(wire.rosterJSON(ownNext));delete ownUnsigned.sig;delete ownUnsigned.join;ownNext.sig=new Uint8Array(await crypto.subtle.sign('Ed25519',aliceKeys.sign,new TextEncoder().encode('agentnet-person-v2\n'+JSON.stringify(ownUnsigned))));
   await wire.verifyNext(ownNext,ownRoster);w.extraChains.set(ownRoster.person,[ownRoster,ownNext].map(r=>JSON.parse(wire.rosterJSON(r))));w.e.me=await w.e.personRecord([ownRoster,ownNext],'self',null);await w.st.write([{s:'kv',k:'person',v:w.e.me}]);await w.e.pinDevices(w.e.me);

@@ -890,3 +890,74 @@ func TestGroupRemovedSenderTurnStaysRefused(t *testing.T) {
 		t.Fatal("turn written while removed shown once readmitted")
 	}
 }
+
+// The decision's own guards, reached directly: with the invitation and its
+// context held, (a) the exact cancellation still waiting held counts before
+// the decision, which is refused; (b) a stored event that does not count
+// (as the early path once stored) leaves the invitation waiting for evidence,
+// and neither accepting nor declining goes through.
+func TestGroupGuestDecisionGuards(t *testing.T) {
+	setup := func(t *testing.T) (*world, string, ParticipationInfo, []envelope.Envelope) {
+		w, conv := offlineGroupGuestFixture(t)
+		first, err := w.alice.InviteHuman(tctx(t), conv, w.bob.Address, nil, "first")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = w.alice.DismissParticipation(tctx(t), first.PID); err != nil {
+			t.Fatal(err)
+		}
+		events := pidCopies(t, w.alice, w.bob, first.PID, envelope.SubEvent) // invite, scope, dismissal
+		deliverCopies(t, w.alice, w.bob, events[:len(events)-1])
+		deliverPIDCopies(t, w.alice, w.bob, first.PID, envelope.SubGroupProof)
+		deliverPIDCopies(t, w.alice, w.bob, first.PID, envelope.SubGroupContext)
+		return w, conv, first, events
+	}
+	t.Run("held-cancellation", func(t *testing.T) {
+		w, _, first, events := setup(t)
+		dismissal := events[len(events)-1]
+		raw, _ := json.Marshal(dismissal)
+		if err := w.bob.store.quarantine(dismissal.ID, dismissal.From, reasonProof, raw); err != nil {
+			t.Fatal(err)
+		}
+		if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartInvited {
+			t.Fatalf("before the decision: %+v %v", got, e)
+		}
+		if got, e := w.bob.AcceptParticipation(tctx(t), first.PID); e == nil {
+			t.Fatalf("cancelled invitation accepted: %+v", got)
+		}
+		if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartDismissed {
+			t.Fatalf("held cancellation not counted at the decision: %+v %v", got, e)
+		}
+	})
+	t.Run("held-evidence", func(t *testing.T) {
+		w, conv, first, _ := setup(t)
+		evs, err := w.bob.store.participationEvents(conv, first.PID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(evs, func(ev protocol.ParticipationEvent) bool { return ev.Type == protocol.EventInvite })
+		bad := protocol.ParticipationEvent{V: 1, Conv: conv, PID: first.PID, Type: protocol.EventDismiss, Prev: evs[i].Hash(), TS: time.Now().Unix(), Author: evs[i].Author}
+		bad.Author.Roster = strings.Repeat("cd", 32)
+		bad.Sign(w.alice.id.Sign)
+		body, _ := json.Marshal(bad)
+		tx, err := w.bob.store.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = insertParticipationEvent(tx, bad, body); err != nil {
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartInvited || got.Held != 1 {
+			t.Fatalf("not waiting for evidence: %+v %v", got, e)
+		}
+		if got, e := w.bob.AcceptParticipation(tctx(t), first.PID); e == nil {
+			t.Fatalf("accepted while evidence is held: %+v", got)
+		}
+		if got, e := w.bob.DeclineParticipation(tctx(t), first.PID); e == nil {
+			t.Fatalf("declined while evidence is held: %+v", got)
+		}
+	})
+}
