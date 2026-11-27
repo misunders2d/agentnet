@@ -4434,3 +4434,14 @@ Under a file, “Save a readable copy to Google Drive” now appears only when
 that copy can be saved; an off, unconfigured or unavailable Drive shows
 nothing instead of a dead “Google Drive off” label
 (`review_topics_ui_check.mjs`, `review_unread_rendered.cjs`).
+
+## Participation service rows (v0.11.13)
+
+Owner, 2026-11-27: joined/left/invited records filled the screen as cards. Reused
+pattern: Telegram service messages (one small centered line, no avatar or card).
+`TestServiceRowsRendered` (`internal/ui/testdata/service_rows_rendered.cjs`) renders
+nine records in Comic and Office at 1440 and 390 px: each row is a 13 px line
+without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
+161 px desktop), and the inline "saw N messages" control opens What it saw and
+closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
+

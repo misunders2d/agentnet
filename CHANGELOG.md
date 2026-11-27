@@ -20,6 +20,9 @@ This record starts with v0.8.1; earlier releases remain on the
   line.
 - "Save a readable copy to Google Drive" shows under a file only when it
   can actually save one; the dead "Google Drive off" label is gone.
+- Agent and guest updates in a chat ("joined to help", "left", "invited")
+  are one small line each instead of a large card, so a few of them no longer
+  fill the screen. "saw 17 messages" opens what the agent or guest saw.
 - The desktop app no longer shows the browser's own right-click menu (Back,
   Refresh, Save as, Print). Its Back left a blank window on Windows. Back
   from the mouse or keyboard can no longer leave the chats either. Text

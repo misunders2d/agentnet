@@ -18,3 +18,10 @@ func TestAgentDismissalsRendered(t *testing.T) {
 	}
 	t.Log(browserCheck(t, "testdata/agent_dismissal_rendered.cjs"))
 }
+
+func TestServiceRowsRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("set AGENTNET_PLAYWRIGHT for rendered service rows")
+	}
+	t.Log(browserCheck(t, "testdata/service_rows_rendered.cjs"))
+}
