@@ -1339,6 +1339,23 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   await w.receive(outside.ordinary);check(!await w.st.get('inbox',outside.ordinary.inner.id),'outside browser visitor cannot admit ordinary room plaintext');
   let visitorSendRefused=false;try{await w.e.sendDM({conv:outsideConv,body:'visitor cannot send'});}catch(e){visitorSendRefused=true;}check(visitorSendRefused&&(await w.st.all('outbox')).length===0,'outside browser visitor cannot send ordinary group turn or stage fallback');
   await w.reload();check((await w.e.groupThread(outsideConv)).role==='visitor','outside browser visitor role survives actual store reload');await w.close();
+  // MEL-841: the inviter's exact cancellation counts before the cancelled
+  // invitation is shown actionable, in either order and with no proof retry
+  // in between; the second, live invitation stays decidable; a dismissal that
+  // does not follow the invitation exactly, or names another admission, stays held.
+  for(const order of [['human-dismiss-wrong-admission','human-dismiss','human-dismiss-wrong-prev','human-invite'],['human-invite','human-dismiss-wrong-admission','human-dismiss','human-dismiss-wrong-prev']]){
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};const label=order[0]==='human-invite'?'invitation first':'cancellation first';
+   for(const name of [...order,'human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   const t=await w.e.groupThread(outsideConv),cancelled=t.guests.find(g=>g.pid===outside['human-pid']),live=t.guests.find(g=>g.pid===outside['human-pid-second']);
+   check(cancelled?.state==='dismissed'&&!cancelled.can_decide,'browser cancelled room invitation is not actionable once context arrives ('+label+')');
+   check(live?.state==='invited'&&live.can_decide,'browser second room invitation stays decidable ('+label+')');
+   check(!await w.st.get('held',outside['human-dismiss'].inner.id),'browser exact cancellation is not left held ('+label+')');
+   for(const name of ['human-dismiss-wrong-prev','human-dismiss-wrong-admission'])check((await w.st.get('held',outside[name].inner.id))?.reason==='proof_pending','browser '+name+' cancellation stays held before context ('+label+')');
+   let refused=false;try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept:true});}catch{refused=true;}
+   check(refused,'browser cancelled room invitation cannot be accepted ('+label+')');
+   await w.close();
+  }
   w=await world();const ownRoster=await wire.parseRoster(v.challenge.rosters[0]),ownNext={...ownRoster,seq:1,prev:await wire.rosterHash(ownRoster),devices:[...ownRoster.devices,pub],by:await wire.fingerprint(alicePub),sig:null,join:await wire.joinConsent(keys,address,ownRoster.person,1,await wire.rosterHash(ownRoster))};
   const ownUnsigned=JSON.parse(wire.rosterJSON(ownNext));delete ownUnsigned.sig;delete ownUnsigned.join;ownNext.sig=new Uint8Array(await crypto.subtle.sign('Ed25519',aliceKeys.sign,new TextEncoder().encode('agentnet-person-v2\n'+JSON.stringify(ownUnsigned))));
   await wire.verifyNext(ownNext,ownRoster);w.extraChains.set(ownRoster.person,[ownRoster,ownNext].map(r=>JSON.parse(wire.rosterJSON(r))));w.e.me=await w.e.personRecord([ownRoster,ownNext],'self',null);await w.st.write([{s:'kv',k:'person',v:w.e.me}]);await w.e.pinDevices(w.e.me);

@@ -6457,7 +6457,24 @@ export class Engine {
       await this.convEvents(n.conv,checks,n.pid);
       const key=pin.fingerprint+"/"+n.lid,hash=await wire.groupHistoryContentHash(n.conv,n),seen=await this.groupRead(checks,"lids",key);
       if(seen&&seen.hash!==hash)throw new Hold("conflicting_duplicate","Visitor invitation logical conflict.");
-      const ops=seen?[]:[{s:"kv",k:"group/"+n.conv,v:next},{s:"inbox",k:env.id,v:{...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,replica:false,own:false,target:null,read:true}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;ops.groupCarrier=true;return ops;
+      const ops=seen?[]:[{s:"kv",k:"group/"+n.conv,v:next},{s:"inbox",k:env.id,v:{...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,replica:false,own:false,target:null,read:true}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;ops.groupCarrier=true;
+      ops.visitorInvite={from:e.author.address,conv:n.conv,pid:n.pid};return ops; // its cancellation may have come first (admit)
+    }
+    // The exact inviter device's signed cancellation of this device's own
+    // pending visitor invitation counts before context (client
+    // admitGroupVisitorCancel, MEL-841): otherwise the cancelled invitation
+    // becomes decidable once context comes. Anything else waits for context.
+    if(!g?.context && record?.e.type==="dismiss" && record.e.author.address===env.from && record.e.author.fingerprint===pin.fingerprint) {
+      let inv=null;try{inv=await this.groupVisitorInvite(root,n.pid,checks,this.address,this.fp,admission);}catch(err){if(!(err instanceof Hold))throw err;}
+      const e=record.e,a=inv?.e.author;
+      if(inv&&e.prev===inv.hash&&e.author.person===a.person&&e.author.address===a.address&&e.author.fingerprint===a.fingerprint&&!!e.author.group_admission&&e.author.group_admission===a.group_admission) {
+        const author=await this.personOf(env.from,pin, admission);
+        if(author.person===e.author.person&&author.hashes.includes(e.author.roster)) {
+        const key=pin.fingerprint+"/"+n.lid,hash=await wire.groupHistoryContentHash(n.conv,n),seen=await this.groupRead(checks,"lids",key);
+        if(seen&&seen.hash!==hash)throw new Hold("conflicting_duplicate","Visitor cancellation logical conflict.");
+        const ops=seen?[]:[{s:"inbox",k:env.id,v:{...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,replica:false,own:false,target:null,read:true}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;return ops;
+        }
+      }
     }
     if(!g?.context)throw new Hold("proof_pending","Group PID current context is missing.");
     const events=await this.convEvents(n.conv,checks);if(n.human)events.push(...await Promise.all(n.human.proof.map(async e=>({e,hash:await wire.eventHash(e)}))));if(record)events.push(record);
@@ -7443,6 +7460,7 @@ export class Engine {
       if (ops.syncCarrier) ops.push({ s: "kv", k: "sync-carrier/" + env.id, v: true });
       await this.removeReceivePending(data,env,ops,ops.checks);
       await this.store.write(ops, ops.checks);
+      if (ops.visitorInvite) await this.admitHeldDismissals(ops.visitorInvite.from, ops.visitorInvite.conv, ops.visitorInvite.pid).catch(() => {}); // before it is shown (MEL-841)
       if (fromHeld) this.flushReceipts().catch(() => {});
       if (ops.some((o) => o.s === "erased")) await this.loadErased();
       this.changed(true);
@@ -8181,6 +8199,33 @@ export class Engine {
     } finally {
       this.retrying = null;
       this.discloseHumanAudience(); // group ends also follow fresh membership evidence
+    }
+  }
+
+  // admitHeldDismissals admits now, with every usual check, the dismissals
+  // of pid in conv from the device from that wait held for proof (client
+  // admitHeldDismissals, MEL-841): a cancellation that came before its
+  // invitation would otherwise wait for the next proof retry while the
+  // cancelled invitation is shown and decidable. Only the exact inviter's
+  // signed dismissal of that exact invitation counts; anything else stays
+  // held as it was. Failing to reach the server is thrown.
+  async admitHeldDismissals(from, conv, pid) {
+    const pin = await this.store.get("pins", from);
+    if (!pin || pin.pending) return;
+    for (let pos = "";;) {
+      const page = await this.store.after("held", pos, heldPage);
+      for (const h of page) {
+        pos = h.id;
+        if (h.reason !== "proof_pending" || h.from !== from) continue;
+        let env;
+        try {
+          env = wire.parseEnvelope(h.envelope);
+          const n = await wire.open(h.envelope, this.keys, this.address, await this.pubOf(pin));
+          if (n.v !== wire.Version2 || n.conv !== conv || n.pid !== pid || n.sub !== "event" || wire.parseEvent(n.body).type !== "dismiss") continue;
+        } catch (_) { continue; }
+        await this.admit(h.envelope, env, true, false, { ...(h.relay_ingress ? {[relayIngress]:env.id} : {}), checks:[], state:{deferred:false}, missingPersons:new Set() });
+      }
+      if (page.length < heldPage) return;
     }
   }
 
@@ -11314,7 +11359,11 @@ export class Engine {
       return this.inviteHuman(body);
     }
     if (!wire.validID(body.pid) || action === "decide" && typeof body.accept !== "boolean") throw new Error("Choose one exact human participation action.");
-    const { c, info } = await this.agentConv(body.pid);
+    let { c, info } = await this.agentConv(body.pid);
+    if (action === "decide" && info.state === "invited") { // a cancellation that came before the invitation counts first (MEL-841)
+      const invite = (await this.convEvents(c.id, [], info.pid)).find(x => x.e.type === "invite" && x.hash === info.invite);
+      if (invite) { await this.admitHeldDismissals(invite.e.author.address, c.id, info.pid); ({ c, info } = await this.agentConv(body.pid)); }
+    }
     const members=await this.dmMembers(c), member=members.has(this.me?.person);
     if (info.role !== "human") throw new Error("This action requires a human participation, not an agent.");
     const view = this.guestView(info, member);

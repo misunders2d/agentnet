@@ -136,6 +136,30 @@ func groupOutsideBrowserVectors(t *testing.T, old protocol.ConvRoot, alice, bob 
 	seal("own-accept", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: ownEvent.PID, Body: marshal(t, ownDecision)})
 	seal("own-question", envelope.Inner{Kind: envelope.KindQuestion, PID: ownEvent.PID, Body: "Exact own linked request replica", Origin: "ui", Replica: true, Target: &envelope.Target{Address: ownEvent.Host.Address, Fingerprint: ownEvent.Host.Fingerprint, AgentID: ownEvent.Host.AgentID, GroupAdmission: am.Admission.Hash()}})
 	out["own-pid"] = ownEvent.PID
+	// MEL-841: this browser person invited twice as a room guest; the
+	// inviter's exact cancellation of the first, ones that do not follow it
+	// exactly or name another admission, and the second's carriers.
+	human := ev
+	human.PID, human.Role, human.Audience = protocol.NewID(), protocol.RoleHuman, protocol.AudienceRoom
+	human.Host = &protocol.ParticipationHost{Person: browserRoster.Person, Address: browser.Address, Fingerprint: browser.Fingerprint()}
+	human.Sign(alice.Sign)
+	seal("human-invite", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: human.PID, Body: marshal(t, human)})
+	dismiss := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: human.PID, Type: protocol.EventDismiss, Prev: human.Hash(), TS: 1700000101, Author: human.Author}
+	dismiss.Sign(alice.Sign)
+	seal("human-dismiss", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: human.PID, Body: marshal(t, dismiss)})
+	wrong := dismiss
+	wrong.Prev = strings.Repeat("ab", 32)
+	wrong.Sign(alice.Sign)
+	seal("human-dismiss-wrong-prev", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: human.PID, Body: marshal(t, wrong)})
+	unadmitted := dismiss
+	unadmitted.Author.GroupAdmission = strings.Repeat("cd", 32)
+	unadmitted.Sign(alice.Sign)
+	seal("human-dismiss-wrong-admission", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: human.PID, Body: marshal(t, unadmitted)})
+	live := human
+	live.PID, live.TS = protocol.NewID(), 1700000102
+	live.Sign(alice.Sign)
+	seal("human-invite-second", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: live.PID, Body: marshal(t, live)})
+	out["human-pid"], out["human-pid-second"] = human.PID, live.PID
 	for _, sub := range []string{envelope.SubGroupProof, envelope.SubGroupContext} {
 		var payload any = packet
 		if sub == envelope.SubGroupProof {
@@ -148,6 +172,7 @@ func groupOutsideBrowserVectors(t *testing.T, old protocol.ConvRoot, alice, bob 
 		desc := protocol.GroupCarrier{V: 1, Seq: 0, Hash: state.Hash(), ToKey: browser.Fingerprint()}
 		seal(sub, envelope.Inner{Kind: envelope.KindMessage, Sub: sub, PID: ev.PID, Body: marshal(t, desc), Attachments: []envelope.Attachment{att}})
 		seal("own-"+sub, envelope.Inner{Kind: envelope.KindMessage, Sub: sub, Body: marshal(t, desc), Attachments: []envelope.Attachment{att}})
+		seal(sub+"-human", envelope.Inner{Kind: envelope.KindMessage, Sub: sub, PID: live.PID, Body: marshal(t, desc), Attachments: []envelope.Attachment{att}})
 		out[sub+"-file"] = map[string]any{"blob": att.Blob.ID, "ct": base64.StdEncoding.EncodeToString(ct)}
 	}
 	selectedBytes := []byte("OWN_LINKED_SELECTED_BYTES")
