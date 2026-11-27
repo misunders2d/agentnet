@@ -3,7 +3,8 @@
 // groupRanges is GroupRanges from Telegram Desktop
 // Telegram/SourceFiles/ui/chat/attach/attach_prepare.cpp: consecutive files of
 // one kind form a group, a new group starts when the kind changes or after
-// kMaxAlbumCount items, and a run of one stays a single file.
+// kMaxAlbumCount items, and a run of one stays a single file. "single" is
+// AlbumType::None (a GIF): such files are never an album, each shows alone.
 //
 // layoutMediaGroup is LayoutMediaGroup from Telegram/SourceFiles/ui/
 // grouped_layout.cpp, with the album sizes of history_view_media_grouped.cpp
@@ -14,7 +15,7 @@
 // testdata/grouped_layout_vectors.json holds the geometry the unmodified C++
 // produced; testdata/grouped_layout_check.mjs compares this port with it.
 
-export type GroupKind = "media" | "music" | "file";
+export type GroupKind = "media" | "music" | "file" | "single";
 export type GroupRange = { from: number; till: number; kind: GroupKind; album: boolean };
 
 export const MAX_ALBUM = 10; // kMaxAlbumCount
@@ -29,14 +30,22 @@ export function groupRanges(kinds: readonly GroupKind[]): GroupRange[] {
   let kind = kinds[0];
   for (let i = 0; i < kinds.length; i++) {
     const count = i - from;
-    if ((i > from && kind !== kinds[i]) || count === MAX_ALBUM) {
-      result.push({ from, till: i, kind, album: count > 1 });
+    if ((i > from && kind !== kinds[i]) || (kind !== "single" && count === MAX_ALBUM)) {
+      result.push({ from, till: i, kind, album: count > 1 && kind !== "single" });
       from = i;
     }
     kind = kinds[i];
   }
-  result.push({ from, till: kinds.length, kind, album: kinds.length - from > 1 });
+  result.push({ from, till: kinds.length, kind, album: kinds.length - from > 1 && kind !== "single" });
   return result;
+}
+
+// validRatio keeps a width:height ratio within Telegram's
+// ValidateThumbDimensions bounds (each side under 20 times the other); a
+// size that gives no ratio (0, NaN, Infinity) counts as square.
+export function validRatio(ratio: number): number {
+  if (!Number.isFinite(ratio) || ratio <= 0) return 1;
+  return Math.min(Math.max(ratio, 1 / 20), 20);
 }
 
 // RectPart bits as in ui/rect_part.h.
@@ -51,7 +60,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), h
 export function layoutMediaGroup(sizes: readonly Size[], maxWidth = ALBUM_WIDTH, minWidth = ALBUM_MIN_WIDTH, spacing = ALBUM_SPACING): Tile[] {
   const count = sizes.length;
   if (!count) return [];
-  const ratios = sizes.map(s => s.width / s.height);
+  const ratios = sizes.map(s => validRatio(s.width / s.height));
   const proportions = ratios.map(r => r > 1.2 ? "w" : r < 0.8 ? "n" : "q").join("");
   const maxHeight = maxWidth; // "All apps currently use square max size first."
   const averageRatio = ratios.reduce((a, r) => a + r, 1) / count; // accumulate starts at 1.

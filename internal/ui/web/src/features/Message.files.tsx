@@ -22,7 +22,7 @@ import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.file
 import { Markdown } from "./Markdown";
 import { interleaveMp4 } from "./video-interleave";
 import { capturePoster } from "./video-poster";
-import { ALBUM_WIDTH, groupRanges, layoutMediaGroup, type GroupKind } from "./Message.groups";
+import { ALBUM_WIDTH, groupRanges, layoutMediaGroup, validRatio, type GroupKind } from "./Message.groups";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string; fetch?: string }
 
@@ -61,20 +61,26 @@ function standing(m: AnyMsg, f: FileItem): "open" | "request" | "requested" | "g
 export const hasFiles = (m: AnyMsg) => filesOf(m).length > 0;
 
 const audioName = /\.(mp3|m4a|aac|flac|wav|opus|oga|weba)$/i;
-// Pictures whose bytes turned out not to be a picture (or failed to decode):
-// they leave the album and show as files, as before.
+// Pictures whose bytes are not a picture (sniff): they leave the album and
+// show as files, as before. A fetch or decode that failed instead shows the
+// file row only while that MessageFiles is mounted, and is tried again on
+// the next open. clearPictures forgets both.
 const notPictures = new Set<string>();
+const gifName = /\.gif$/i;
 
 // kindOf is Telegram's album type for one attachment (attach_prepare.cpp
-// AlbumType): photos, videos and GIFs share the mosaic; audio and other
-// files each form a column. A file not here (to ask for, gone, sent from
+// AlbumType): photos and videos share the mosaic; audio and other files each
+// form a column. A GIF is AlbumType::None there (GroupRanges): never in an
+// album, always on its own. A file not here (to ask for, gone, sent from
 // elsewhere) is a file row. A message still sending keeps its pictures and
 // videos in the album, so the album shows at once and stays when it is sent.
-function kindOf(m: AnyMsg, f: FileItem): GroupKind {
+function kindOf(m: AnyMsg, f: FileItem, broken: Set<string>): GroupKind {
+  if (gifName.test(f.name)) return "single";
   const st = standing(m, f);
   const shown = st === "open" || (!!m._local && st === "sent");
+  const key = pictureKey(m, f);
   if (shown && videoName.test(f.name)) return "media";
-  if (shown && pictureName.test(f.name) && !notPictures.has(pictureKey(m, f))) return "media";
+  if (shown && pictureName.test(f.name) && !notPictures.has(key) && !broken.has(key)) return "media";
   if (audioName.test(f.name)) return "music";
   return "file";
 }
@@ -87,18 +93,21 @@ export function MessageFiles({ m, className = "mt-1.5" }: { m: AnyMsg; className
   // Each tile's width:height once known (a picture's decoded size, a
   // video's poster or 16:9). The album lays out once all its pictures are known.
   const [ratios, setRatios] = useState(() => new Map<string, number>());
+  const [broken] = useState(() => new Set<string>()); // failed here: file rows until the next open
   const files = filesOf(m);
-  const kinds = files.map(f => kindOf(m, f));
+  const kinds = files.map(f => kindOf(m, f, broken));
   const groups = groupRanges(kinds).map(g => ({ ...g, files: files.slice(g.from, g.till) }));
   const album = viewer ? groups.find(g => g.album && g.kind === "media" && g.files.some(f => f.index === viewer.index)) : undefined;
-  const single = viewer && !album ? groups.find(g => !g.album && g.kind === "media" && g.files[0].index === viewer.index && pictureName.test(g.files[0].name)) : undefined;
-  const shown = album?.files || single?.files || [];
+  const lone = viewer && !album ? files.find(f => f.index === viewer.index && pictureName.test(f.name) && standing(m, f) === "open" && !notPictures.has(pictureKey(m, f)) && !broken.has(pictureKey(m, f))) : undefined;
+  const shown = album?.files || (lone ? [lone] : []);
   const selected = viewer ? shown.findIndex(f => f.index === viewer.index) : -1;
   // A removed or no longer openable attachment closes its viewer.
   if (viewer && selected < 0) setViewer(null);
   if (!files.length) return null;
   const known = (key: string, ratio: number) => setRatios(current => current.get(key) === ratio ? current : new Map(current).set(key, ratio));
-  const failed = (key: string) => { notPictures.add(key); rerender(n => n + 1); };
+  // notPicture: the bytes were sniffed and are not a picture; otherwise the
+  // fetch or decode failed, which is tried again on the next open.
+  const failed = (key: string, notPicture: boolean) => { (notPicture ? notPictures : broken).add(key); rerender(n => n + 1); };
   return (
     <div className={"flex min-w-0 flex-col gap-1.5 " + className}>
       {groups.map(g => {
@@ -106,15 +115,19 @@ export function MessageFiles({ m, className = "mt-1.5" }: { m: AnyMsg; className
         if (g.album && g.kind === "media") return <MediaAlbum key={"album\n" + key} m={m} files={g.files} ratios={ratios} onKnown={known} onFailed={failed}
           onOpen={(f, opener) => setViewer({ index: f.index, opener })} />;
         if (g.album) return <FileColumn key={"column\n" + key} m={m} files={g.files} music={g.kind === "music"} />;
-        const f = g.files[0];
-        const open = standing(m, f) === "open";
-        return <Fragment key={key}>
-          {g.kind === "media" && pictureName.test(f.name) && open ? <Picture m={m} f={f} onFailed={() => failed(key)} onOpen={opener => setViewer({ index: f.index, opener })} /> :
-            <div className="min-w-0 space-y-1">
-              {g.kind === "media" && open && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} music={g.kind === "music"} />}
-              {open && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
-            </div>}
-        </Fragment>;
+        // Not an album: each file on its own (one, or a run of GIFs).
+        return g.files.map(f => {
+          const fileKey = pictureKey(m, f);
+          const open = standing(m, f) === "open";
+          const picture = open && pictureName.test(f.name) && !notPictures.has(fileKey) && !broken.has(fileKey);
+          return <Fragment key={fileKey}>
+            {picture ? <Picture m={m} f={f} onFailed={notPicture => failed(fileKey, notPicture)} onOpen={opener => setViewer({ index: f.index, opener })} /> :
+              <div className="min-w-0 space-y-1">
+                {g.kind === "media" && open && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} music={g.kind === "music"} />}
+                {open && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
+              </div>}
+          </Fragment>;
+        });
       })}
       {viewer && selected >= 0 && <MediaGallery m={m} f={shown[selected]} inAlbum={!!album}
         opener={viewer.opener} onClose={() => setViewer(null)}
@@ -139,14 +152,14 @@ export function MessageFiles({ m, className = "mt-1.5" }: { m: AnyMsg; className
 // out once.
 function MediaAlbum({ m, files, ratios, onKnown, onFailed, onOpen }: {
   m: AnyMsg; files: FileItem[]; ratios: Map<string, number>;
-  onKnown: (key: string, ratio: number) => void; onFailed: (key: string) => void;
+  onKnown: (key: string, ratio: number) => void; onFailed: (key: string, notPicture: boolean) => void;
   onOpen: (f: FileItem, opener: HTMLButtonElement) => void;
 }) {
   const keys = files.map(f => pictureKey(m, f));
   const ratioOf = (f: FileItem, key: string) => ratios.get(key) ?? (videoName.test(f.name) ? undefined : pictures.get(key)?.ratio);
   const ready = files.every((f, i) => videoName.test(f.name) || ratioOf(f, keys[i]) !== undefined);
   const sizes = files.map((f, i) => {
-    const ratio = ready ? ratioOf(f, keys[i]) ?? 16 / 9 : 1;
+    const ratio = ready ? validRatio(ratioOf(f, keys[i]) ?? 16 / 9) : 1;
     return { width: Math.round(ratio * 1000), height: 1000 };
   });
   const tiles = layoutMediaGroup(sizes);
@@ -161,7 +174,7 @@ function MediaAlbum({ m, files, ratios, onKnown, onFailed, onOpen }: {
           style={{ left: pct(t.x, ALBUM_WIDTH), top: pct(t.y, height), width: pct(t.width, ALBUM_WIDTH), height: pct(t.height, height) }}>
           {videoName.test(f.name)
             ? <VideoTile m={m} f={f} onKnown={ratio => onKnown(keys[i], ratio)} onOpen={opener => onOpen(f, opener)} />
-            : <PictureTile m={m} f={f} onKnown={ratio => onKnown(keys[i], ratio)} onFailed={() => onFailed(keys[i])} onOpen={opener => onOpen(f, opener)} />}
+            : <PictureTile m={m} f={f} onKnown={ratio => onKnown(keys[i], ratio)} onFailed={notPicture => onFailed(keys[i], notPicture)} onOpen={opener => onOpen(f, opener)} />}
         </div>;
       })}
     </div>
@@ -194,7 +207,7 @@ function useNearScreen<T extends HTMLElement>(enabled: boolean, deps: unknown[],
 }
 
 function PictureTile({ m, f, onKnown, onFailed, onOpen }: {
-  m: AnyMsg; f: FileItem; onKnown: (ratio: number) => void; onFailed: () => void; onOpen: (opener: HTMLButtonElement) => void;
+  m: AnyMsg; f: FileItem; onKnown: (ratio: number) => void; onFailed: (notPicture: boolean) => void; onOpen: (opener: HTMLButtonElement) => void;
 }) {
   const store = useApp();
   const key = pictureKey(m, f);
@@ -208,25 +221,30 @@ function PictureTile({ m, f, onKnown, onFailed, onOpen }: {
   const box = useNearScreen<HTMLButtonElement>(!url && !local, [key, local], () => {
     fetchPicture(store.api, m, f).then((p) => {
       if (!alive.current) return;
-      if (p.picture) setUrl(p.url); else onFailed();
-    }).catch(() => { if (alive.current) onFailed(); });
+      if (p.picture) setUrl(p.url); else onFailed(true);
+    }).catch(() => { if (alive.current) onFailed(false); });
   });
   useEffect(() => { if (known?.ratio !== undefined) onKnown(known.ratio); }, [key]);
   return (
     <button ref={box} type="button" onClick={e => { if (url) onOpen(e.currentTarget); }} aria-label={"Open picture " + f.name} title={f.name}
-      aria-busy={local || undefined} className="relative block size-full overflow-hidden bg-sunken">
+      aria-busy={local || undefined} className={"relative block size-full overflow-hidden bg-sunken " + tileFocus}>
       {url && <img src={url} alt={f.name} onLoad={({ currentTarget: image }) => {
         const ratio = image.naturalWidth / image.naturalHeight;
         const cached = pictures.get(key);
         if (cached?.url === url) cached.ratio = ratio;
         onKnown(ratio);
         setShown(true);
-      }} onError={onFailed} decoding="async"
+      }} onError={() => onFailed(false)} decoding="async"
         className={"absolute inset-0 size-full object-cover transition-opacity duration-200 motion-reduce:transition-none " + (shown ? "opacity-100" : "opacity-0")} />}
       {!shown && <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
     </button>
   );
 }
+
+// The focus ring of an album tile is drawn inside it: the album clips
+// anything outside its rounded block. An outline paints above the picture
+// (an inset box-shadow would sit under it).
+const tileFocus = "focus-visible:rounded-none focus-visible:outline-3 focus-visible:-outline-offset-3 focus-visible:outline-agent-ink";
 
 // A video in the album: its poster (made here, as on its own card) with
 // Telegram's play badge; a tap opens the viewer, which plays it.
@@ -238,7 +256,7 @@ function VideoTile({ m, f, onKnown, onOpen }: { m: AnyMsg; f: FileItem; onKnown:
   const inline = Number.isSafeInteger(f.size) && f.size > 0 && f.size <= INLINE_VIDEO_LIMIT;
   const [poster, setPoster] = useState<Poster | null>(() => posters.get(key) || null);
   useInUse(key);
-  useEffect(() => { onKnown(poster?.url ? poster.width / poster.height : 16 / 9); }, [key]);
+  useEffect(() => { onKnown(poster?.url ? poster.width / poster.height : 16 / 9); }, [key, poster]);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const box = useNearScreen<HTMLButtonElement>(here && inline && !poster, [key, here, inline, !!poster], () => {
@@ -248,7 +266,7 @@ function VideoTile({ m, f, onKnown, onOpen }: { m: AnyMsg; f: FileItem; onKnown:
   return (
     <button ref={box} type="button" onClick={e => onOpen(e.currentTarget)} aria-label={"Open video " + f.name} title={f.name}
       aria-busy={m._local || undefined} data-poster={still ? "ready" : here && inline && !poster ? "loading" : here && inline ? "none" : "waiting"}
-      className="group relative block size-full overflow-hidden bg-black text-white">
+      className={"group relative block size-full overflow-hidden bg-black text-white " + tileFocus}>
       {still && <img src={still} alt="" draggable={false} decoding="async" className="absolute inset-0 size-full object-cover" />}
       <span className="absolute inset-0 grid place-items-center">
         <span className="grid size-11 place-items-center rounded-full bg-black/60 shadow-lg transition-transform duration-150 group-hover:scale-105 motion-reduce:transition-none">
@@ -318,6 +336,7 @@ const inUse = new Map<string, number>(); // mounted Pictures per key
 const pictureKey = (m: AnyMsg, f: FileItem) => m.id + "\n" + f.index + "\n" + m.dir;
 
 export function clearPictures() {
+  notPictures.clear();
   for (const p of pictures.values()) URL.revokeObjectURL(p.url);
   pictures.clear();
   fetchingPics.clear();
@@ -445,7 +464,7 @@ function MediaGallery({ m, f, inAlbum, opener, onClose, navigation }: {
       {drive}</>} />;
 }
 
-function Picture({ m, f, onFailed, onOpen }: { m: AnyMsg; f: FileItem; onFailed: () => void; onOpen: (opener: HTMLButtonElement) => void }) {
+function Picture({ m, f, onFailed, onOpen }: { m: AnyMsg; f: FileItem; onFailed: (notPicture: boolean) => void; onOpen: (opener: HTMLButtonElement) => void }) {
   const store = useApp();
   const box = useRef<HTMLButtonElement>(null);
   const key = pictureKey(m, f);
@@ -462,14 +481,17 @@ function Picture({ m, f, onFailed, onOpen }: { m: AnyMsg; f: FileItem; onFailed:
       io.disconnect();
       fetchPicture(store.api, m, f).then((p) => {
         if (!alive) return;
-        if (p.picture) setUrl(p.url); else onFailed();
-      }).catch(() => { if (alive) onFailed(); });
+        if (p.picture) setUrl(p.url); else onFailed(true);
+      }).catch(() => { if (alive) onFailed(false); });
     }, { rootMargin: "200px" });
     io.observe(el);
     return () => { alive = false; io.disconnect(); };
   }, [key]);
   // Keep a placeholder while loading; a single picture keeps its whole
   // aspect ratio, bounded by the conversation and viewport.
+  // The fetch above already waits until the picture is near the screen, so
+  // the img loads at once (a lazy img could stay unloaded when it replaces
+  // an album tile that already had the picture).
   return (
     <div className="min-w-0 space-y-1">
       <button ref={box} type="button" onClick={e => { if (url) onOpen(e.currentTarget); }} aria-label={"Open picture " + f.name} title={"Open full image: " + f.name}
@@ -479,7 +501,7 @@ function Picture({ m, f, onFailed, onOpen }: { m: AnyMsg; f: FileItem; onFailed:
           const cached = pictures.get(key);
           if (cached?.url === url) cached.ratio = image.naturalWidth / image.naturalHeight;
           setShown(true);
-        }} onError={onFailed} loading="lazy" decoding="async"
+        }} onError={() => onFailed(false)} decoding="async"
           className={"block h-auto max-h-[min(60dvh,480px)] w-auto max-w-full object-contain transition-opacity duration-200 motion-reduce:transition-none " + (shown ? "opacity-100" : "opacity-0")} />}
         {!shown && <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
       </button>

@@ -160,7 +160,14 @@ async function stepViewer(page, dialogName, delta, phone) {
   const b=await stage.boundingBox();const cdp=await page.context().newCDPSession(page);const y=b.y+Math.min(b.height/2,90);const at=x=>[{x:b.x+x,y}];
   await recordDocumentInput(page,'pointerup');
   const [from,to]=delta>0?[b.width*.75,b.width*.25]:[b.width*.25,b.width*.75];
-  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:at(from)});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:at((from+to)/2)});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:at(to)});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
+  // A finger's swipe: one touch id, moves a frame apart, still before lifting.
+  // Two instant jumps (no id) sometimes ended without a touchend in Chromium,
+  // and the next tap then gave no click.
+  const pt=x=>[{...at(x)[0],id:1,radiusX:8,radiusY:8,force:1}];
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:pt(from)});
+  for(let k=1;k<=6;k++){await page.waitForTimeout(16);await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:pt(from+(to-from)*k/6)});}
+  await page.waitForTimeout(50);await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:pt(to)});
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await cdp.detach();
  }else{
   const button=dialog.getByRole('button',{name:delta>0?'Next image':'Previous image',exact:true});
   await recordInput(button,'click');await button.click();
@@ -174,13 +181,18 @@ async function stepViewer(page, dialogName, delta, phone) {
 async function openAndBrowse(page, block, g, phone, metric) {
  const first=tileButtons(page,block).first();
  await first.scrollIntoViewIfNeeded();
- if(!phone)await first.focus();
+ if(!phone){
+  await page.keyboard.press('Shift');await first.focus(); // a keyboard user's focus
+  const ring=await first.evaluate(b=>{const c=getComputedStyle(b);return {visible:b.matches(':focus-visible'),style:c.outlineStyle,width:parseFloat(c.outlineWidth),offset:parseFloat(c.outlineOffset)};});
+  assert(ring.visible&&ring.style!=='none'&&ring.width>=2&&ring.offset<=-ring.width,'album tile focus ring is drawn inside the tile, not clipped by the album: '+JSON.stringify(ring));
+ }
  await recordInput(first,phone?'click':'keydown');
  if(phone)await first.tap();else await page.keyboard.press('Enter');
  const dialog=page.getByRole('dialog',{name:g.names[0],exact:true});
  await dialog.waitFor();
  const openMs=await measureSinceInput(page,true);
  assert(openMs<1100,'viewer opens within the local feedback bound');
+ if(phone)await page.waitForTimeout(350); // a person's swipe does not start 30 ms after the tap
  const steps=[];
  for(let i=0;i<g.names.length;i++){
   const d=page.getByRole('dialog',{name:g.names[i],exact:true});
@@ -270,7 +282,7 @@ async function checkPending(page, phone) {
    if(phone){window.__agentnetPlatform='android';window.__agentnetAndroid={visible:()=>true,onVisibility:()=>()=>{},legacyDrafts:async()=>({drafts:[]}),acknowledgeLegacyDraft:async()=>({removed:true})};}
    window.imageResources={created:[],revoked:[]};
    // Failure evidence: the last trusted pointer events and their targets.
-   window.imageEvents=[];for(const type of ['pointerdown','pointerup','pointercancel','click','touchend','touchcancel','scroll'])document.addEventListener(type,e=>{if(!e.isTrusted)return;const n=e.composedPath()[0],t=n instanceof Element?n.closest('button,[role=region],[role=dialog]'):null;window.imageEvents.push({type,at:Math.round(performance.now()),target:t?(t.getAttribute('aria-label')||t.textContent.trim().slice(0,24)||t.getAttribute('role')):String(n?.nodeName||n)});if(window.imageEvents.length>16)window.imageEvents.shift();},{capture:true});
+   window.imageEvents=[];for(const type of ['touchstart','pointerdown','pointerup','pointercancel','click','dblclick','touchend','touchcancel','scroll'])document.addEventListener(type,e=>{if(!e.isTrusted)return;const n=e.composedPath()[0],t=n instanceof Element?n.closest('button,[role=region],[role=dialog]'):null;window.imageEvents.push({type,at:Math.round(performance.now()),target:t?(t.getAttribute('aria-label')||t.textContent.trim().slice(0,24)||t.getAttribute('role')):String(n?.nodeName||n)});if(window.imageEvents.length>16)window.imageEvents.shift();},{capture:true});
    const originalCreate=URL.createObjectURL.bind(URL),originalRevoke=URL.revokeObjectURL.bind(URL);
    URL.createObjectURL=b=>{const url=originalCreate(b);window.imageResources.created.push({url,type:b.type});return url;};
    URL.revokeObjectURL=url=>{window.imageResources.revoked.push(url);return originalRevoke(url);};

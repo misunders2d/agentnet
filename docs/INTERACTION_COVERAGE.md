@@ -38,10 +38,12 @@ behaviour, including the 2×2 "+N" grid, remains unverified and unused.
 
 What Comic does (`Message.groups.ts`, `Message.files.tsx`):
 
-- Attachments split as `GroupRanges` does: consecutive photos/videos/GIFs
+- Attachments split as `GroupRanges` does: consecutive photos/videos
   (album), audio (column) or other files (column); a kind change or ten items
   starts a new group; a group of one keeps the existing single picture, video
-  card or file row. Order never changes.
+  card or file row. A GIF is `AlbumType::None` there
+  (`attach_prepare.cpp` 177–183): never in an album or a column, always on
+  its own, and it splits the groups around it. Order never changes.
 - An album is `LayoutMediaGroup` at 430 px, scaled with its 4 px gaps to the
   bubble as `countCurrentSize` does, positioned in percentages. Tiles fill
   their cell (cover); only the block's outer corners are rounded. Videos show
@@ -62,9 +64,14 @@ groups for display rather than sent as several messages; the protocol and
 manifest are unchanged. More than ten items cannot be sent; the over-ten case
 is covered with fixture data only. The manifest has no picture dimensions,
 so an album lays out with unit ratios (Telegram Android's default) until every
-picture in it has decoded, then lays out once; a video counts as 16:9 unless
-its poster was already made. A picture whose bytes are not a picture leaves
-the album and becomes a file row, and the album re-forms around it. A message
+picture in it has decoded, then lays out once; a video counts as 16:9 until
+its poster is made, then takes the poster's shape. A ratio is kept within
+`ValidateThumbDimensions`' bounds (1:20 to 20:1); a size that gives none
+(0, NaN, Infinity) counts as square. A picture whose bytes are not a picture
+leaves the album and becomes a file row, and the album re-forms around it. A
+fetch or decode that fails shows the file row only until the conversation is
+opened again, when the picture is tried again. An album tile's focus ring is
+drawn inside the tile, since the album clips anything outside it. A message
 still sending shows its album at once (tiles marked busy, no thumbnails yet)
 instead of "sent, not kept here" rows.
 
@@ -79,12 +86,13 @@ did not run locally for the adjusted video checks; the installed app
 Layout fidelity. `TestGroupedMediaLayout` compares the port with 34 vectors
 produced by Telegram's unmodified `grouped_layout.cpp`, compiled against a
 small shim (`testdata/grouped_layout_oracle`), covering every branch; all
-match exactly. It also checks the grouping rules.
+match exactly. It also checks the grouping rules (GIFs included) and the
+ratio bounds, including 0, NaN and Infinity sizes.
 
 | Control or state | Rendered evidence in `testdata/message_images_rendered.cjs` (1440, 360, 320 px; 360/320 with touch and the Android host) |
 |---|---|
 | Album of 2–10 photos, portrait/landscape/square/panorama mixed, received and sent | Tile geometry equals Telegram's layout scaled to the block within 1.5 px; order; square inner corners, rounded block; no horizontal scroll |
-| Album tile (Enter / tap) | Opens the viewer at that item, under 1100 ms |
+| Album tile (Enter / tap) | Keyboard focus ring drawn inside the tile; opens the viewer at that item, under 1100 ms |
 | Viewer Previous/Next (click) and swipe (touch) | Step through every item with "i / n", stop at the ends; each step under 1100 ms |
 | Viewer Download, Close, Escape | Original bytes and filename; focus returns to the tile; under 1100 ms |
 | Video tile, playable (one playable and one large video in a 4-item album) | Poster, play badge; viewer plays the real clip and keeps Download; stepping away pauses, unloads and detaches it |
