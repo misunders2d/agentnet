@@ -60,7 +60,20 @@ func currentOwnLegacyHistory(q dbq, sender, reader identity.Public) error {
 func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
 	// The page is picked, then read, in two statements: on the store they
 	// share one read snapshot, so every picked row is still there to read.
-	if d, ok := q.(*storeDB); ok {
+	// Statement wrappers own no snapshot (a linked-device clear between the
+	// two once aborted a whole group selection); a caller's transaction
+	// keeps its own, as in controlMembers.
+	source := q
+	for {
+		if p, ok := source.(*preparedReads); ok {
+			source = p.dbq
+		} else if m, ok := source.(*membershipReads); ok {
+			source = m.dbq
+		} else {
+			break
+		}
+	}
+	if d, ok := source.(*storeDB); ok {
 		tx, err := d.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return nil, err
@@ -120,6 +133,7 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 	if err = errors.Join(picked.Err(), picked.Close()); err != nil || len(ids) == 0 {
 		return nil, err
 	}
+	betweenHistoryPickAndRead()
 	in := "?" + strings.Repeat(",?", len(ids)-1)
 	query := `
 		SELECT conv, ms, id, dir, sender, coalesce(verified_by, claimed_fp, '') AS verified_by, ts, kind, body, coalesce(reply_to, '') AS reply_to, coalesce(status, '') AS status, coalesce(sub, '') AS sub,
@@ -180,6 +194,10 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 }
 
 var errHistorySourceMoved = errors.New("history source changed while it was read")
+
+// betweenHistoryPickAndRead lets a test change the store between the two
+// statements of one history page.
+var betweenHistoryPickAndRead = func() {}
 
 // The narrow page choice reads every outbox column it needs from here, never
 // from the table row behind its inline envelope (owner's store: the busiest

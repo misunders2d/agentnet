@@ -81,3 +81,33 @@ func TestHistorySourcePageRanksFromCoveringIndex(t *testing.T) {
 		t.Logf("%s page plan uses outbox_history_source", page.name)
 	}
 }
+
+// A history page is picked and then read in full. A linked-device clear that
+// removes a picked row between the two must not shorten the page: through a
+// statement wrapper (groupHistorySources) it once failed the whole selection.
+func TestHistorySourcePageReadsOneSnapshot(t *testing.T) {
+	w, _, conv, _ := historyCatchupFixture(t, 3)
+	a := w.alice
+	first, err := a.historySourceRows(a.store.db, "conv=?", "ms,id", 1, conv)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("source row: %d %v", len(first), err)
+	}
+	table := map[string]string{"in": "inbox", "out": "outbox"}[first[0].dir]
+	removed := false
+	betweenHistoryPickAndRead = func() {
+		if removed {
+			return
+		}
+		removed = true
+		if _, err := a.store.db.Exec(`DELETE FROM `+table+` WHERE id=?`, first[0].in.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { betweenHistoryPickAndRead = func() {} })
+	reads := prepareReads(a.store.db)
+	defer reads.close()
+	rows, err := a.historySourceRows(reads, "dir=? AND id=?", "id", 1, first[0].dir, first[0].in.ID)
+	if !removed || err != nil || len(rows) != 1 || rows[0].in.ID != first[0].in.ID {
+		t.Fatalf("removed=%v rows=%d err=%v: the page must come from the snapshot it was picked in", removed, len(rows), err)
+	}
+}
