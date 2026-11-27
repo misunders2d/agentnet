@@ -58,6 +58,7 @@ run_partition() {
 				if ($0=="TestP6FixAnswerAudienceAndStoredReply") part=17
 				if ($0=="TestReceiveBacklogInPages") part=16
 				if ($0=="TestStrictSteerRefusalQueuesNextTurn") part=4
+				if ($0=="TestConversationResourcesNewMember") part=6
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1
