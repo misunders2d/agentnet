@@ -1033,6 +1033,11 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 		if info, err = a.admitHeldDismissalsOf(ctx, info); err != nil {
 			return info, err
 		}
+		// Read again: this device may have decided meanwhile, without a
+		// click (selfConsent); that stored decision is the answer, once.
+		if own, err := a.ownEvent(info.Conv, pid, typ, protocol.EventAccept, protocol.EventDecline); err != nil || own != nil {
+			return a.resendOwn(ctx, info, own, err)
+		}
 	}
 	if info.State != PartInvited {
 		return info, fmt.Errorf("the invite is %s, not waiting for a decision", info.State)
