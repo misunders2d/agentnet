@@ -165,22 +165,81 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 }
 
 // DeleteThread erases exactly the device thread with peer whose earliest
-// message is id (ThreadSummary.ID), here: device threads are kept by this
-// device only. Other threads with the same peer stay.
+// message is id (ThreadSummary.ID), here: one topic of a device chat. Other
+// threads with the same peer stay.
 func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 	groups, rows, err := a.peerThreadGroups(peer)
 	if err != nil {
 		return ConversationDeleted{}, err
 	}
-	var thread []string
 	for _, g := range groups {
 		if len(g) > 0 && directTopicID(g, rows) == id {
-			thread = g
+			return a.eraseDeviceThreads(map[string]peerThreads{peer: {groups: [][]string{g}, rows: rows}})
 		}
 	}
-	if len(thread) == 0 {
+	return ConversationDeleted{}, ErrNoMessage
+}
+
+// DeleteDeviceChat erases the whole device chat that the thread with peer
+// whose earliest message is id belongs to: every topic the chat list shows
+// in that one row (the same topicAgentKey: one agent's chat, or the human
+// chat with peer), archived ones included. Review-notice-only threads are
+// not part of the row and stay.
+func (a *Agent) DeleteDeviceChat(peer, id string) (ConversationDeleted, error) {
+	all, err := a.Threads()
+	if err != nil {
+		return ConversationDeleted{}, err
+	}
+	key := ""
+	for _, t := range all {
+		if t.Peer == peer && t.ID == id {
+			key = topicAgentKey(t)
+		}
+	}
+	if key == "" {
 		return ConversationDeleted{}, ErrNoMessage
 	}
+	want := map[string]map[string]bool{}
+	for _, t := range all {
+		if !t.NoticeOnly && topicAgentKey(t) == key {
+			if want[t.Peer] == nil {
+				want[t.Peer] = map[string]bool{}
+			}
+			want[t.Peer][t.ID] = true
+		}
+	}
+	threads := map[string]peerThreads{}
+	for p, ids := range want {
+		groups, rows, err := a.peerThreadGroups(p)
+		if err != nil {
+			return ConversationDeleted{}, err
+		}
+		pt := peerThreads{rows: rows}
+		for _, g := range groups {
+			if len(g) > 0 && ids[directTopicID(g, rows)] {
+				pt.groups = append(pt.groups, g)
+			}
+		}
+		if len(pt.groups) > 0 {
+			threads[p] = pt
+		}
+	}
+	if len(threads) == 0 {
+		return ConversationDeleted{}, ErrNoMessage
+	}
+	return a.eraseDeviceThreads(threads)
+}
+
+// peerThreads are some reply-linked threads with one peer and the rows
+// peerThreadGroups read with them.
+type peerThreads struct {
+	groups [][]string
+	rows   map[string]threadRow
+}
+
+// eraseDeviceThreads erases the named device threads here as one deletion,
+// with the controls on their messages.
+func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (ConversationDeleted, error) {
 	selfFP := a.Self().Fingerprint()
 	out := ConversationDeleted{Deletion: protocol.NewID(), ThisOnly: true}
 	tx, err := a.store.db.Begin()
@@ -188,21 +247,28 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 		return out, err
 	}
 	defer tx.Rollback()
-	for _, m := range thread {
-		key := selfFP
-		err := tx.QueryRow(`SELECT author_fp FROM device_history_rows WHERE id=? LIMIT 1`, m).Scan(&key)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return out, err
-		}
-		if errors.Is(err, sql.ErrNoRows) && rows[m].in {
-			if err := tx.QueryRow(`SELECT coalesce(verified_by,claimed_fp) FROM inbox WHERE id = ? AND conv IS NULL`, m).Scan(&key); err != nil {
+	for peer, pt := range threads {
+		for _, thread := range pt.groups {
+			for _, m := range thread {
+				key := selfFP
+				err := tx.QueryRow(`SELECT author_fp FROM device_history_rows WHERE id=? LIMIT 1`, m).Scan(&key)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return out, err
+				}
+				if errors.Is(err, sql.ErrNoRows) && pt.rows[m].in {
+					if err := tx.QueryRow(`SELECT coalesce(verified_by,claimed_fp) FROM inbox WHERE id = ? AND conv IS NULL`, m).Scan(&key); err != nil {
+						return out, err
+					}
+				}
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion) VALUES('', ?, ?, ?)`, key, m, out.Deletion); err != nil {
+					return out, err
+				}
+				out.Erased++
+			}
+			if err := forgetTopics(tx, peer, thread); err != nil { // its name and marks go with it (topics.go)
 				return out, err
 			}
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion) VALUES('', ?, ?, ?)`, key, m, out.Deletion); err != nil {
-			return out, err
-		}
-		out.Erased++
 	}
 	// Controls on its messages are erased with them.
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion)
@@ -213,9 +279,6 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 		return out, err
 	}
 	if err := eraseCoveredIn(tx, "", selfFP); err != nil {
-		return out, err
-	}
-	if err := forgetTopics(tx, peer, thread); err != nil { // its name and marks go with it (topics.go)
 		return out, err
 	}
 	if out.Kept, err = retainedCount(tx, "", selfFP); err != nil {

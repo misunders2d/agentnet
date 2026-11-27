@@ -17,10 +17,13 @@ type ConversationDeletion interface {
 
 // DeleteConversationAction names what to delete: a conversation by id, or
 // a device thread by its peer and its earliest message (ThreadSummary.ID).
+// With Chat, the whole device chat that thread is in: every topic of its
+// chat-list row, archived ones too (one topic is archived, not deleted).
 type DeleteConversationAction struct {
 	Conv   string `json:"conv,omitempty"`
 	Peer   string `json:"peer,omitempty"`
 	Thread string `json:"thread,omitempty"`
+	Chat   bool   `json:"chat,omitempty"`
 }
 
 // deleteConversation implements POST /api/conversation/delete.
@@ -43,10 +46,12 @@ func (l *Live) DeleteConversation(x DeleteConversationAction) (string, error) {
 	var done client.ConversationDeleted
 	var err error
 	switch {
-	case x.Conv != "" && x.Peer == "" && x.Thread == "":
+	case x.Conv != "" && x.Peer == "" && x.Thread == "" && !x.Chat:
 		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 		defer cancel()
 		done, err = l.a.DeleteConversation(ctx, x.Conv)
+	case x.Conv == "" && x.Peer != "" && x.Thread != "" && x.Chat:
+		done, err = l.a.DeleteDeviceChat(x.Peer, x.Thread)
 	case x.Conv == "" && x.Peer != "" && x.Thread != "":
 		done, err = l.a.DeleteThread(x.Peer, x.Thread)
 	default:

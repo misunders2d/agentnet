@@ -380,6 +380,7 @@ export interface DeleteConversationAction {
   conv?: string;
   peer?: string;
   thread?: string;
+  chat?: boolean;
 }
 
 export interface DesktopChat {
