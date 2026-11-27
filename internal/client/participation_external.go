@@ -530,9 +530,13 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	}
 	ctx = withRoundTrips(ctx)
 	a.prefetchGroup(ctx, ids)
+	var offline error // the Hub out of reach: only a group that is this device's alone goes on, on its pinned rosters
 	for _, id := range ids {
 		if _, err := a.refreshPerson(ctx, id, false); err != nil {
-			return ConvSent{}, err
+			if m.group == nil || !hubUnreachable(err) {
+				return ConvSent{}, err
+			}
+			offline = err
 		}
 	}
 	m, err = a.dmMembers(info.Conv)
@@ -857,6 +861,9 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			return ConvSent{}, err
 		}
 	}
+	if offline != nil && !solo { // another device needs a copy: its current roster is not known now
+		return ConvSent{}, offline
+	}
 	if solo {
 		recipient, e := a.Self().Recipient()
 		if e != nil {
@@ -890,6 +897,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		}
 		copies = append(copies, outCopy{in: copyIn, env: sealed, state: protocol.StateDelivered, required: guestAgentRequirement(protocol.CapGroup, info.Parent != ""),
 			recipientFP: a.Self().Fingerprint(), groupAdmission: adm.Hash()})
+		a.dropLocalSpool(copies[len(copies)-1:])
 	}
 	if len(copies) == 0 {
 		return ConvSent{}, errors.New("no participation recipient")
@@ -922,6 +930,11 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 
 	claim := out.claim
 	guard := func(tx *sql.Tx, first string) error {
+		if solo {
+			if err := soloGroupStill(tx, info.Conv, a.Address, a.Self().Fingerprint()); err != nil {
+				return err
+			}
+		}
 		members, err := membersIn(tx, info.Conv)
 		if err != nil {
 			return err
@@ -1007,6 +1020,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err := a.prepareRemoteCopies(ctx, binding, copies, out.Files); err != nil {
 		return ConvSent{}, err
 	}
+	beforeOutbox()
 	if err := a.storeConvOutbox(ctx, copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}

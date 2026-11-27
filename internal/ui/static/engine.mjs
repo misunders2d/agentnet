@@ -6334,12 +6334,18 @@ export class Engine {
       const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",chan,replica,fan,attachments:sealed.map(f=>f.attachment),receiver_route:prepared?.route},this.keys,publicKey);
       copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:why?"waiting":"queued",...(why?{detail:why}:{}),required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{}),...(prepared?{receiver_route:prepared.route}:{})});
     }
-    if(!copies.length&&wire.conversationResources(topic_event)&&members.length===1&&members[0].person===me.person) {
-      // Like a sole member's controls, retain a signed local original for
-      // durable metadata and later own-device history, not remote delivery.
-      const fan=[{person:me.person,roster:me.hash}];
-      const envelope=await wire.seal({v:wire.Version2,id:firstID,from:this.address,to:this.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",replica:true,fan,attachments:[]},this.keys,await wire.publicEntry(this.keys,this.address));
-      copies.push({id:firstID,lid,conv:c.id,kind:"message",body,topic,topic_event,origin:"ui",from:this.address,to:this.address,person:me.person,own:true,replica:true,at,envelope,attachments:[],state:"delivered",required_cap:wire.CapGroup,recipient_fp:this.fp,group_admission:stamp});
+    if(!copies.length&&(!skipped.length||wire.conversationResources(topic_event))&&!prepared&&members.length&&members.every(m=>m.person===me.person)) {
+      // A group that is this person's alone, on this one device (client
+      // sendGroupTurn's !others): like a sole member's controls, retain one
+      // signed local original, stored as delivered and never posted, for
+      // the turn itself, its files (sealed to self) and later own-device
+      // history. groupTurnEvidence's checks fence it against a member who
+      // joins before it is stored.
+      const fan=[{person:me.person,roster:me.hash}], self=await wire.publicEntry(this.keys,this.address), sealed=[];
+      for(const f of plain)sealed.push(await wire.encryptFile(f.bytes,f.name,self));
+      const attachments=sealed.map(f=>f.attachment);
+      const envelope=await wire.seal({v:wire.Version2,id:firstID,from:this.address,to:this.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",replica:true,fan,attachments},this.keys,self);
+      copies.push({id:firstID,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:this.address,person:me.person,own:true,replica:true,at,envelope,attachments,state:"delivered",required_cap:wire.CapGroup,recipient_fp:this.fp,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{})});
     }
     if(!copies.length||skipped.length&&members.some(m=>m.person!==me.person)&&!copies.some(r=>!r.replica))throw Error("Group has no other current device to receive a copy."+skipped.map(x=>" "+x.detail).join(""));
     if(skipped.length)for(const rec of copies)rec.skipped=skipped; // kept with the message: it lists them, and its delivery is never everyone's

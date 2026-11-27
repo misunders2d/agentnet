@@ -860,6 +860,15 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 	}
 	if root.Kind == protocol.ConvKindGroup {
+		// A person change landing mid-send: read again, at most twice. A
+		// queued batch's row goes back to its worker instead (queuedsend.go).
+		again := func(send func() (ConvSent, error)) (ConvSent, error) {
+			sent, err := send()
+			for i := 0; i < 2 && errors.Is(err, errGroupRosterMoved) && stagingBatch(ctx) == nil && len(m.Files) == 0 && binding == nil; i++ {
+				sent, err = send()
+			}
+			return sent, err
+		}
 		if m.PID != "" {
 			info, e := a.participation(conv, m.PID)
 			if e != nil {
@@ -873,9 +882,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 				if e != nil {
 					return ConvSent{}, e
 				}
-				return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+				return again(func() (ConvSent, error) { return a.sendHumanTurn(ctx, root, raw, m, h, binding) })
 			}
-			return a.sendExternalParticipation(ctx, root, raw, info, m)
+			return again(func() (ConvSent, error) { return a.sendExternalParticipation(ctx, root, raw, info, m) })
 		}
 		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.TopicOrganization(m.TopicEvent) && !envelope.TopicResources(m.TopicEvent) {
 			infos, e := a.Participations(conv)
@@ -889,18 +898,12 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 						return ConvSent{}, e
 					}
 					if h != nil {
-						return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+						return again(func() (ConvSent, error) { return a.sendHumanTurn(ctx, root, raw, m, h, binding) })
 					}
 				}
 			}
 		}
-		sent, err := a.sendGroupTurn(ctx, conv, m, binding)
-		// A person change landing mid-send: read again, at most twice. A
-		// queued batch's row goes back to its worker instead (queuedsend.go).
-		for i := 0; i < 2 && errors.Is(err, errGroupRosterMoved) && stagingBatch(ctx) == nil && len(m.Files) == 0 && binding == nil; i++ {
-			sent, err = a.sendGroupTurn(ctx, conv, m, binding)
-		}
-		return sent, err
+		return again(func() (ConvSent, error) { return a.sendGroupTurn(ctx, conv, m, binding) })
 	}
 	if m.PID != "" {
 		info, err := a.participation(conv, m.PID)

@@ -10,3 +10,9 @@ func TestBrowserSharedTopicTitle(t *testing.T) {
 func TestBrowserConversationResources(t *testing.T) {
 	runNodeCheck(t, "testdata/resources_engine_check.mjs")
 }
+
+// MEL-840: an ordinary turn, text and a file, in a group that is one
+// person's alone on this one browser device.
+func TestBrowserSoloGroupTurn(t *testing.T) {
+	runNodeCheck(t, "testdata/solo_group_engine_check.mjs")
+}

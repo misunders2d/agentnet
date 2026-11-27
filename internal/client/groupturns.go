@@ -195,9 +195,10 @@ func groupTurnCheck(q dbq, packet GroupContext, address, fp string) error {
 }
 
 // soloGroup reports whether m is a group whose every current member is the
-// person of this device (address with key fp): theirs alone, so a turn
-// there needs no copy for anyone else (sendGroupTurn's !others). A member
-// not resolvable here is never assumed to be this person.
+// person of this device (address with key fp), with no other device: theirs
+// alone on this one device, so a turn there needs no copy for anyone else
+// (sendGroupTurn's !others). A member not resolvable here is never assumed
+// to be this person.
 func soloGroup(q dbq, m dmMembers, address, fp string) (bool, error) {
 	if m.group == nil {
 		return false, nil
@@ -211,11 +212,30 @@ func soloGroup(q dbq, m dmMembers, address, fp string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if !ok || !p.has(address, fp) {
+		if !ok || !p.has(address, fp) || slices.ContainsFunc(p.roster.Devices, func(d identity.Public) bool { return d.Address != address }) {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// soloGroupStill is soloGroup again in the write that stores a self-only
+// copy, on the members current there: a member or device that joined after
+// the copy was chosen would get nothing, so the send is built again
+// (errGroupRosterMoved, SendConv) and the new audience gets its copies.
+func soloGroupStill(tx *sql.Tx, conv, address, fp string) error {
+	members, err := membersIn(tx, conv)
+	if err != nil {
+		return err
+	}
+	solo, err := soloGroup(tx, members, address, fp)
+	if err != nil {
+		return err
+	}
+	if !solo {
+		return errGroupRosterMoved
+	}
+	return nil
 }
 
 func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, binding *replyBinding) (ConvSent, error) {
@@ -404,6 +424,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if err = a.spoolAndSeal(copies, seals, m.Files); err != nil {
 		return ConvSent{}, err
 	}
+	a.dropLocalSpool(copies)
 	if err = a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
 	}

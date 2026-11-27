@@ -314,7 +314,13 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if err := a.spoolAndSeal(copies, seals, out.Files); err != nil {
 		return ConvSent{}, err
 	}
+	a.dropLocalSpool(copies)
 	guard := func(tx *sql.Tx, replyID string) error {
+		if solo {
+			if e := soloGroupStill(tx, root.ID(), a.Address, a.Self().Fingerprint()); e != nil {
+				return e
+			}
+		}
 		if groupAdmission != "" {
 			current, e := groupTurnPacketIn(tx, root.ID())
 			if e != nil {
@@ -347,6 +353,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if out.selfJob { // asked on the host itself: its job is recorded with it
 		jobKey, local.ID, local.To = a.Self().Fingerprint(), in.LID, a.Address
 	}
+	beforeOutbox()
 	if err := a.storeConvOutbox(ctx, copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, out.beforeStore, binding); err != nil {
 		return ConvSent{}, err
 	}

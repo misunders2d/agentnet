@@ -1,6 +1,7 @@
 package client
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,4 +133,219 @@ func TestSoloOwnAgentGroupAnswersAndRejoins(t *testing.T) {
 	if !strings.Contains(stub.last(), "Хай") {
 		t.Fatalf("the local agent was not asked in its topic: %q", stub.last())
 	}
+}
+
+// soloAgentGroup is MEL-840's setup: alice's group of her own, her agent Pi
+// (the shell stub) invited into it on this one device.
+func soloAgentGroup(t *testing.T, w *world, stub *agentStub) (string, ParticipationInfo) {
+	t.Helper()
+	publishGroupFixtureCaps(t, w.alice, true)
+	g, err := w.alice.CreateGroup(tctx(t), "My agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, err := w.alice.CreateLocalAgent("Pi", Responder{Harness: "agentstub", Dir: stub.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.alice.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := w.alice.InviteNamedAgent(tctx(t), g.Root.ID(), w.alice.Address, named.ID, nil, nil, "")
+	if err != nil || !p.Claimable() {
+		t.Fatalf("invite own agent: %+v %v", p, err)
+	}
+	return g.Root.ID(), p
+}
+
+func localOnlyCopies(t *testing.T, a *Agent, lid string) (local, posted int) {
+	t.Helper()
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE lid=? AND recipient=? AND state=?`, lid, a.Address, protocol.StateDelivered).Scan(&local); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE lid=? AND NOT (recipient=? AND state=?)`, lid, a.Address, protocol.StateDelivered).Scan(&posted); err != nil {
+		t.Fatal(err)
+	}
+	return local, posted
+}
+
+// The own agent's run started, then the Hub went away: its reply in a group
+// that is this device's alone needs nobody's current roster, so it is kept
+// (answered, one local-only copy), not lost as not delivered.
+func TestSoloOwnAgentGroupReplyWithHubDown(t *testing.T) {
+	stub := installAgentStub(t)
+	stub.mode("gate")
+	w := newWorld(t, "")
+	persons(t, w.alice)
+	runAgent(t, w.alice)
+	conv, p := soloAgentGroup(t, w, stub)
+	ask, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "while offline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the agent to start", func() bool { _, err := os.Stat(stub.log + ".started"); return err == nil })
+	w.hub.Stop()
+	if err = os.WriteFile(stub.log+".go", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the run to end", func() bool {
+		s := jobState(t, w.alice, ask.ID)
+		return s != stateRunning && s != "" && s != statePending
+	})
+	if s := jobState(t, w.alice, ask.ID); s != stateAnswered {
+		var detail string
+		w.alice.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, ask.ID).Scan(&detail)
+		t.Fatalf("the reply with the Hub down: %s %q", s, detail)
+	}
+	r := replyAt(t, w.alice, conv, ask.ID)
+	if !strings.Contains(r.Body, "the deploy failed at step 3") {
+		t.Fatalf("the reply: %+v", r)
+	}
+	if local, posted := localOnlyCopies(t, w.alice, r.LID); local != 1 || posted != 0 {
+		t.Fatalf("the reply's copies: %d local-only, %d to post", local, posted)
+	}
+	if n := stub.runs(); n != 1 {
+		t.Fatalf("the agent ran %d times", n)
+	}
+}
+
+// bob joins between the choice of the self-only copy and its write: the
+// write sees it, the send is built again, and bob gets his copy. The own
+// agent's ask and an ordinary turn alike; the job runs once.
+func TestSoloOwnAgentGroupMemberJoinsMidSend(t *testing.T) {
+	for _, ask := range []bool{true, false} {
+		t.Run(map[bool]string{true: "ask", false: "turn"}[ask], func(t *testing.T) {
+			stub := installAgentStub(t)
+			stub.mode("emotion")
+			w := newWorld(t, "")
+			persons(t, w.alice, w.bob)
+			runAgent(t, w.alice)
+			runAgent(t, w.bob)
+			publishGroupFixtureCaps(t, w.bob, true)
+			conv, p := soloAgentGroup(t, w, stub)
+			bob, _, err := w.bob.store.selfPerson(w.bob.Address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			joins := 0
+			t.Cleanup(func() { beforeOutbox = func() {} })
+			beforeOutbox = func() {
+				beforeOutbox = func() {}
+				joins++
+				inv, err := w.alice.InviteGroup(tctx(t), conv, bob.roster.Person, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				awaitGroupInvitation(t, w.bob, inv.ID, "pending")
+				if err = w.bob.DecideGroupInvitation(tctx(t), inv.ID, true); err != nil {
+					t.Fatal(err)
+				}
+				eventually(t, "bob a member at alice", func() bool {
+					g, e := w.alice.GroupContext(conv)
+					return e == nil && len(g.State.Members) == 2
+				})
+			}
+			var sent ConvSent
+			if ask {
+				sent, err = w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "racing a join")
+			} else {
+				sent, err = w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "racing a join"})
+			}
+			if err != nil || joins != 1 {
+				t.Fatalf("send while bob joins (%d joins): %v", joins, err)
+			}
+			var toBob int
+			if err = w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE lid=? AND recipient=?`, sent.LID, w.bob.Address).Scan(&toBob); err != nil {
+				t.Fatal(err)
+			}
+			if local, _ := localOnlyCopies(t, w.alice, sent.LID); local != 0 || toBob != 1 {
+				t.Fatalf("after bob joined: %d local-only, %d for bob", local, toBob)
+			}
+			eventually(t, "bob to see it", func() bool {
+				_, n := convMsg(t, w.bob, conv, func(m ConvMessage) bool { return m.LID == sent.LID && m.Body == "racing a join" })
+				return n == 1
+			})
+			if ask {
+				if r := replyAt(t, w.alice, conv, sent.ID); !strings.Contains(r.Body, "the deploy failed at step 3") {
+					t.Fatalf("own agent's answer: %+v", r)
+				}
+				if n := stub.runs(); n != 1 {
+					t.Fatalf("the agent ran %d times", n)
+				}
+			} else if n := stub.runs(); n != 0 {
+				t.Fatalf("an ordinary turn ran the agent %d times", n)
+			}
+		})
+	}
+}
+
+// A file sent in a group that is this device's alone (each of the three
+// solo paths: plain turn, the own agent's ask, a turn with the agent
+// present) leaves no spooled ciphertext and no upload to do: its local-only
+// copy is never posted. The kept copy still opens it here.
+func TestSoloGroupFileLeavesNoSpool(t *testing.T) {
+	w := newWorld(t, "")
+	persons(t, w.alice)
+	runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	g, err := w.alice.CreateGroup(tctx(t), "My agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := g.Root.ID()
+	file := func(body string) OutgoingFile {
+		path := filepath.Join(t.TempDir(), body+".txt")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return OutgoingFile{Path: path, Name: body + ".txt"}
+	}
+	check := func(what string, sent ConvSent, body string) {
+		t.Helper()
+		if local, posted := localOnlyCopies(t, w.alice, sent.LID); local != 1 || posted != 0 {
+			t.Fatalf("%s: %d local-only, %d to post", what, local, posted)
+		}
+		entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool"))
+		var uploads int
+		if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM uploads`).Scan(&uploads); err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 || uploads != 0 {
+			t.Fatalf("%s: %d spool files, %d uploads left", what, len(entries), uploads)
+		}
+		r, _, err := w.alice.OpenFileFrom(tctx(t), "out", sent.ID, 0)
+		if err != nil {
+			t.Fatalf("%s: open the file here: %v", what, err)
+		}
+		defer r.Close()
+		if data, _ := io.ReadAll(r); string(data) != body {
+			t.Fatalf("%s: the file opened as %q", what, data)
+		}
+	}
+	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "plain", Files: []OutgoingFile{file("plain")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("plain turn", sent, "plain")
+	Harnesses["solonone"] = harness{bin: filepath.Join(t.TempDir(), "missing"), question: []string{"--question-mode"}, task: []string{"--task-mode"}, stdin: true}
+	t.Cleanup(func() { delete(Harnesses, "solonone") })
+	named, err := w.alice.CreateLocalAgent("Pi", Responder{Harness: "solonone", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.alice.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := w.alice.InviteNamedAgent(tctx(t), conv, w.alice.Address, named.ID, nil, nil, "")
+	if err != nil || !p.Claimable() {
+		t.Fatalf("invite own agent: %+v %v", p, err)
+	}
+	if sent, err = w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "ask", file("ask")); err != nil {
+		t.Fatal(err)
+	}
+	check("the own agent's ask", sent, "ask")
+	if sent, err = w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "with Pi", Files: []OutgoingFile{file("with Pi")}}); err != nil {
+		t.Fatal(err)
+	}
+	check("a turn with the agent present", sent, "with Pi")
 }
