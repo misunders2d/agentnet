@@ -3,7 +3,7 @@ set -euo pipefail
 android_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 repo_dir=$(cd -- "$android_dir/../.." && pwd)
 if [[ ${1:-} == --help ]]; then
-  printf '%s\n' 'Usage: build-core.sh [--bootstrap]' 'Requires Go1.26.8+, JDK17+, Android SDK35/build-tools35.0.0 and NDK28.2.13676358.' '--bootstrap explicitly permits fetching pinned Go tools and dependencies through the Go checksum database.' 'VERSION optionally overrides the default git describe --tags --always --dirty stamp.' 'Set ANDROID_HOME; ANDROID_NDK_HOME defaults to its pinned side-by-side NDK.' 'ANDROID_ABIS defaults to android/arm64; use android/arm64,android/amd64 for an emulator too.'
+  printf '%s\n' 'Usage: build-core.sh [--bootstrap]' 'Requires Go1.26.8+, JDK17+, Android SDK36/build-tools36.0.0 and NDK28.2.13676358.' '--bootstrap explicitly permits fetching pinned Go tools and dependencies through the Go checksum database.' 'VERSION optionally overrides the default git describe --tags --always --dirty stamp.' 'Set ANDROID_HOME; ANDROID_NDK_HOME defaults to its pinned side-by-side NDK.' 'ANDROID_ABIS defaults to android/arm64; use android/arm64,android/amd64 for an emulator too.'
   exit 0
 fi
 [[ $# -eq 0 || ( $# -eq 1 && $1 == --bootstrap ) ]] || { printf '%s\n' 'Unknown argument; use --help.' >&2; exit 2; }
@@ -11,7 +11,7 @@ fi
 : "${ANDROID_HOME:?Set ANDROID_HOME to the Android SDK directory.}"
 : "${ANDROID_NDK_HOME:=$ANDROID_HOME/ndk/28.2.13676358}"
 export ANDROID_HOME ANDROID_NDK_HOME
-[[ -d $ANDROID_HOME/platforms/android-35 && -d $ANDROID_HOME/build-tools/35.0.0 ]] || { printf '%s\n' 'Install SDK35 and build-tools35.0.0 after reviewing SDK licenses.' >&2; exit 1; }
+[[ -d $ANDROID_HOME/platforms/android-36 && -d $ANDROID_HOME/build-tools/36.0.0 ]] || { printf '%s\n' 'Install SDK36 and build-tools36.0.0 after reviewing SDK licenses.' >&2; exit 1; }
 [[ -f $ANDROID_NDK_HOME/source.properties ]] || { printf '%s\n' 'Missing pinned Android NDK28.2.13676358.' >&2; exit 1; }
 grep -Eq '^Pkg.Revision *= *28\.2\.13676358[[:space:]]*$' "$ANDROID_NDK_HOME/source.properties" || { printf '%s\n' 'ANDROID_NDK_HOME must point to NDK28.2.13676358.' >&2; exit 1; }
 command -v go >/dev/null
