@@ -319,12 +319,17 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 				b.acceptLocked(s) // agy's handover was read before the write returned
 			}
 		case !errors.Is(err, errACPSkipped):
-			// Not written, so never taken: it always leaves the turn.
+			// Not written: it always leaves the turn.
 			if b.steers[rpc] == s {
 				delete(b.steers, rpc)
 			}
 			b.dropPromptLocked(rpc)
 			s.resolveLocked(steerUnknown)
+			if s.taken {
+				// agy ended the request for it, and it never arrived.
+				b.failLocked("Antigravity did not accept the correction input")
+				return
+			}
 			b.settleIfOpenLocked()
 		}
 	}()
@@ -410,8 +415,13 @@ func (b *agyACPBridge) failLocked(why string) {
 }
 
 func (b *agyACPBridge) endLocked() {
-	b.done, b.active = true, false
+	b.stopLocked()
 	b.settleOnce.Do(func() { close(b.settled) })
+}
+
+// stopLocked ends the request without settling it yet.
+func (b *agyACPBridge) stopLocked() {
+	b.done, b.active = true, false
 	for rpc, s := range b.steers {
 		s.resolveLocked(steerUnknown)
 		delete(b.steers, rpc)
@@ -659,13 +669,18 @@ func (b *agyACPBridge) errorLocked(e *acpError, why string) bool {
 
 func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e *acpError) {
 	if s := b.steers[id]; s != nil && e != nil {
-		// agy refused the correction (it may be waiting on a permission
-		// answer): the turn goes on, the correction stays queued.
 		delete(b.steers, id)
 		b.dropPromptLocked(id)
-		s.resolveLocked(steerUnsupported)
-		b.settleIfOpenLocked()
-		return
+		if !s.taken {
+			// agy refused the correction (it may be waiting on a permission
+			// answer): the turn goes on, the correction stays queued.
+			s.resolveLocked(steerUnsupported)
+			b.settleIfOpenLocked()
+			return
+		}
+		// agy ended the request for this correction: its error (sign-in,
+		// quota) is the request's outcome, below.
+		s.resolveLocked(steerUnknown)
 	}
 	if e != nil {
 		if b.errorLocked(e, "Antigravity refused the request") {
@@ -760,12 +775,25 @@ func (b *agyACPBridge) completeLocked(stop string) {
 	turn := b.madeWrites
 	b.madeWrites++
 	b.writes.Add(1)
+	cancelled := make(chan struct{})
 	go func() {
 		defer b.writes.Done()
-		_ = b.send(turn, map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": b.session}}, nil)
+		defer close(cancelled)
+		cancel := map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": b.session}}
+		agyACPBeforeWrite(cancel)
+		_ = b.send(turn, cancel, nil)
 		_ = b.input.Close()
 	}()
-	b.endLocked()
+	// Settled only once the cancel is out: the worker closes this turn's
+	// input when it settles, and an unsent cancel would leave agy running.
+	b.stopLocked()
+	go func() {
+		select {
+		case <-cancelled:
+		case <-b.ctx.Done():
+		}
+		b.settleOnce.Do(func() { close(b.settled) })
+	}()
 }
 
 // lateCorrection reports a correction agy received after the request ended:

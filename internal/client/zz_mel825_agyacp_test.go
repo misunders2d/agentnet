@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,7 +149,7 @@ func TestAgyACPProcessHelper(t *testing.T) {
 				reply(first, map[string]any{"stopReason": "end_turn"})
 				chunk("Answer for: " + promptText(correction))
 				reply(correction["id"], map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
-			case "steer", "steer-race", "refuse", "crash":
+			case "steer", "steer-race", "refuse", "crash", "steer-auth":
 				// Commentary and a tool call while the original works.
 				chunk("Looking up the original city.")
 				toolCall()
@@ -159,6 +160,11 @@ func TestAgyACPProcessHelper(t *testing.T) {
 				switch mode {
 				case "crash":
 					os.Exit(3)
+				case "steer-auth":
+					// agy takes the correction over, then its sign-in expires.
+					reply(first, map[string]any{"stopReason": "end_turn"})
+					chunk("Partial answer for: " + promptText(correction))
+					enc.Encode(map[string]any{"jsonrpc": "2.0", "id": correction["id"], "error": map[string]any{"code": -32000, "message": "Authentication required"}})
 				case "refuse":
 					enc.Encode(map[string]any{"jsonrpc": "2.0", "id": correction["id"], "error": map[string]any{"code": -32000,
 						"message": "the running prompt is waiting for a permission or question answer; answer it or send session/cancel, then send this prompt again"}})
@@ -373,6 +379,50 @@ func (in *acpTestInput) Write(p []byte) (int, error) {
 
 func (in *acpTestInput) Close() error { return nil }
 
+// acpRecordInput records what was written; after Close it refuses writes,
+// as a warm worker's closed turn input does. fail makes the correction's
+// write fail once released.
+type acpRecordInput struct {
+	mu      sync.Mutex
+	lines   []string
+	closed  bool
+	fail    chan struct{}
+	writing chan struct{}
+}
+
+func (in *acpRecordInput) Write(p []byte) (int, error) {
+	if in.fail != nil && strings.Contains(string(p), "Moscow") {
+		close(in.writing)
+		<-in.fail
+		return 0, io.ErrClosedPipe
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.closed {
+		return 0, os.ErrClosed
+	}
+	in.lines = append(in.lines, string(p))
+	return len(p), nil
+}
+
+func (in *acpRecordInput) Close() error {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.closed = true
+	return nil
+}
+
+func (in *acpRecordInput) wrote(s string) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for _, l := range in.lines {
+		if strings.Contains(l, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // The bridge's own lifetime, without a process: a write agy no longer reads
 // never holds its end, and a result given before a cancelled wait stands.
 func agyACPBridgeLifetime(t *testing.T) {
@@ -395,6 +445,50 @@ func agyACPBridgeLifetime(t *testing.T) {
 		close(in.hold) // as ending the process does
 		if !b.drained(2 * time.Second) {
 			t.Fatal("the released write never drained")
+		}
+	})
+	t.Run("a taken correction that never arrived fails the request", func(t *testing.T) {
+		in := &acpRecordInput{fail: make(chan struct{}), writing: make(chan struct{})}
+		b := attachAgyACPBridge(t.Context(), in, t.TempDir(), "Original request", "s1", false, true, 0)
+		b.begin()
+		steered := make(chan string, 1)
+		go func() { steered <- b.steer(t.Context(), "edit-1", "Use Moscow instead") }()
+		<-in.writing
+		_, _ = b.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}` + "\n")) // the handover
+		close(in.fail)
+		if got := <-steered; got != steerUnknown {
+			t.Fatalf("steer %q, want unknown", got)
+		}
+		b.close()
+		if _, failure, _ := b.outcome(); failure == "" {
+			t.Fatal("a request agy ended for a correction that never arrived was not failed")
+		}
+	})
+	t.Run("a late correction's cancel goes out before the request settles", func(t *testing.T) {
+		in := &acpRecordInput{}
+		b := attachAgyACPBridge(t.Context(), in, t.TempDir(), "Original request", "s1", false, true, 0)
+		old := agyACPBeforeWrite
+		agyACPBeforeWrite = func(v any) {
+			if m, _ := v.(map[string]any); m["method"] == "session/cancel" {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		defer func() { agyACPBeforeWrite = old }()
+		b.begin()
+		steered := make(chan string, 1)
+		go func() { steered <- b.steer(t.Context(), "edit-1", "Use Moscow instead") }()
+		eventually(t, "the correction written", func() bool { return in.wrote("Moscow") })
+		_, _ = b.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"totalTokens":3}}}` + "\n"))
+		<-b.settledCh()
+		b.close() // as the worker does once the request settles
+		if !b.drained(2 * time.Second) {
+			t.Fatal("writes did not end")
+		}
+		if !in.wrote("session/cancel") {
+			t.Fatal("the request settled before agy was asked to cancel the correction")
+		}
+		if got := <-steered; got != steerUnknown {
+			t.Fatalf("steer %q, want unknown", got)
 		}
 	})
 	t.Run("a result given before the wait ended stands", func(t *testing.T) {
@@ -489,6 +583,9 @@ func agyACPBridgeCases(t *testing.T) {
 		{mode: "refuse", steer: steerUnsupported, answer: "Answer for: the original request"},
 		{mode: "crash", steer: steerUnknown},
 		{mode: "permission", attention: "could not obtain a native tool approval"},
+		// A correction agy took then failed: the request needs the owner's
+		// sign-in, never "done" with the partial text.
+		{mode: "steer-auth", steer: steerAccepted, attention: "requires sign-in"},
 		{mode: "auth", attention: "requires sign-in"},
 		{mode: "answer", answer: "Answer for: Original request"},
 	} {
