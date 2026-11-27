@@ -956,6 +956,70 @@ func TestGroupRemovedReaderTurnStaysRefused(t *testing.T) {
 	}
 }
 
+// agy re-check (B): another member's cancellation, not the inviter
+// device's, came before the invitation and waits held; the decision counts
+// it first (through the usual admission), before any proof retry.
+func TestGroupGuestCancellationByAnotherMemberBeforeDecision(t *testing.T) {
+	w := newWorld(t, "")
+	carol := proofReader(t, w, "carol")
+	persons(t, w.alice, w.bob)
+	stops := []func(){runAgent(t, w.alice)}
+	publishGroupFixtureCaps(t, w.alice, true)
+	stops = append(stops, runAgent(t, w.bob))
+	publishGroupFixtureCaps(t, w.bob, true)
+	stops = append(stops, runAgent(t, carol))
+	publishGroupFixtureCaps(t, carol, true)
+	p, err := w.alice.CreateGroup(tctx(t), "Pair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob, carol} {
+		roomReader(t, a)
+	}
+	conv := p.Root.ID()
+	cp, _, err := carol.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := w.alice.InviteGroup(tctx(t), conv, cp.Person, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitGroupInvitation(t, carol, inv.ID, "pending")
+	if err = carol.DecideGroupInvitation(tctx(t), inv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "member context", func() bool { got, e := carol.GroupContext(conv); return e == nil && len(got.State.Members) == 2 })
+	for _, stop := range stops {
+		stop()
+	}
+	first, err := w.alice.InviteHuman(tctx(t), conv, w.bob.Address, nil, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliverPIDCopies(t, w.alice, carol, first.PID, envelope.SubEvent)
+	if _, err = carol.DismissParticipation(tctx(t), first.PID); err != nil {
+		t.Fatal(err)
+	}
+	cancels := pidCopies(t, carol, w.bob, first.PID, envelope.SubEvent)
+	if len(cancels) == 0 {
+		t.Fatal("no copy of the other member's cancellation")
+	}
+	deliverCopies(t, carol, w.bob, cancels)
+	for _, sub := range []string{envelope.SubEvent, envelope.SubGroupProof, envelope.SubGroupContext} {
+		deliverPIDCopies(t, w.alice, w.bob, first.PID, sub)
+	}
+	if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartInvited {
+		t.Fatalf("fixture: the other member's cancellation no longer waits held: %+v %v", got, e)
+	}
+	if got, e := w.bob.AcceptParticipation(tctx(t), first.PID); e == nil {
+		t.Fatalf("invitation another member cancelled accepted: %+v", got)
+	}
+	if got, e := w.bob.Participation(first.PID); e != nil || got.State != PartDismissed {
+		t.Fatalf("the other member's cancellation not counted at the decision: %+v %v", got, e)
+	}
+}
+
 // The decision's own guards, reached directly: with the invitation and its
 // context held, (a) the exact cancellation still waiting held counts before
 // the decision, which is refused; (b) a stored event that does not count

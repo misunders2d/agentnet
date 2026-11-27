@@ -1371,6 +1371,20 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser decision of a cancelled room invitation sends nothing');
    await w.close();
   }
+  // The other member's cancellation (not the inviter device's) came first
+  // and waits held; the decision counts it first, before any proof retry.
+  {
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};
+   for(const name of ['human-dismiss-member','human-invite','human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   const before=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(before?.state==='invited'&&(await w.st.get('held',outside['human-dismiss-member'].inner.id))?.reason==='proof_pending','browser fixture: the other member\'s cancellation still held when deciding');
+   let refused=false;try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept:true});}catch{refused=true;}
+   const after=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(refused&&after?.state==='dismissed'&&!after.can_decide&&!await w.st.get('held',outside['human-dismiss-member'].inner.id),'browser decision counts the other member\'s held cancellation first');
+   check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser decision of a room invitation another member cancelled sends nothing');
+   await w.close();
+  }
   // A cancellation that lands after the decision's checks and before its
   // write: the send's own transaction refuses it (client decide, MEL-841).
   for(const accept of [true,false]){

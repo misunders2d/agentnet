@@ -8208,20 +8208,20 @@ export class Engine {
   }
 
   // admitHeldDismissals admits now, with every usual check, the dismissals
-  // of pid in conv from the device from that wait held for proof (client
-  // admitHeldDismissals, MEL-841): a cancellation that came before its
-  // invitation would otherwise wait for the next proof retry while the
-  // cancelled invitation is shown and decidable. Only the exact inviter's
-  // signed dismissal of that exact invitation counts; anything else stays
-  // held as it was. Failing to reach the server is thrown.
-  async admitHeldDismissals(from, conv, pid) {
-    const pin = await this.store.get("pins", from);
-    if (!pin || pin.pending) return;
+  // of pid in conv from the device from (every device when from is null)
+  // that wait held for proof (client admitHeldDismissals, MEL-841): a
+  // cancellation that came before its invitation would otherwise wait for
+  // the next proof retry while the cancelled invitation is shown and
+  // decidable. Each goes through the usual admission; anything it does not
+  // admit stays held as it was. Failing to reach the server is thrown.
+  async admitHeldDismissals(from, conv, pid) { // from null: every sender's (another inviter device, another administrator; client decide)
     for (let pos = "";;) {
       const page = await this.store.after("held", pos, heldPage);
       for (const h of page) {
         pos = h.id;
-        if (h.reason !== "proof_pending" || h.from !== from) continue;
+        if (h.reason !== "proof_pending" || from != null && h.from !== from) continue;
+        const pin = await this.store.get("pins", h.from);
+        if (!pin || pin.pending) continue;
         let env;
         try {
           env = wire.parseEnvelope(h.envelope);
@@ -11367,7 +11367,7 @@ export class Engine {
     let { c, info } = await this.agentConv(body.pid);
     if (action === "decide" && info.state === "invited") { // a cancellation that came before the invitation counts first (MEL-841)
       const invite = (await this.convEvents(c.id, [], info.pid)).find(x => x.e.type === "invite" && x.hash === info.invite);
-      if (invite) { await this.admitHeldDismissals(invite.e.author.address, c.id, info.pid); ({ c, info } = await this.agentConv(body.pid)); }
+      if (invite) { await this.admitHeldDismissals(null, c.id, info.pid); ({ c, info } = await this.agentConv(body.pid)); }
     }
     const members=await this.dmMembers(c), member=members.has(this.me?.person);
     if (info.role !== "human") throw new Error("This action requires a human participation, not an agent.");

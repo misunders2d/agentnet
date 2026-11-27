@@ -113,15 +113,16 @@ func groupOutsideBrowserVectors(t *testing.T, old protocol.ConvRoot, alice, bob 
 	ev := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: protocol.NewID(), Type: protocol.EventInvite, TS: 1700000100, Author: protocol.EventAuthor{Person: ar.Person, Roster: ar.Hash(), Address: ar.Devices[0].Address, Fingerprint: ar.Devices[0].Fingerprint(), GroupAdmission: am.Admission.Hash()}, Host: &protocol.ParticipationHost{Person: browserRoster.Person, Address: browser.Address, Fingerprint: browser.Fingerprint(), AgentID: protocol.NewID()}, Audience: protocol.AudienceConversation, Group: &protocol.ParticipationGroup{Seq: 0, Hash: state.Hash(), HostRole: "visitor"}}
 	ev.Sign(alice.Sign)
 	out := map[string]any{"root": root, "state": state, "pid": ev.PID, "commit": commit}
-	seal := func(name string, in envelope.Inner) {
-		in.V, in.ID, in.LID, in.Conv, in.Root, in.From, in.To, in.TS = 2, protocol.NewID(), protocol.NewID(), root.ID(), json.RawMessage(marshal(t, root)), ar.Devices[0].Address, browser.Address, 1700000100
+	sealBy := func(name string, by *identity.Identity, from string, in envelope.Inner) {
+		in.V, in.ID, in.LID, in.Conv, in.Root, in.From, in.To, in.TS = 2, protocol.NewID(), protocol.NewID(), root.ID(), json.RawMessage(marshal(t, root)), from, browser.Address, 1700000100
 		key, _ := browser.Recipient()
-		env, err := envelope.Seal(in, alice.Sign, key)
+		env, err := envelope.Seal(in, by.Sign, key)
 		if err != nil {
 			t.Fatal(name, err)
 		}
 		out[name] = map[string]any{"envelope": marshal(t, env), "inner": in}
 	}
+	seal := func(name string, in envelope.Inner) { sealBy(name, alice, ar.Devices[0].Address, in) }
 	seal("invite", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: ev.PID, Body: marshal(t, ev)})
 	// Native PID copies to another device of the inviter retain event Replica=false;
 	// only a request addressed to a different host is a display-only Replica.
@@ -155,6 +156,12 @@ func groupOutsideBrowserVectors(t *testing.T, old protocol.ConvRoot, alice, bob 
 	unadmitted.Author.GroupAdmission = strings.Repeat("cd", 32)
 	unadmitted.Sign(alice.Sign)
 	seal("human-dismiss-wrong-admission", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: human.PID, Body: marshal(t, unadmitted)})
+	// The same cancellation by the other member (not the inviter's device).
+	bm, _ := state.Member(br.Person)
+	byMember := dismiss
+	byMember.Author = protocol.EventAuthor{Person: br.Person, Roster: br.Hash(), Address: br.Devices[0].Address, Fingerprint: br.Devices[0].Fingerprint(), GroupAdmission: bm.Admission.Hash()}
+	byMember.Sign(bob.Sign)
+	sealBy("human-dismiss-member", bob, br.Devices[0].Address, envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: human.PID, Body: marshal(t, byMember)})
 	live := human
 	live.PID, live.TS = protocol.NewID(), 1700000102
 	live.Sign(alice.Sign)

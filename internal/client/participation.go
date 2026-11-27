@@ -1085,8 +1085,9 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 // before its transaction.
 var decidePreSign func(pid string)
 
-// admitHeldDismissalsOf admits the held dismissals of info's invitation by
-// its exact author device (admitHeldDismissals) and reads info again.
+// admitHeldDismissalsOf admits the held dismissals of info's invitation, by
+// any sender, through the usual checks (admitHeldDismissals) and reads info
+// again.
 func (a *Agent) admitHeldDismissalsOf(ctx context.Context, info ParticipationInfo) (ParticipationInfo, error) {
 	evs, err := a.store.participationEvents(info.Conv, info.PID)
 	if err != nil {
@@ -1094,7 +1095,9 @@ func (a *Agent) admitHeldDismissalsOf(ctx context.Context, info ParticipationInf
 	}
 	for _, ev := range evs {
 		if ev.Type == protocol.EventInvite && ev.Hash() == info.Invite {
-			if err = a.admitHeldDismissals(ctx, ev.Author.Address, info.Conv, info.PID); err != nil {
+			// Every sender's: another device of the inviter or another
+			// administrator may have cancelled it too (MEL-841).
+			if err = a.admitHeldDismissals(ctx, "", info.Conv, info.PID); err != nil {
 				return info, err
 			}
 			return a.Participation(info.PID)

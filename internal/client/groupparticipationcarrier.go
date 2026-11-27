@@ -256,12 +256,14 @@ func (a *Agent) admitGroupVisitorCancel(env envelope.Envelope, in envelope.Inner
 }
 
 // admitHeldDismissals admits now, with every usual check, the dismissals
-// of pid in conv from the device from that wait held for proof (MEL-841): a
-// cancellation that came before its invitation would otherwise wait for the
-// next proof retry while the cancelled invitation is shown and acceptable.
-// Only the exact inviter's signed dismissal of that exact invitation counts
-// (admitGroupVisitorCancel, or the usual path once context is held);
-// anything else stays held as it was. A transient failure is returned.
+// of pid in conv from the device from (every device when from is "") that
+// wait held for proof (MEL-841): a cancellation that came before its
+// invitation would otherwise wait for the next proof retry while the
+// cancelled invitation is shown and acceptable. Before context only the
+// exact inviter's signed dismissal of that exact invitation counts
+// (admitGroupVisitorCancel); once context is held, any dismissal the usual
+// path admits (another device of the inviter, another administrator).
+// Anything else stays held as it was. A transient failure is returned.
 func (a *Agent) admitHeldDismissals(ctx context.Context, from, conv, pid string) error {
 	envs, err := a.store.held(from, reasonProof)
 	if err != nil {

@@ -1039,8 +1039,10 @@ func (s *store) quarantineDiagnostic(id, sender, reason string, raw []byte, why,
 
 // held returns envelopes quarantined for sender with reason, oldest first.
 // Rows stay in place until each is promoted.
+// held lists the rows held for reason from sender, or from every sender
+// when sender is "".
 func (s *store) held(sender, reason string) ([]envelope.Envelope, error) {
-	rows, err := s.db.Query(`SELECT envelope FROM quarantine WHERE sender = ? AND reason = ? ORDER BY received_at, id`, sender, reason)
+	rows, err := s.db.Query(`SELECT envelope FROM quarantine WHERE (? = '' OR sender = ?) AND reason = ? ORDER BY received_at, id`, sender, sender, reason)
 	if err != nil {
 		return nil, err
 	}
