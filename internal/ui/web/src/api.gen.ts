@@ -916,7 +916,7 @@ export interface Overview {
   history?: HistoryCopy[];
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
-  removed_devices?: string[];
+  removed_devices?: RemovedDevice[];
   model_reports?: PrivateModelReport[];
   update_required?: UpdateRequiredView;
   transport_error?: string;
@@ -1116,6 +1116,11 @@ export interface RemoteStorage {
   status: string;
   reason?: string;
   usage?: HubStorage;
+}
+
+export interface RemovedDevice {
+  address: string;
+  person: string;
 }
 
 export interface ReplyReceiverBindingView {

@@ -69,7 +69,7 @@ func (l *Live) DeleteConversation(x DeleteConversationAction) (string, error) {
 	var note string
 	switch {
 	case done.ThisOnly:
-		note = "Deleted. This thread was stored on this device only; the other person keeps their copy."
+		note = "Deleted on this device. Your other devices keep their copies, and so does the other person."
 	case done.Devices == 0:
 		note = "Deleted here. No other device of yours was linked; one you link later gets the deletion. Others in it keep their copies."
 	default:

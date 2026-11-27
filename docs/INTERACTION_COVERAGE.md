@@ -4483,4 +4483,43 @@ chat"), `TestRemovedDevicesExactCurrentKey` (own list; the removed phone's
 thread still found by topic search), `TestOwnPermissionInventory` (overview
 field after a real removal). Not covered: the browser engine
 (`static/engine.mjs`) builds its own overview without `removed_devices`, so a
-browser still lists such a row.
+browser still lists such a row (closed in "Delete a whole device chat; others'
+removed devices leave the list" below).
+
+
+## Delete a whole device chat; others' removed devices leave the list (v0.11.13)
+
+Owner, 2026-11-27: "there should be a distinction between deleting the whole
+chat or just deleting one topic … 'delete' removes the whole chat"; and other
+people's removed devices go "same as mine".
+
+Delete chat. A device chat's row (one peer, or one agent by host, key and id:
+`directChatKey` / `topicAgentKey`) holds every topic with it. The header menu
+keeps "Delete topic…" (exactly that topic) and adds "Delete chat…", which
+posts `{peer, thread, chat: true}`: `DeleteDeviceChat` erases every topic of
+that row in one transaction (`eraseDeviceThreads`). The row leaves the list
+at once (`store.deletingRows`, by `directChatKey` and its newest `last_at`,
+as tdlib removes a chat locally first); a refusal brings it back, and a
+message newer than the deletion keeps it. Both deletions are on this device
+only: the dialogs and notes now say "Your other devices and {title} keep
+their copies" (device-history replicas hold them there), not the former
+"stored on this device only". Syncing the deletion to the person's other
+devices is parked (branch `wip/device-chat-clear-sync`): its reader
+capability would be the 33rd advertised name, which released v0.11.x readers,
+the hub's `PUT /v1/caps` and `wire.mjs` refuse. Evidence:
+`TestDeleteDeviceChatRemovesEveryTopic` (four topics; one topic delete leaves
+three, the chat delete leaves none; fails before with "delete chat: 400");
+`convclear_engine_check.mjs` (the browser engine: three topics, one chat
+delete, no row left, nothing sent).
+
+Others' removed devices. `removed_devices` is now `[{address, person}]` for
+any verified person (`RemovedDeviceOwners`; it replaces `OwnRemovedDevices`),
+same exact-key rule. Their device threads leave the active list (an agent's
+row keyed on its host, so a current agent hosted here that the removed device
+asked keeps its row) and read "Vitalii’s Old phone · Removed device". The
+browser engine computes the same list from its persons' known keys and pins,
+so browser, desktop and Android match. Evidence: `comic_people_check.mjs`
+(fails on the old model: another person's dropped device was listed),
+`TestRemovedDeviceOfAnotherPerson` (Bob removes his phone; Alice's list names
+it with Bob; its thread found by topic search), `convclear_engine_check.mjs`
+(engine list; a reused address with another key is not removed).

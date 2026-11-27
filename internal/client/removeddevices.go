@@ -12,29 +12,40 @@ import (
 // key appeared in verified roster history and is no longer a current member.
 // Address reuse, a pending replacement key and standalone services are not
 // inferred to be removed. Saved grants and historical messages stay intact.
-func (a *Agent) RemovedDevices() ([]string, error) { return a.removedDevices("('self','pinned')") }
+func (a *Agent) RemovedDevices() ([]string, error) {
+	owned, err := a.RemovedDeviceOwners()
+	out := make([]string, 0, len(owned))
+	for _, d := range owned {
+		out = append(out, d.Address)
+	}
+	return out, err
+}
 
-// OwnRemovedDevices is RemovedDevices for this installation's own person
-// only: devices the person removed from their own signed roster. Their
+// RemovedDevice is one removed device and the verified person (this
+// installation's own, or a pinned one) whose signed roster dropped it.
+type RemovedDevice struct {
+	Address string `json:"address"`
+	Person  string `json:"person"`
+}
+
+// RemovedDeviceOwners is RemovedDevices with each device's person. Their
 // device threads are history, never active chats (AGENTS.md: retired
 // configurations stay searchable history). Display only, never authority.
-func (a *Agent) OwnRemovedDevices() ([]string, error) { return a.removedDevices("('self')") }
-
-func (a *Agent) removedDevices(states string) ([]string, error) {
-	rows, err := a.store.db.Query(`SELECT p.address,p.public,c.record,n.record,coalesce(d.fingerprint,'')
+func (a *Agent) RemovedDeviceOwners() ([]RemovedDevice, error) {
+	rows, err := a.store.db.Query(`SELECT p.address,n.person,p.public,c.record,n.record,coalesce(d.fingerprint,'')
  FROM peers p JOIN person_chain c ON EXISTS
  (SELECT 1 FROM json_each(c.record,'$.devices') h WHERE json_extract(h.value,'$.address')=p.address)
- JOIN persons n ON n.person=c.person AND n.state IN ` + states + `
+ JOIN persons n ON n.person=c.person AND n.state IN ('self','pinned')
  LEFT JOIN person_devices d ON d.address=p.address
  WHERE p.pending IS NULL ORDER BY p.address`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	removed := map[string]bool{}
+	removed := map[string]string{}
 	for rows.Next() {
-		var address, public, history, current, memberKey string
-		if err := rows.Scan(&address, &public, &history, &current, &memberKey); err != nil {
+		var address, person, public, history, current, memberKey string
+		if err := rows.Scan(&address, &person, &public, &history, &current, &memberKey); err != nil {
 			return nil, err
 		}
 		var pin identity.Public
@@ -50,16 +61,18 @@ func (a *Agent) removedDevices(states string) ([]string, error) {
 		}
 		fp := pin.Fingerprint()
 		if pin.Address == address && memberKey != fp && old.Has(address, fp) && !now.Has(address, fp) {
-			removed[address] = true
+			if _, seen := removed[address]; !seen {
+				removed[address] = person
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(removed))
-	for address := range removed {
-		out = append(out, address)
+	out := make([]RemovedDevice, 0, len(removed))
+	for address, person := range removed {
+		out = append(out, RemovedDevice{Address: address, Person: person})
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out, nil
 }

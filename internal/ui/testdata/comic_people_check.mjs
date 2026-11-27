@@ -57,7 +57,7 @@ const phoneThread = { id: "old1", peer: "admin/phone-3", agent_host: "admin/phon
 for (const agent of [true, false]) {
   const seen = laptop(agent);
   assert.equal(m.chatList({ ...seen, threads: [phoneThread] }, {}).length, 1, "before: the unlinked device thread was listed (agent=" + agent + ")");
-  const gone = { ...seen, removed_devices: ["admin/phone-3"] };
+  const gone = { ...seen, removed_devices: [{ address: "admin/phone-3", person: "p-me" }] };
   assert.equal(m.chatList({ ...gone, threads: [phoneThread] }, {}).length, 0, "a removed own device's thread is not an active chat (agent=" + agent + ")");
   assert.equal(m.chatList({ ...gone, threads: [], topics: [{ peer: "admin/phone-3", total: 3, archived: 3, archived_unread: 0, latest: phoneThread }] }, {}).length, 0, "nor its archived topics (agent=" + agent + ")");
   r = m.threadRow("admin/phone-3", gone, {});
@@ -69,11 +69,28 @@ for (const agent of [true, false]) {
 const aid = "0123456789abcdef0123456789abcdef";
 const bound = { ...phoneThread, id: "old2", agent_host: "admin/laptop", agent_key: "11111111-a", agent_id: aid };
 const agentNames = { [aid]: "Claude", [aid + "#current"]: "true", [aid + "#host"]: "admin/laptop", [aid + "#host_key"]: "11111111-a" };
-assert.equal(m.chatList({ ...o, removed_devices: ["admin/phone-3"], threads: [bound] }, agentNames).length, 1, "a current agent's topic asked from it stays listed");
-// A device a current roster names is never taken for a removed one of yours.
-r = m.threadRow("vitalii/phone", { ...o, removed_devices: ["vitalii/phone"] }, {});
+assert.equal(m.chatList({ ...o, removed_devices: [{ address: "admin/phone-3", person: "p-me" }], threads: [bound] }, agentNames).length, 1, "a current agent's topic asked from it stays listed");
+// An agent hosted on a removed device is history too: the row's device is its host.
+const hostedThere = { ...phoneThread, id: "old3", agent_key: "99999999-z", agent_id: aid };
+const thereNames = { [aid]: "Claude", [aid + "#current"]: "true", [aid + "#host"]: "admin/phone-3", [aid + "#host_key"]: "99999999-z" };
+assert.equal(m.chatList({ ...o, removed_devices: [{ address: "admin/phone-3", person: "p-me" }], threads: [hostedThere] }, thereNames).length, 0, "an agent row hosted on the removed device leaves the list");
+// A device a current roster names is never taken for a removed one.
+r = m.threadRow("vitalii/phone", { ...o, removed_devices: [{ address: "vitalii/phone", person: "p-vit" }] }, {});
 assert.deepEqual([r.title, r.subtitle], ["Vitalii", "from Phone"]);
-assert.equal(m.removedOwnDevice("admin/phone-3", { ...o, person: undefined, removed_devices: ["admin/phone-3"] }), false, "no person here: nothing is yours");
+assert.equal(m.removedDevice("admin/phone-3", { ...o, person: undefined, removed_devices: [{ address: "admin/phone-3", person: "p-me" }] }), null, "no person here: nothing is yours");
+// Another person's removed device (owner 2026-11-27, "same as mine"): Vitalii
+// dropped vitalii/old-phone from his signed roster; its chat leaves the list,
+// its row (search) names it as his, never "Not linked to a person" or you.
+const oldPhone = { ...phoneThread, id: "old4", peer: "vitalii/old-phone", agent_host: "vitalii/old-phone" };
+for (const agent of [true, false]) {
+  const seen = laptop(agent);
+  assert.equal(m.chatList({ ...seen, threads: [oldPhone] }, {}).length, 1, "before: another person's dropped device was listed (agent=" + agent + ")");
+  const gone = { ...seen, removed_devices: [{ address: "vitalii/old-phone", person: "p-vit" }] };
+  assert.equal(m.chatList({ ...gone, threads: [oldPhone] }, {}).length, 0, "another person's removed device is not an active chat (agent=" + agent + ")");
+  r = m.threadRow("vitalii/old-phone", gone, {});
+  assert.deepEqual([r.kind, r.title, r.subtitle], ["person", "Vitalii’s Old phone", "Removed device"], "history names it as Vitalii's (agent=" + agent + ")");
+  assert.notEqual(m.deviceWho("vitalii/old-phone", gone).relation, "own");
+}
 
 // Message authors in the laptop↔Pixel thread.
 const q = { id: "q1", dir: "in", from: "admin/pixel", kind: "question", body: "?", state: "answered" };

@@ -188,9 +188,32 @@ const v1 = async (bodyText) => { const raw = await wire.seal({ v: 1, id: id(), f
 const t1 = await v1('THREAD ONE'), t2 = await v1('THREAD TWO');
 const before = (await a.store.all('outbox')).length;
 const td = await a.deleteConversation({ peer: b.address, thread: t1 });
-check(/stored on this device only/.test(td.note), 'thread deletion says this device only');
+check(/^Deleted on this device\. Your other devices keep their copies/.test(td.note), 'thread deletion says this device only');
 const threads = (await a.overview()).threads;
 check(!threads.some((t) => t.id === t1) && threads.some((t) => t.id === t2), 'exactly that thread is gone; the other stays');
 check((await a.store.all('outbox')).length === before, 'a thread deletion tells no one');
+
+// The whole device chat (owner 2026-11-27): every topic of its row goes at once.
+const t3 = await v1('THREAD THREE'), t4 = await v1('THREAD FOUR');
+const rowOf = async () => (await a.overview()).threads.filter((t) => t.peer === b.address && !t.notice_only).map((t) => t.id);
+check((await rowOf()).length === 3, 'the chat row holds three topics');
+const cd = await a.deleteConversation({ peer: b.address, thread: t3, chat: true });
+check(/^Deleted on this device\./.test(cd.note), 'chat deletion says this device only');
+check((await rowOf()).length === 0, 'every topic of the chat is gone; no row is left');
+check((await a.store.all('outbox')).length === before, 'a chat deletion tells no one');
+
+// The overview names a removed device of a verified person (client
+// RemovedDeviceOwners): Bob's signed roster named bob/phone, then dropped it.
+const pk = await wire.newKeys(), ppub = await wire.publicEntry(pk, 'bob/phone'), pfp = await wire.fingerprint(ppub);
+const r2 = await wire.nextRoster(b.keys, b.address, b.roster, [b.pub, ppub], await wire.joinConsent(pk, 'bob/phone', b.me.person, b.me.seq + 1, b.me.hash));
+const r3 = await wire.nextRoster(b.keys, b.address, r2, [b.pub], null);
+const bobHere = async (steps) => { const p = await a.personRecord(steps, 'pinned', null); await a.store.write([{ s: 'persons', k: p.person, v: p }]); a.changed(); };
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(ppub), fingerprint: pfp, pending: null } }]);
+await bobHere([b.roster, r2]);
+check((await a.overview()).removed_devices === undefined, 'a current device is not removed');
+await bobHere([b.roster, r2, r3]);
+assert.deepEqual((await a.overview()).removed_devices, [{ address: 'bob/phone', person: b.me.person }]); checks++;
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(b.pub), fingerprint: b.fp, pending: null } }]); a.changed();
+check((await a.overview()).removed_devices === undefined, 'a different key at that address is never the removed device');
 
 console.log(JSON.stringify({ shapes, checks }));
