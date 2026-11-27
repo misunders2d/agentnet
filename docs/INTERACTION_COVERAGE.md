@@ -66,26 +66,32 @@ picture in it has decoded, then lays out once; a video counts as 16:9 unless
 its poster was already made. A picture whose bytes are not a picture leaves
 the album and becomes a file row, and the album re-forms around it. A message
 still sending shows its album at once (tiles marked busy, no thumbnails yet)
-instead of "sent, not kept here" rows. Not done: Telegram's send-side choice
-to group or send separately, an inline audio player (none existed), video
-durations on tiles.
+instead of "sent, not kept here" rows.
+
+Not done (issue scope): the composer's attach preview still lists files as
+before; it neither groups them like the message nor offers Telegram's
+"group or send separately" choice. Also not done: an inline audio player
+(none existed), video durations on tiles, and the collection skins
+(Classic, Holonet, Zoom), which have their own renderers. Firefox and WebKit
+did not run locally for the adjusted video checks; the installed app
+(WebKitGTK) and Android are checked separately.
 
 Layout fidelity. `TestGroupedMediaLayout` compares the port with 34 vectors
 produced by Telegram's unmodified `grouped_layout.cpp`, compiled against a
 small shim (`testdata/grouped_layout_oracle`), covering every branch; all
 match exactly. It also checks the grouping rules.
 
-| Control or state | Rendered evidence in `TestMessageImagesGroupedRendered` (1440, 360, 320 px; 360/320 with touch and the Android host) |
+| Control or state | Rendered evidence in `testdata/message_images_rendered.cjs` (1440, 360, 320 px; 360/320 with touch and the Android host) |
 |---|---|
 | Album of 2–10 photos, portrait/landscape/square/panorama mixed, received and sent | Tile geometry equals Telegram's layout scaled to the block within 1.5 px; order; square inner corners, rounded block; no horizontal scroll |
 | Album tile (Enter / tap) | Opens the viewer at that item, under 1100 ms |
 | Viewer Previous/Next (click) and swipe (touch) | Step through every item with "i / n", stop at the ends; each step under 1100 ms |
 | Viewer Download, Close, Escape | Original bytes and filename; focus returns to the tile; under 1100 ms |
-| Video tile, playable | Poster, play badge; viewer plays the real clip and keeps Download; stepping away pauses, unloads and detaches it |
+| Video tile, playable (one playable and one large video in a 4-item album) | Poster, play badge; viewer plays the real clip and keeps Download; stepping away pauses, unloads and detaches it |
 | Video tile over 16 MiB | Size label; viewer says "Videos up to 16 MiB can play here."; the file is never read |
 | Held original | Unit-ratio layout and no viewer until the bytes arrive; then one layout |
 | Failed picture | Becomes a file row with Download; the album re-forms |
-| Documents (4 and 8), audio (3) | One block, one row per file in order, Download returns the original bytes |
+| Documents (2 in the mixed case, 4 and 8), audio (3) | One block, one row per file in order, Download returns the original bytes |
 | Mixed selection | photos → documents → single audio → photos, in order, never mixed |
 | More than ten (fixture) | Albums of 10 and 2 |
 | Caption | Under the last group in every case |
@@ -95,6 +101,11 @@ match exactly. It also checks the grouping rules.
 Existing checks adjusted: the shared video fixture (`imageviewer_rendered_test.go`)
 now puts each video in its own message, since videos sent together now form
 an album; `TestImageViewerRendered` expects its three pictures as an album.
+
+`TestMessageImagesGroupedRendered` runs the script on Comic built from
+source. The packaged bundles ran the same script directly:
+`AGENTNET_IMAGE_BUILT=1` for Comic, plus
+`AGENTNET_IMAGE_PACKAGE=static/skins/office` for Office (57 of 57 each).
 
 Measured (Chromium, every case at all three widths, source and built Comic,
 built Office): viewer open at most 112 ms, a step at most 288 ms, close at
@@ -965,6 +976,8 @@ app's WebKitGTK webview (capture uses Play's interleaved bytes there),
 macOS/Windows/Android shells, physical devices.
 
 ## MEL-813 compact image groups — November 24, 2026
+
+Superseded by MEL-856 (above): pictures sent together now form a Telegram album.
 
 Three sent 2:1 screenshots filled two square-tile rows on `aa58315f`.
 Comic now gives the first image a full-width row with the other two below.

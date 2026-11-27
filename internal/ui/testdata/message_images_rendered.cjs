@@ -269,6 +269,8 @@ async function checkPending(page, phone) {
   await context.addInitScript(phone=>{
    if(phone){window.__agentnetPlatform='android';window.__agentnetAndroid={visible:()=>true,onVisibility:()=>()=>{},legacyDrafts:async()=>({drafts:[]}),acknowledgeLegacyDraft:async()=>({removed:true})};}
    window.imageResources={created:[],revoked:[]};
+   // Failure evidence: the last trusted pointer events and their targets.
+   window.imageEvents=[];for(const type of ['pointerdown','pointerup','pointercancel','click','touchend','touchcancel','scroll'])document.addEventListener(type,e=>{if(!e.isTrusted)return;const n=e.composedPath()[0],t=n instanceof Element?n.closest('button,[role=region],[role=dialog]'):null;window.imageEvents.push({type,at:Math.round(performance.now()),target:t?(t.getAttribute('aria-label')||t.textContent.trim().slice(0,24)||t.getAttribute('role')):String(n?.nodeName||n)});if(window.imageEvents.length>16)window.imageEvents.shift();},{capture:true});
    const originalCreate=URL.createObjectURL.bind(URL),originalRevoke=URL.revokeObjectURL.bind(URL);
    URL.createObjectURL=b=>{const url=originalCreate(b);window.imageResources.created.push({url,type:b.type});return url;};
    URL.revokeObjectURL=url=>{window.imageResources.revoked.push(url);return originalRevoke(url);};
@@ -347,7 +349,7 @@ async function checkPending(page, phone) {
    assert(!fixture.posts.some(r=>/\/api\/(send|dm\/send|request\/followup)$/.test(r.api)));
    assert.deepEqual(errors,[]);
    console.log(JSON.stringify({...row,groups:expected.map(g=>(g.album?g.kind:'single')+':'+g.names.length),result:'PASS'}));
-  }catch(e){console.error('IMAGE_FAILURE '+JSON.stringify({mode,width,stage,errors,reads:fixture.reads,posts:fixture.posts.map(p=>p.api)}));if(evidence)await page.screenshot({path:path.join(evidence,'media-'+selected.id+'-'+width+'-'+mode+'-failure.png')}).catch(()=>{});throw e;
+  }catch(e){const input=await page.evaluate(()=>({recorded:window.imageInputAt!=null,events:window.imageEvents})).catch(()=>null);console.error('IMAGE_FAILURE '+JSON.stringify({mode,width,stage,input,errors,reads:fixture.reads,posts:fixture.posts.map(p=>p.api)}));if(evidence)await page.screenshot({path:path.join(evidence,'media-'+selected.id+'-'+width+'-'+mode+'-failure.png')}).catch(()=>{});throw e;
   }finally{fixture.hold?.resolve();fixture.sync?.release.resolve();for(const s of fixture.sends)s.release();await context.close();for(const res of fixture.events)res.end();}
  }
 }finally{await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));fs.rmSync(temporary,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});
