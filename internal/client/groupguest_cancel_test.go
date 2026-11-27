@@ -895,6 +895,13 @@ func TestGroupRemovedSenderTurnStaysRefused(t *testing.T) {
 // no newer context; re-invited with no history, the reader still never
 // sees it.
 func TestGroupRemovedReaderTurnStaysRefused(t *testing.T) {
+	t.Run("context", func(t *testing.T) { removedReaderTurn(t, false) })
+	// Codex review (P2): the readmission's newer proof head is known before
+	// its context; the removal installed here still refuses the turn first.
+	t.Run("proof-before-context", func(t *testing.T) { removedReaderTurn(t, true) })
+}
+
+func removedReaderTurn(t *testing.T, proofFirst bool) {
 	w, p := groupLifecycleFixture(t, false)
 	runAgent(t, w.alice)
 	publishGroupFixtureCaps(t, w.alice, true)
@@ -930,11 +937,25 @@ func TestGroupRemovedReaderTurnStaysRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	packet, err := w.bob.GroupContext(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proofFirst {
+		if _, err = w.bob.store.db.Exec(`INSERT OR REPLACE INTO group_known_heads(conv,bootstrap,seq,hash) VALUES(?,?,?,?)`, conv, packet.Root.Creator.Fingerprint, packet.State.Seq+1, "readmission"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err = w.bob.accept(tctx(t), turn); err != nil {
 		t.Fatal(err)
 	}
 	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
 		t.Fatalf("turn written while the reader was removed held as %q", got)
+	}
+	if proofFirst { // the real readmission below brings its own head
+		if _, err = w.bob.store.db.Exec(`DELETE FROM group_known_heads WHERE conv=?`, conv); err != nil {
+			t.Fatal(err)
+		}
 	}
 	runAgent(t, w.bob)
 	again, err := w.alice.InviteGroup(tctx(t), conv, bob.Person, nil)

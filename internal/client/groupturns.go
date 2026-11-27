@@ -543,6 +543,18 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	if !sameGroupRoot(packet.Root, root) {
 		return hold(reasonInvalid, "group: root differs from verified current context")
 	}
+	// A member turn reaching a reader its installed context removed is
+	// refused for good, before anything (a newer proof head, a refresh) can
+	// hold it for a retry that a later rejoin would pass (MEL-841).
+	removedReader := func(q dbq, current GroupContext) error {
+		if in.Human == nil && groupRemovalNotice(q, current, me.roster.Person) != "" {
+			return errors.New("group: written while this reader was removed")
+		}
+		return nil
+	}
+	if err = removedReader(a.store.db, packet); err != nil {
+		return hold(reasonInvalid, err.Error())
+	}
 	persons := groupMemberPersons(packet.State.Members)
 	for i, e := range a.refreshAdmitting(ctx, persons) {
 		if e != nil {
@@ -569,14 +581,16 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		if e != nil {
 			return e
 		}
+		if e = removedReader(q, current); e != nil {
+			return e
+		}
 		// The sender first: one this context does not list is refused for
 		// good, whatever context comes later; only then may this device's own
-		// absence wait for a newer context (groupReaderBehind).
+		// absence wait for a newer context (groupReaderBehind). A removed
+		// reader was refused above.
 		for i, d := range []identity.Public{sender, a.Self()} {
 			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
-				// A reader this context removed is not behind: what was
-				// written while it was out never reaches it (MEL-841).
-				if i == 1 && errors.Is(e, errGroupRecipientNotCurrent) && groupRemovalNotice(q, current, me.roster.Person) == "" {
+				if i == 1 && errors.Is(e, errGroupRecipientNotCurrent) {
 					return groupReaderBehind{e}
 				}
 				return e
