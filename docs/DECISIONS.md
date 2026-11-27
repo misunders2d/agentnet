@@ -1199,4 +1199,10 @@ July 14, 2021). Both posts were read on November 27.
 - Measured on one laptop with a real relay and three separate daemons,
   70,000 text messages in one chat: before, 33,353 copied in 30 minutes
   and slowing (about 62 minutes in all by extrapolation); after, all
-  70,000 in 11 minutes 34 seconds. The new device peaked at 61 MB.
+  70,000 in 11 minutes 34 seconds. The new device peaked at 61 MB. In
+  that run the new device kept up, so parts stayed small (largest 750
+  copies) and mostly one was in flight: the gain came from the page pick
+  and the per-copy fixes. Large parts and the window matter when the new
+  device or the network is slower; a run that moved 5,000-copy parts
+  peaked at 86 MB on the new device. The "before" run shared the CPU with
+  other tests for part of its time and was stopped at 30 minutes.
