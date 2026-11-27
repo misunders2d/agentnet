@@ -198,6 +198,14 @@ func sameGroupRoot(a, b protocol.ConvRoot) bool {
 // does not list stays refused, and so does a reader its context removed.
 type groupReaderBehind struct{ error }
 
+// errGroupReaderRemoved: a member turn reaching a reader its installed
+// context removed (or that left by itself); refused for good.
+var errGroupReaderRemoved = errors.New("group: written while this reader was removed")
+
+// groupTurnPreCommit, set only by tests, runs after a group turn's checks
+// and before the transaction that stores it.
+var groupTurnPreCommit func()
+
 func (e groupReaderBehind) Unwrap() error { return e.error }
 
 func groupTurnCheck(q dbq, packet GroupContext, address, fp string) error {
@@ -552,7 +560,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		_, listed := current.State.Member(me.roster.Person)
 		left := !listed && current.State.Actor == me.roster.Person
 		if in.Human == nil && (left || groupRemovalNotice(q, current, me.roster.Person) != "") {
-			return errors.New("group: written while this reader was removed")
+			return errGroupReaderRemoved
 		}
 		return nil
 	}
@@ -632,12 +640,18 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		return nil
 	}
-	if err = check(a.store.db); err != nil {
+	// What check refuses is held the same way before the transaction and
+	// inside it: a change that commits in between (this reader's removal)
+	// is refused for good, never left waiting for proof (MEL-841).
+	holdCheck := func(err error) error {
 		var behind groupReaderBehind
 		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) || errors.As(err, &behind) {
 			return hold(reasonProof, err.Error())
 		}
 		return hold(reasonInvalid, err.Error())
+	}
+	if err = check(a.store.db); err != nil {
+		return holdCheck(err)
 	}
 	now := time.Now()
 	var admission protocol.GroupAdmission
@@ -648,14 +662,18 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		forward = a.forwardStale(me, in, sender.Fingerprint(), in.Root, admission.Hash())
 	}
+	if groupTurnPreCommit != nil {
+		groupTurnPreCommit()
+	}
+	var checkErr error
 	result, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
 		if in.Human != nil {
 			if e := insertHumanProof(tx, in.Human); e != nil {
 				return e
 			}
 		}
-		if e := check(tx); e != nil {
-			return e
+		if checkErr = check(tx); checkErr != nil {
+			return checkErr
 		}
 		if in.Human != nil {
 			if e := humanTurnAuthorization(tx, in, sender.Address, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false); e != nil {
@@ -707,6 +725,9 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	})
 	if errors.Is(err, ErrSharedTopicTitleConflict) {
 		return hold(reasonInvalid, err.Error())
+	}
+	if err != nil && checkErr != nil && errors.Is(err, checkErr) {
+		return holdCheck(checkErr) // the transaction rolled back; held as before it
 	}
 	if err != nil && in.Human != nil {
 		return hold(reasonProof, err.Error()) // as a DM's captured turn: authority waits for its evidence

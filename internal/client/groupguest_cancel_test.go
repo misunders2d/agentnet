@@ -992,6 +992,93 @@ func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 	}
 }
 
+// Codex re-check: the reader's removal commits after the turn's checks and
+// before the transaction that stores it. The transaction's own check refuses
+// it, and it is held invalid (not waiting for proof), so a no-history rejoin
+// never shows it.
+func TestGroupRemovedReaderDuringTurnCommit(t *testing.T) {
+	w, p := groupLifecycleFixture(t, false)
+	stopA := runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	conv := p.Root.ID()
+	first := groupLifecycleInvite(t, w, p, nil)
+	awaitGroupInvitation(t, w.bob, first.ID, "pending")
+	if err := w.bob.DecideGroupInvitation(tctx(t), first.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob} {
+		eventually(t, "member context", func() bool { got, e := a.GroupContext(conv); return e == nil && len(got.State.Members) == 2 })
+	}
+	stopA()
+	stopB()
+	bob, _, err := w.bob.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.alice.RemoveGroupMember(tctx(t), conv, bob.Person); err != nil {
+		t.Fatal(err)
+	}
+	root, _, _, err := w.alice.store.conversation(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRaw, _ := json.Marshal(root)
+	key, err := w.bob.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: protocol.NewID(), From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: rootRaw, Body: "removed during commit", Origin: envelope.OriginUI}
+	turn, err := envelope.Seal(in, w.alice.id.Sign, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed := false
+	groupTurnPreCommit = func() {
+		if landed {
+			return
+		}
+		landed = true
+		// The removal reaches the reader the usual way, meanwhile.
+		stopA, stopB := runAgent(t, w.alice), runAgent(t, w.bob)
+		eventually(t, "removal at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
+		stopA()
+		stopB()
+	}
+	t.Cleanup(func() { groupTurnPreCommit = nil })
+	if err = w.bob.accept(tctx(t), turn); err != nil {
+		t.Fatal(err)
+	}
+	groupTurnPreCommit = nil
+	if got, e := w.bob.GroupContext(conv); !landed || e != nil || len(got.State.Members) != 1 {
+		t.Fatalf("fixture: the removal did not land during the turn's admission: %v %+v %v", landed, got.State.Members, e)
+	}
+	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
+		t.Fatalf("turn whose reader was removed during its commit held as %q", got)
+	}
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	eventually(t, "removal at the inviter", func() bool { got, e := w.alice.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
+	again, err := w.alice.InviteGroup(tctx(t), conv, bob.Person, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitGroupInvitation(t, w.bob, again.ID, "pending")
+	if err = w.bob.DecideGroupInvitation(tctx(t), again.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "member again at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 2 })
+	for w.bob.retryProof(tctx(t)) {
+	}
+	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
+		t.Fatalf("turn whose reader was removed during its commit held as %q once re-invited", got)
+	}
+	if slices.Contains(convBodies(t, w.bob, conv), "in:removed during commit") {
+		t.Fatal("turn whose reader was removed during its commit shown once re-invited")
+	}
+}
+
 // agy re-check (B): another member's cancellation, not the inviter
 // device's, came before the invitation and waits held; the decision counts
 // it first (through the usual admission), before any proof retry.
