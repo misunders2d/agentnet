@@ -530,10 +530,16 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	}
 	ctx = withRoundTrips(ctx)
 	a.prefetchGroup(ctx, ids)
-	var offline error // the Hub out of reach: only a group that is this device's alone goes on, on its pinned rosters
+	// The Hub out of reach: only a group that is this device's alone on its
+	// pinned rosters goes on (checked again once the copies are chosen).
+	pinnedSolo, err := soloGroup(a.store.db, m, a.Address, a.Self().Fingerprint())
+	if err != nil {
+		return ConvSent{}, err
+	}
+	var offline error
 	for _, id := range ids {
 		if _, err := a.refreshPerson(ctx, id, false); err != nil {
-			if m.group == nil || !hubUnreachable(err) {
+			if !pinnedSolo || !hubUnreachable(err) {
 				return ConvSent{}, err
 			}
 			offline = err
