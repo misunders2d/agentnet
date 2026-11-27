@@ -31,6 +31,14 @@ This record starts with v0.8.1; earlier releases remain on the
   Refresh, Save as, Print). Its Back left a blank window on Windows. Back
   from the mouse or keyboard can no longer leave the chats either. Text
   boxes and selected text keep Cut, Copy and Paste.
+- Editing a question while Antigravity (agy) is still answering it now
+  reaches the running answer (MEL-825). An edit that arrives as the answer
+  finishes is never run twice: if it may already have been taken, it asks
+  you instead of running again.
+- Someone who left or was removed from a group and is invited back without
+  history no longer receives messages sent while they were away.
+- The Google Play version of the Android app says on About that it updates
+  through Google Play, instead of showing "Invalid native request."
 
 - Photos attached to the same message can be browsed in one viewer. Use
   Previous and Next, the arrow keys, or swipe at fit zoom.
