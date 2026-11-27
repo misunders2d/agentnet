@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { Engine, memoryStore } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
+import { world as groupWorld } from './human_engine_check.mjs';
 let checks = 0, sequence = 1;
 const id = () => (sequence++).toString(16).padStart(32, '0');
 const now = 1790000000123;
@@ -216,6 +217,27 @@ check((await a.store.all('outbox')).length === before, 'a thread deletion tells 
   await a2.sendDM({ conv: empty, body: 'HELLO AGAIN' });
   await w2.drain(phone2);
   check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'a new turn brings it back on both');
+}
+
+// An empty group leaves the list too, membership kept; the built-in
+// "My agents" room is kept (its agents find it there). The group world of
+// human_engine_check.mjs, whose synthetic server carries groups.
+{
+  const gw = await groupWorld(), ga = gw.alice;
+  for (const e of gw.users) { e.realm = 'f'.repeat(32); await gw.caps(e, [...defaults, wire.CapGroup, wire.CapConvClear]); }
+  const group = await ga.createGroup('Empty group');
+  const context = (await ga.store.get('kv', 'group/' + group))?.context;
+  check(!!context && (await ga.overview()).dms.some((d) => d.id === group), 'the empty group is listed');
+  await ga.deleteConversation({ conv: group });
+  check(!(await ga.overview()).dms.some((d) => d.id === group), 'the empty group leaves the list');
+  check((await ga.store.get('kv', 'group/' + group))?.context === context, 'its membership stays as it was');
+  await refuses(() => ga.deleteConversation({ conv: group }), /nothing here to delete/);
+  await ga.sendDM({ conv: group, body: 'GROUP HELLO' });
+  check((await ga.overview()).dms.some((d) => d.id === group), 'a turn brings the group back');
+  const room = await ga.createGroup('My agents');
+  check(await ga.builtInGroup(room), 'the fixture room is the built-in My agents');
+  await refuses(() => ga.deleteConversation({ conv: room }), /nothing here to delete/);
+  check((await ga.overview()).dms.some((d) => d.id === room), 'My agents stays listed');
 }
 
 console.log(JSON.stringify({ shapes, checks }));

@@ -10104,9 +10104,9 @@ export class Engine {
       if (n.key && n.lid) names.set(erasedKey(conv, n.key, n.lid), n);
     }
     const deletion = wire.newID(), ops = [], checks = [];
-    if (!names.size) { // a DM never written in: its deletion names a marker turn (client convclear.go), as TDLib removes an empty chat from the list
-      const c = await this.store.get("convs", conv);
-      if (!c || this.erasedConv(conv) || wire.parseRoot(c.root).kind !== "dm" || (await this.continuityDMs(conv)).length > 1) throw new Error("There is nothing here to delete.");
+    if (!names.size) { // a DM or group never written in: its deletion names a marker turn (client convclear.go), as TDLib removes an empty chat from the list
+      // Not a recovered person's chat (it shows earlier DMs) or the "My agents" room (its agents find it there).
+      if (this.erasedConv(conv) || (await this.continuityDMs(conv)).length > 1 || await this.builtInGroup(conv)) throw new Error("There is nothing here to delete.");
       names.set(erasedKey(conv, this.fp, deletion), { key: this.fp, lid: deletion });
     }
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv, key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); }

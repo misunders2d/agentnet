@@ -562,10 +562,6 @@ func TestDeleteThreadExactScope(t *testing.T) {
 func TestDeleteGroupConversationKeepsMembership(t *testing.T) {
 	w, carol, p, _ := groupTurnsFixture(t)
 	conv := p.State.Conv
-	// An empty group has nothing to delete (only an empty DM leaves the list).
-	if _, err := w.alice.DeleteConversation(tctx(t), conv); !errors.Is(err, ErrNothingToDelete) {
-		t.Fatalf("an empty group's deletion: %v", err)
-	}
 	sendConv(t, w.bob, conv, ConvOutgoing{Body: "group hello"})
 	eventually(t, "the first turn here", func() bool { return len(groupTurns(t, w.alice, conv)) == 1 })
 	sendConv(t, carol, conv, ConvOutgoing{Body: "from carol"})
@@ -596,6 +592,51 @@ func TestDeleteGroupConversationKeepsMembership(t *testing.T) {
 	})
 	if convInfo(t, w.alice, conv).Deleted {
 		t.Fatal("the reopened group is still left out")
+	}
+}
+
+// An empty group leaves the list too (owner, 2026-11-27), with nothing
+// else changed: membership stays, the others keep it listed, and a turn
+// brings it back. The built-in "My agents" room is kept: its agents find it
+// by that room (agentroom.go).
+func TestDeleteEmptyGroupHidesItOnly(t *testing.T) {
+	w, carol, p, _ := groupTurnsFixture(t)
+	conv := p.State.Conv
+	if len(groupTurns(t, w.alice, conv)) != 0 || convInfo(t, w.alice, conv).Deleted {
+		t.Fatal("the fixture group is not empty and listed")
+	}
+	done, err := w.alice.DeleteConversation(tctx(t), conv)
+	if err != nil || done.Erased != 0 {
+		t.Fatalf("delete: %+v %v", done, err)
+	}
+	if !convInfo(t, w.alice, conv).Deleted {
+		t.Fatal("the empty group is still listed")
+	}
+	if got, err := w.alice.GroupContext(conv); err != nil || got.State.Hash() != p.State.Hash() {
+		t.Fatalf("membership changed: %v", err)
+	}
+	if _, err := w.alice.DeleteConversation(tctx(t), conv); !errors.Is(err, ErrNothingToDelete) {
+		t.Fatalf("a second deletion: %v", err)
+	}
+	for _, a := range []*Agent{w.bob, carol} {
+		if convInfo(t, a, conv).Deleted {
+			t.Fatalf("%s lost it from the list", a.Address)
+		}
+	}
+	sendConv(t, w.bob, conv, ConvOutgoing{Body: "group hello"})
+	eventually(t, "the turn brings it back", func() bool {
+		return strings.Join(convBodies(t, w.alice, conv), "|") == "in:group hello" && !convInfo(t, w.alice, conv).Deleted
+	})
+
+	room, err := w.alice.MyAgentsRoom(tctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.DeleteConversation(tctx(t), room); !errors.Is(err, ErrNothingToDelete) {
+		t.Fatalf("the empty My agents room's deletion: %v", err)
+	}
+	if again, err := w.alice.MyAgentsRoom(tctx(t)); err != nil || again != room || convInfo(t, w.alice, room).Deleted {
+		t.Fatalf("My agents after the refusal: %s %v", again, err)
 	}
 }
 

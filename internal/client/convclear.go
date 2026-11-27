@@ -34,12 +34,13 @@ import (
 // named, so a device that holds it keeps it (and shows it), as any later
 // turn. No order or time decides what is erased.
 //
-// A DM with no turn yet (started, nothing said) is deleted too, as TDLib's
-// delete_dialog_history removes an empty chat from the list: the deletion
-// then names one marker turn, keyed by this device and the deletion's own
-// id, which matches no message anywhere. It travels and is replayed like
-// any named turn, so every own device leaves the chat out until a turn
-// arrives. The people, keys, grants and blocks stay as they are.
+// A DM or group with no turn yet (started, nothing said) is deleted too, as
+// TDLib's delete_dialog_history removes an empty chat from the list (owner,
+// 2026-11-27, for groups too): the deletion then names one marker turn,
+// keyed by this device and the deletion's own id, which matches no message
+// anywhere. It travels and is replayed like any named turn, so every own
+// device leaves the chat out until a turn arrives. The people, membership,
+// keys, grants, blocks and agents stay as they are.
 //
 // A body that unfinished work still needs (a request the worker or a person
 // still has to deal with, a reply a selected receiver has not taken, a copy
@@ -131,21 +132,24 @@ func convTurns(q dbq, conv, selfFP string) ([]envelope.Ref, error) {
 // every turn of it held here, by name, and queues those names for this
 // person's other devices.
 func (a *Agent) DeleteConversation(ctx context.Context, conv string) (ConversationDeleted, error) {
-	root, _, found, err := a.store.conversation(conv)
-	if err != nil {
+	if _, _, found, err := a.store.conversation(conv); err != nil {
 		return ConversationDeleted{}, err
 	} else if !found {
 		return ConversationDeleted{}, ErrNoConversation
 	}
 	selfFP := a.Self().Fingerprint()
-	// A recovered person's chat shows its earlier DMs too: read its family
+	// A recovered person's chat shows its earlier DMs too, and the "My
+	// agents" room is where the person's agents find each other: read both
 	// only when this row holds no turn, before the transaction.
 	var family []ConversationInfo
-	empty := false
+	empty, builtIn := false, false
 	if turns, err := convTurns(a.store.db, conv, selfFP); err != nil {
 		return ConversationDeleted{}, err
 	} else if empty = len(turns) == 0; empty {
 		if family, err = a.continuityDMs(conv); err != nil {
+			return ConversationDeleted{}, err
+		}
+		if builtIn, err = a.builtInGroup(conv); err != nil {
 			return ConversationDeleted{}, err
 		}
 	}
@@ -161,15 +165,15 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	}
 	marker := false
 	if len(turns) == 0 {
-		// A DM that never had a turn here: its deletion names a marker
-		// turn of its own (see the top of this file). One deleted already,
-		// a group, or a recovered person's chat (it shows its earlier DMs
-		// too) has nothing to delete.
+		// A DM or group that never had a turn here: its deletion names a
+		// marker turn of its own (see the top of this file). One deleted
+		// already, a recovered person's chat (it shows its earlier DMs too)
+		// and the "My agents" room have nothing to delete.
 		var erased int
 		if err := tx.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&erased); err != nil {
 			return out, err
 		}
-		if erased > 0 || !empty || root.Kind != protocol.ConvKindDM || len(family) > 1 { // !empty: its turns went meanwhile
+		if erased > 0 || !empty || len(family) > 1 || builtIn { // !empty: its turns went meanwhile
 			return out, ErrNothingToDelete
 		}
 		turns, marker = []envelope.Ref{{Fingerprint: selfFP, ID: out.Deletion}}, true

@@ -1,6 +1,6 @@
 # Next-release interaction coverage and responsiveness
 
-## Delete an empty DM — unreleased, November 27, 2026
+## Delete an empty DM or group — unreleased, November 27, 2026
 
 Reported: a DM with a pinned person where nothing was ever said ("Nothing
 said yet") answered "Delete conversation…" with "There is nothing here to
@@ -28,24 +28,36 @@ turn arrives. No schema step, no new control. The web store's existing
 immediate removal (`deleteChat`, measured by the latency fixture's chat-delete
 cells) now ends in success instead of a restore. People, keys, grants and
 blocks are untouched (keys, grants and blocks by code reading: the path
-writes only `conv_erased` and the `clear` copies). A repeat deletion, a group
-or My agents room with no turn, and a recovered person's chat (its earlier
-DMs show in it) still refuse as before. Starting a chat with the person again
-creates a new DM, as after any deletion; a turn in the old one brings it back.
+writes only `conv_erased` and the `clear` copies). Owner decision, same day:
+an empty group leaves the list the same way; membership, keys, grants and
+its agents stay, and its other members keep it listed. Still refused as
+before: a repeat deletion, a recovered person's chat (its earlier DMs show
+in it) and the built-in My agents room. My agents is held for an owner
+decision: the room is found from the listed chats (Go `myAgentsRoomID`
+skips a deleted chat; web `myAgentsRoomId` and the engine's `builtInGroup`
+read `overview.dms`), so a hidden room would make the next agent ask or
+"Chat with" create a second "My agents" room. That already happens when a
+My agents room with messages is deleted (code reading, not tested).
+Starting a chat with the person again creates a new DM, as after any
+deletion; a turn in the old one brings it back.
 
 Evidence: `TestDeleteEmptyDMOnAllOwnDevices` (client: laptop and linked
 phone; no error, left out on both, people unchanged, a repeat adds no marker,
 a new DM with the person is listed, a turn in the old one brings it back on
-both); `TestDeleteGroupConversationKeepsMembership` (an empty group still
-refuses); `TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
+both); `TestDeleteEmptyGroupHidesItOnly` (client: an empty group leaves the
+list, membership hash unchanged, others keep it, a repeat refuses, a turn
+brings it back; the empty My agents room refuses and stays the room);
+`TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
 overview, deleted with a note, gone from the next overview, people kept);
 `TestBrowserConversationDeletionMatchesGo` (browser engine: deleted on the
 desk and the linked phone, people kept, a repeat adds no marker, a turn
 brings it back; the phone's root is seeded as root-sync leaves it, and no
-new-chat step).
-Three of the four new checks (client, ui `Live`, browser) fail on the code before
-the fix with the reported refusal; the empty-group lines pass there too, and
-guard that refusal.
+new-chat step; an empty group leaves the list with its group context
+unchanged and comes back with a turn, and My agents refuses).
+The new client, ui `Live` and browser checks fail on the code before each
+fix with the reported refusal; the My agents lines pass there too, and guard
+that refusal. Group own-device sync uses the DM's tested path; it has no
+two-device group test.
 Not rerun: the rendered latency suite (web code unchanged); not checked on the
 real installed app.
 
