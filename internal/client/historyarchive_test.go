@@ -417,26 +417,33 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	if count < 1 || count > historyPage {
 		t.Fatalf("prebuilt corpus instead of one source page: %d", count)
 	}
-	// Paced pages reach one full window, and stop there, before any is packed.
-	for range historyPage {
+	// Paced pages fill one whole archive part, and stop there, before any is packed.
+	for range historyArchiveStage/historyPage + 2 {
 		if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil || count != historyPage {
-		t.Fatalf("paced corpus did not fill exactly one window: %d %v", count, err)
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil || count != historyArchiveStage {
+		t.Fatalf("paced corpus did not fill exactly one part: %d %v", count, err)
 	}
 	if err = a.archivePack(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
 	first := archiveDescriptor(t, a)
+	var entries int
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM history_archive_entries WHERE manifest=?`, first.ID).Scan(&entries); err != nil || entries != protocol.MaxHistoryArchiveEntries {
+		t.Fatalf("first part is not one full part: %d %v", entries, err)
+	}
+	// Production continues while that part is in flight: its round trip
+	// holds no page capacity (the stop-and-wait this replaces).
 	for range 8 {
 		if _, err = a.pageByHand(tctx(t), phone.Self()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveStaged).Scan(&count); err != nil || count != historyPage {
-		t.Fatalf("cold production consumed reserved state capacity: %d %v", count, err)
+	var unpacked int
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox o WHERE state=? AND NOT EXISTS(SELECT 1 FROM history_archive_entries e WHERE e.child=o.id)`, archiveStaged).Scan(&unpacked); err != nil || unpacked < 1 || unpacked > 8*historyPage {
+		t.Fatalf("production did not continue, bounded, while a part was in flight: %d %v", unpacked, err)
 	}
 	base := a.hub.http.Transport
 	var posted []string
@@ -473,13 +480,18 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	if err = phone.storeReceived(tctx(t), first); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = phone.archiveImportStep(tctx(t)); err != nil {
+	// One full part imports thousands of children in one checkpointed step.
+	importCtx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	started := time.Now()
+	if _, err = phone.archiveImportStep(importCtx); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("imported one %d-entry part in %s", protocol.MaxHistoryArchiveEntries, time.Since(started))
 	if err = a.store.applyReceipt(protocol.ReceiptEvent{ID: first.ID, State: protocol.StateDelivered, Seq: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveAccepted).Scan(&count); err != nil || count != historyPage {
+	if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE state=?`, archiveAccepted).Scan(&count); err != nil || count != historyArchiveStage {
 		t.Fatalf("retained descriptor did not retire pending children: %d %v", count, err)
 	}
 	if full, e := syncWindowFull(a.store.db, phone.Self()); e != nil || full {
@@ -488,7 +500,7 @@ func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
 	if _, err = a.store.db.Exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10000) INSERT INTO outbox(id,recipient,body,envelope,state,created_at,sub,recipient_fp) SELECT lower(hex(randomblob(16))),recipient,body,envelope,?,created_at,sub,recipient_fp FROM n JOIN outbox o ON o.id=(SELECT child FROM history_archive_entries WHERE manifest=? LIMIT 1)`, archiveAccepted, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := a.store.db.Query("EXPLAIN QUERY PLAN "+syncWindowQuery, historyPage, phone.Address, phone.Self().Fingerprint(), phone.Address, phone.Self().Fingerprint())
+	plan, err := a.store.db.Query("EXPLAIN QUERY PLAN "+syncWindowQuery, phone.Address, phone.Self().Fingerprint(), phone.Address, phone.Self().Fingerprint())
 	if err != nil {
 		t.Fatal(err)
 	}

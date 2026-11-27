@@ -1151,3 +1151,40 @@ All were read on November 25.
 **Implementation note (not an owner decision):** the first build gates only
 the app's first-run page, which Play reviews. The browser landing page and
 Comic's add-workspace sheet are not gated yet.
+
+## November 27, 2026 — history copy to a new device in large parts
+
+Copying a long history to a newly linked device was far too slow: the
+v0.8.18 archive moved 50 messages per part and waited for each part's
+receipt before sending the next. Signal now sends a linked device's history
+as one compressed, encrypted archive through its servers, and says text
+histories "usually fit in just a few megabytes after compression"
+([A Synchronized Start for Linked Devices](https://signal.org/blog/a-synchronized-start-for-linked-devices/),
+January 27, 2025). WhatsApp's primary device "encrypts a bundle of the
+messages from recent chats"
+([How WhatsApp enables multi-device capability](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/),
+July 14, 2021). Both posts were read on November 27.
+
+**Implementation (not owner decisions):**
+- A part holds up to 5,000 history copies. Its JSON is gzip-compressed
+  (Go `compress/gzip`, the browser's `CompressionStream`) and then
+  encrypted as an ordinary file attachment, as before. The compressed part
+  and the inflated JSON are each bounded to 16 MiB, so four parts in flight
+  stay well inside the relay's file and storage limits. Inflating stops one
+  byte past the bound; a bad checksum, a second gzip member or any trailing
+  byte refuses the part.
+- Up to four parts may be in flight to one device at once. A part is
+  packed when it is full, or when nothing else is in flight to that
+  device, so a short history still goes at once and a long one moves in
+  full parts.
+- Each child copy keeps its own signature and encryption, and the importer
+  still runs the existing history admission per copy, newest first, saving
+  its position after each one. A restart resumes at the next copy.
+- The reader capability `ha2` replaces `ha1`; the formats are
+  `agentnet-history-v2` and chunk version 2. A device that cannot inflate
+  (no `CompressionStream`) does not advertise `ha2` and keeps the
+  per-message history copies. No compatibility path for `ha1`, since this
+  is not a public release yet.
+- The device that holds the history picks each page from per-side indexes
+  instead of sorting both sides of a busy chat, which kept large parts
+  from filling.

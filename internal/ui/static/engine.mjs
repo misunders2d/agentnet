@@ -20,7 +20,7 @@ import {deviceHistory,deviceHistoryDirection,deviceHistoryPeer,directHistoryRow}
 import {directTopics} from "./directtopics.mjs";
 import {topicTransfers} from "./topictransfer.mjs";
 import { backgroundCopy, historyWindow, stateWindow } from "./historywindow.mjs";
-import { historyArchive } from "./historyarchive.mjs";
+import { archiveCompression, historyArchive } from "./historyarchive.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
 import { openDB } from "./vendor/idb.mjs"; // idb: promises over IndexedDB (webvendor, pinned)
 import { createParser } from "./vendor/sse.mjs"; // eventsource-parser: the framing of the signed event stream (webvendor, pinned)
@@ -8757,7 +8757,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV2, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, ...(archiveCompression() ? [wire.CapHistoryArchive] : []), wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV2, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.

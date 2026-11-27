@@ -188,10 +188,58 @@ func (a *Agent) archiveStep(ctx context.Context) (more bool, err error) {
 	return more || errors.As(packErr, &isolated), packErr
 }
 
+// archiveInFlight lists the archive descriptor states that hold a part of a
+// device's window: uploading, sendable, waiting for capability, or held by
+// the relay. A delivered descriptor's ciphertext is retained by its device.
+const archiveInFlight = `('archive_uploading','queued','waiting','custody')`
+
+// archivePack packs staged children into parts for each device whose window
+// has room. A part is packed when it is full (entries or bytes), or when the
+// device has no part in flight, so the newest page goes at once and the last
+// partial part follows its predecessors; meanwhile production fills the next
+// part instead of each small page becoming its own round trip.
+func (a *Agent) archivePack(ctx context.Context) error {
+	rows, err := a.store.db.Query(`SELECT o.recipient,o.recipient_fp,(SELECT count(*) FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN `+archiveInFlight+`) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) GROUP BY o.recipient,o.recipient_fp ORDER BY min(o.rowid)`, envelope.SubHistoryArchive, archiveStaged)
+	if err != nil {
+		return err
+	}
+	type target struct {
+		address, fp string
+		inFlight    int
+	}
+	var targets []target
+	for rows.Next() {
+		var t target
+		if err = rows.Scan(&t.address, &t.fp, &t.inFlight); err != nil {
+			break
+		}
+		if t.inFlight < protocol.HistoryArchiveWindow {
+			targets = append(targets, t)
+		}
+	}
+	rowErr := rows.Err()
+	rows.Close()
+	if err = errors.Join(err, rowErr); err != nil {
+		return err
+	}
+	var first error
+	for _, t := range targets {
+		if err := a.archivePackFor(ctx, t.address, t.fp, t.inFlight); err != nil {
+			if ctx.Err() != nil {
+				return err
+			}
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	return first
+}
+
 // A staged child is already exact signed ciphertext, committed with its
 // source cursor. A crash before packing discovers it here; no source is lost.
-func (a *Agent) archivePack(ctx context.Context) (err error) {
-	rows, err := a.store.db.Query(`SELECT o.envelope,o.recipient_fp,coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.body,''),coalesce(m.required_cap,o.required_cap,''),(o.mention_cap OR coalesce(m.mention_cap,0)),(o.organization_cap OR coalesce(m.organization_cap,0)),(o.shared_title_cap OR coalesce(m.shared_title_cap,0)),(o.resources_cap OR coalesce(m.resources_cap,0)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) AND NOT EXISTS(SELECT 1 FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN ('archive_uploading','queued','waiting','custody')) ORDER BY o.rowid LIMIT ?`, archiveStaged, envelope.SubHistoryArchive, protocol.MaxHistoryArchiveEntries)
+func (a *Agent) archivePackFor(ctx context.Context, address, fp string, inFlight int) (err error) {
+	rows, err := a.store.db.Query(`SELECT o.envelope,o.recipient_fp,coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.body,''),coalesce(m.required_cap,o.required_cap,''),(o.mention_cap OR coalesce(m.mention_cap,0)),(o.organization_cap OR coalesce(m.organization_cap,0)),(o.shared_title_cap OR coalesce(m.shared_title_cap,0)),(o.resources_cap OR coalesce(m.resources_cap,0)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND o.recipient=? AND o.recipient_fp=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) ORDER BY o.rowid LIMIT ?`, archiveStaged, address, fp, protocol.MaxHistoryArchiveEntries)
 	if err != nil {
 		return err
 	}
@@ -284,13 +332,14 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	if err = historyRecoveryCurrent(a.store.db, a.Self(), dev); err != nil {
 		return err
 	}
-	chunk := envelope.HistoryArchiveChunk{V: 1}
+	chunk := envelope.HistoryArchiveChunk{V: envelope.HistoryArchiveChunkVersion}
+	full := len(selectedRows) == protocol.MaxHistoryArchiveEntries
 	required := protocol.CapHistoryArchive
 	snapshotExtension := false
 	conversationAudienceExtension := false
 	steerExtension := false
 	guestAgentExtension := false
-	chunkBytes := len(`{"v":1,"entries":[]}`)
+	chunkBytes := len(`{"v":2,"entries":[]}`)
 	mentionExtension, organizationExtension := false, false
 	sharedTitleExtension, resourcesExtension := false, false
 	for _, r := range selectedRows {
@@ -320,6 +369,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 			if len(chunk.Entries) == 0 {
 				return fmt.Errorf("archive record %s exceeds the bounded chunk", r.env.ID)
 			}
+			full = true
 			break
 		}
 		chunkBytes += n
@@ -348,7 +398,12 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	required = guestAgentRequirement(required, guestAgentExtension)
 	required = steerRequirement(required, steerExtension)
 	required = conversationAudienceRequirement(required, conversationAudienceExtension)
-	data, err := envelope.MarshalHistoryArchiveChunk(chunk)
+	if !full && inFlight > 0 {
+		// Production is still filling this part; an earlier part's receipt
+		// or the next producer commit wakes packing again.
+		return nil
+	}
+	data, err := envelope.EncodeHistoryArchivePart(chunk)
 	if err != nil {
 		return err
 	}
@@ -356,7 +411,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	att, err := a.spoolReader("history.age.json", bytes.NewReader(data), recipient)
+	att, err := a.spoolReader("agentnet-history-v2.json.gz", bytes.NewReader(data), recipient)
 	if err != nil {
 		return err
 	}
@@ -432,7 +487,7 @@ func (a *Agent) archiveAuthority(ctx context.Context, env envelope.Envelope, in 
 	if err != nil {
 		return manifest, err
 	}
-	if in.Sub != envelope.SubHistoryArchive || !in.Replica || len(in.Attachments) != 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePlaintext {
+	if in.Sub != envelope.SubHistoryArchive || !in.Replica || len(in.Attachments) != 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePart {
 		return manifest, errors.New("invalid history archive shape")
 	}
 	me, ok, err := a.store.selfPerson(a.Address)
@@ -580,11 +635,13 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 		return failed(err)
 	}
 	defer os.Remove(path)
-	data, err := os.ReadFile(path)
+	part, err := os.Open(path)
 	if err != nil {
 		return failed(err)
 	}
-	chunk, err := envelope.ParseHistoryArchiveChunk(data)
+	// Inflate this bounded part once, then checkpoint each ordinary admission.
+	chunk, err := envelope.DecodeHistoryArchivePart(part)
+	part.Close()
 	if err != nil {
 		return failed(err)
 	}
@@ -592,7 +649,6 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 		return failed(errors.New("archive count does not match signed manifest"))
 	}
 	ctx = context.WithValue(ctx, historyArchiveRefreshKey{}, map[string]error{})
-	// Decode this bounded chunk once, then checkpoint each ordinary admission.
 	// No transaction spans crypto, network, or filesystem work.
 	for pos < len(chunk.Entries) {
 		if err := ctx.Err(); err != nil {

@@ -210,7 +210,8 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 	}
 	var imported int
 	phone.store.db.QueryRow(`SELECT count(*) FROM history_archive_children`).Scan(&imported)
-	for range historyPage + 1 { // paced pages reach the full window, then stop
+	want := min(rows, historyArchiveStage) // one archive part bounds unpacked staging
+	for range want/historyPage + 2 { // paced pages reach the bound, then stop
 		if err = pageFor(phone, third); err != nil {
 			t.Fatal(err)
 		}
@@ -224,11 +225,11 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 	if live > 0 {
 		t.Errorf("REPRO: %d imported (forwarded) history rows re-sent to another own device as live-lane copies", live)
 	}
-	if imported != rows || total != historyPage || !full || staged != historyPage {
+	if imported != rows || total != want || full != (want == historyArchiveStage) || staged != want {
 		t.Fatalf("imported tail escaped bounded archive staging: imported=%d total=%d staged=%d full=%v", imported, total, staged, full)
 	}
 	var deferred int
-	if err = phone.store.db.QueryRow(`SELECT count(*) FROM `+deferredTable+` WHERE recipient_fp=?`, third.Self().Fingerprint()).Scan(&deferred); err != nil || deferred != rows-historyPage {
+	if err = phone.store.db.QueryRow(`SELECT count(*) FROM `+deferredTable+` WHERE recipient_fp=?`, third.Self().Fingerprint()).Scan(&deferred); err != nil || deferred != rows-want {
 		t.Fatalf("full window lost deferred tail: %d %v", deferred, err)
 	}
 	_, root := rootOf(t, w.bob, conv)

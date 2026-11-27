@@ -604,7 +604,7 @@ check(imported===N,'three-device fixture imports all exact archive originals');
 let steps=0;while(steps<100&&await phone.directHistory().step(tabletDev))steps++;
 const toTablet=(await phone.store.all('outbox')).filter(r=>r.to===tablet.address&&r.sub===wire.SubDeviceHistory);
 const live=toTablet.filter(r=>r.fresh_live),staged=toTablet.filter(r=>r.state==='archive_staged');
-check(!live.length&&staged.length===toTablet.length&&staged.length<N&&!await phone.directHistory().step(tabletDev),'third-device imported history fills a bounded cold window without fresh-live promotion');
+check(!live.length&&staged.length===toTablet.length&&staged.length<=wire.HistoryArchiveMaxEntries&&!await phone.directHistory().step(tabletDev),'third-device imported history stages within one bounded archive part without fresh-live promotion');
 // A user's interactive send on the phone after that production, through the
 // engine's queued UI send path (commitReceiverCopies assigns send_order).
 await phone.store.write([{s:'persons',k:peer.me.person,v:{...peer.me,state:'pinned'}}]);

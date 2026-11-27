@@ -8,10 +8,39 @@ const outgoing='history-archive/out/',incoming='history-archive/in/';
 const inert=new Set(['history',wire.SubDeviceHistory,wire.SubRootSync,wire.SubGroupProof,wire.SubGroupContext]);
 const yieldTurn=()=>new Promise(r=>setTimeout(r,0));
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>keys.includes(k));
+// Large parts are gzip-compressed (Go envelope.EncodeHistoryArchivePart). A
+// device without the standard streams neither advertises nor packs ha2.
+export const archiveCompression=()=>typeof CompressionStream==='function'&&typeof DecompressionStream==='function';
+export async function compressPart(bytes){
+  const out=new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  if(out.length>wire.HistoryArchiveMaxPart)throw Error('Archive part exceeds bound.');
+  return out;
+}
+// Inflation stops past the plaintext bound; corrupt, multi-member or trailing
+// data fails closed (the stream rejects it, as Go's single-stream reader does).
+export async function inflatePart(bytes){
+  if(!(bytes instanceof Uint8Array)||bytes.length<1||bytes.length>wire.HistoryArchiveMaxPart)throw Error('Archive part exceeds bound.');
+  const reader=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader(),parts=[];
+  let n=0;
+  for(;;){
+    let step;
+    try{step=await reader.read();}catch{throw Error('Corrupt archive part.');}
+    if(step.done)break;
+    n+=step.value.length;
+    if(n>wire.HistoryArchiveMaxBytes){reader.cancel().catch(()=>{});throw Error('Archive part inflates past its bound.');}
+    parts.push(step.value);
+  }
+  const out=new Uint8Array(n);let at=0;
+  for(const part of parts){out.set(part,at);at+=part.length;}
+  return out;
+}
+export async function parseArchivePart(bytes,count){
+  return parseArchiveChunk(await inflatePart(bytes),count);
+}
 export async function parseArchiveChunk(bytes,count){
   if(!(bytes instanceof Uint8Array)||bytes.length>wire.HistoryArchiveMaxBytes)throw Error('Archive exceeds bound.');
   const chunk=JSON.parse(decode.decode(bytes));
-  if(!exact(chunk,['v','entries'])||chunk.v!==1||!Array.isArray(chunk.entries)||chunk.entries.length!==count||count<1||count>wire.HistoryArchiveMaxEntries)throw Error('Invalid archive chunk.');
+  if(!exact(chunk,['v','entries'])||chunk.v!==2||!Array.isArray(chunk.entries)||chunk.entries.length!==count||count<1||count>wire.HistoryArchiveMaxEntries)throw Error('Invalid archive chunk.');
   const children=new Set();
   for(const entry of chunk.entries){
     if(!exact(entry,['envelope','blobs'])||!entry.envelope||typeof entry.envelope!=='object'||!Array.isArray(entry.blobs)||entry.blobs.length>8)throw Error('Invalid archive entry.');
@@ -39,7 +68,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
     return e.readSyncAuthority(manifest,from,key,e.address,e.fp,checks);
   }
   async function supported(dev){
-    if(!await e.recipientAvailable(dev)||!await e.ownHistoryAuthority(dev))return false;
+    if(!archiveCompression()||!await e.recipientAvailable(dev)||!await e.ownHistoryAuthority(dev))return false;
     const pin=await e.store.get('pins',dev.address);
     if(!pin||pin.pending||pin.fingerprint!==dev.fingerprint)return false;
     try{
@@ -89,11 +118,16 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
     }
     for(const rows of targets.values()){
       try{
+        // Up to HistoryArchiveWindow parts travel at once. A part goes when
+        // full, or when none is in flight (the newest page at once, the
+        // last partial part after its predecessors); otherwise production
+        // keeps filling it instead of each page making its own round trip.
         let outstanding=(await e.store.prefix('kv',outgoing)).filter(j=>j.to===rows[0].to&&j.recipient_fp===rows[0].recipient_fp&&['prepared','published'].includes(j.state)).length;
-        while(rows.length&&outstanding<2){
+        while(rows.length&&outstanding<wire.HistoryArchiveWindow){
           const checks=[],{
             own,pin
           }=await gate(rows[0],checks),entries=[],chosen=[];
+          let size=utf8.encode(JSON.stringify({v:2,entries:[]})).length,full=false;
           for(const row of rows){
             const current=await e.groupRead(checks,'outbox',row.id);
             if(current?.state!=='archive_staged'||current.archive_chunk)break;
@@ -107,23 +141,23 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
             }
             const entry={
               envelope,blobs
-            },size=utf8.encode(JSON.stringify({
-              v:1,entries:[...entries,entry]
-            })).length;
-            if(size>wire.HistoryArchiveMaxBytes){
-              if(!entries.length)throw Error('One archive record exceeds 4 MiB.');
+            },grown=size+utf8.encode(JSON.stringify(entry)).length+(entries.length?1:0);
+            if(grown>wire.HistoryArchiveMaxBytes){
+              if(!entries.length)throw Error('One archive record exceeds the part bound.');
+              full=true;
               break;
             }
+            size=grown;
             entries.push(entry);
             chosen.push(current);
-            if(entries.length===wire.HistoryArchiveMaxEntries)break;
+            if(entries.length===wire.HistoryArchiveMaxEntries){full=true;break;}
           }
-          if(!entries.length)break;
-          const sealed=await wire.encryptFile(utf8.encode(JSON.stringify({
-            v:1,entries
-          })),'agentnet-history-v1.json',await e.pubOf(pin)),id=wire.newID();
+          if(!entries.length||!full&&outstanding>0)break;
+          const sealed=await wire.encryptFile(await compressPart(utf8.encode(JSON.stringify({
+            v:2,entries
+          }))),'agentnet-history-v2.json.gz',await e.pubOf(pin)),id=wire.newID();
           const manifest={
-            v:1,person:own.person,roster:own.hash,count:entries.length,format:'agentnet-history-v1'
+            v:1,person:own.person,roster:own.hash,count:entries.length,format:wire.HistoryArchiveFormat
           };
           const shared_title_cap=chosen.some(row=>row.shared_title_cap);
           const resources_cap=chosen.some(row=>row.resources_cap||wire.conversationResources(row.topic_event)||row.sub==='history'&&row.body&&wire.conversationResources(wire.parseHistory(row.body).topic_event));
@@ -239,7 +273,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           if(!e.connected)return;
           const ct=await e.getBytes('/v1/blobs/'+job.attachment.blob.id+'/data',job.attachment.blob.size);
           // Both hashes/decryption must pass before the descriptor can be acked.
-          await parseArchiveChunk(await wire.decryptFile(ct,job.attachment,e.keys),job.manifest.count);
+          await parseArchivePart(await wire.decryptFile(ct,job.attachment,e.keys),job.manifest.count);
           await authority(job.manifest,job.from,job.from_key,checks);
           const current=await e.groupRead(checks,'kv',incoming+job.id);
           job={
@@ -262,7 +296,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           e.flushReceipts().catch(()=>{
           });
         }
-        const bytes=await wire.decryptFile(retained.ct,job.attachment,e.keys),chunk=await parseArchiveChunk(bytes,job.manifest.count);
+        const chunk=await parseArchivePart(await wire.decryptFile(retained.ct,job.attachment,e.keys),job.manifest.count);
         while(job.index<chunk.entries.length){
           if(e.closing)return;
           await importEntry(job,chunk.entries[job.index]);

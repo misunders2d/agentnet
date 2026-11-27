@@ -5,14 +5,26 @@ import (
 	"unicode/utf8"
 )
 
-// CapHistoryArchive reads bounded encrypted own-device history archives.
-// It is explicit: older history readers still receive their existing carriers.
-const CapHistoryArchive = "ha1"
+// CapHistoryArchive reads large gzip-compressed encrypted own-device history
+// archive parts. ha2 replaces ha1 (50-entry uncompressed chunks): a device
+// that advertises only ha1 gets the existing per-message carriers instead.
+const CapHistoryArchive = "ha2"
 
+// A linked device's history copy moves as a few large parts, as Signal's and
+// WhatsApp's linked-device transfers do, not as 50-message pieces. Each part
+// is one gzip-compressed JSON chunk, then age-encrypted as an ordinary file
+// attachment. MaxHistoryArchivePart bounds the compressed attachment (its
+// signed plaintext size); MaxHistoryArchivePlaintext bounds the decompressed
+// JSON, enforced while inflating. Both bound a phone importer's memory.
 const (
-	HistoryArchiveFormat       = "agentnet-history-v1"
-	MaxHistoryArchiveEntries   = 50
-	MaxHistoryArchivePlaintext = 4 << 20
+	HistoryArchiveFormat       = "agentnet-history-v2"
+	MaxHistoryArchiveEntries   = 5000
+	MaxHistoryArchivePlaintext = 16 << 20
+	MaxHistoryArchivePart      = 16 << 20
+	// HistoryArchiveWindow is how many parts may be in flight to one device
+	// at once (uploading, queued or held by the relay) instead of waiting
+	// for each part's receipt before packing the next.
+	HistoryArchiveWindow = 4
 )
 
 // HistoryArchive is the signed, encrypted descriptor of one archive attachment.

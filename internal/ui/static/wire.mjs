@@ -36,7 +36,7 @@ export const CapGuestAgent = "gpa1"; // includes tpc1, with exact parent-derived
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
-export const CapHistoryArchive="ha1",SubHistoryArchive="history-archive";
+export const CapHistoryArchive="ha2",SubHistoryArchive="history-archive";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapDirectTopicSync="dts1", SubDirectTopicSync="direct-topic-sync";
@@ -776,7 +776,7 @@ async function checkV2(n) {
   }
   if(n.sub===SubHistoryArchive){
     if(n.conv||n.lid||n.root||n.kind!=="message"||!n.replica||n.attachments.length!==1||n.target||n.pid||n.reply_to||n.origin||n.emotion||n.status||n.fan||n.human||n.receiver_route||n.agent_id||n.topic||n.topic_event||n.topic_done||n.quote||n.send_group||n.session||n.fallback)throw Error("history archive: quiet rootless replica required");
-    parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size>HistoryArchiveMaxBytes||n.attachments[0].blob.size>HistoryArchiveMaxBytes+(64<<10))throw Error("history archive exceeds bound");return;
+    parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size<1||n.attachments[0].size>HistoryArchiveMaxPart||n.attachments[0].blob.size>HistoryArchiveMaxPart+(Math.floor(HistoryArchiveMaxPart/65536)+1)*16+16+4096)throw Error("history archive exceeds bound");return;
   }
   if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubReminderSync || n.sub===SubBlockSync || n.sub===SubDirectTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
@@ -2481,8 +2481,10 @@ export async function validateInvitationSync(r) {
  if(await groupInvitationID(r.proposal)!==r.id)throw Error("invitation sync: proposal differs");return r;
 }
 
-export const HistoryArchiveMaxBytes=4<<20,HistoryArchiveMaxEntries=50;
+// Go protocol/historyarchive.go: one part is gzip-compressed chunk JSON. MaxPart
+// bounds the compressed attachment, MaxBytes the JSON while it inflates.
+export const HistoryArchiveMaxBytes=16<<20,HistoryArchiveMaxPart=16<<20,HistoryArchiveMaxEntries=5000,HistoryArchiveWindow=4,HistoryArchiveFormat="agentnet-history-v2";
 export function parseHistoryArchive(json){
  const r=strictRecord(json,4096,"history archive",{v:"int",person:"string",roster:"string",count:"int",format:"string"});
- if(r.v!==1||!validID(r.person)||!validHash(r.roster)||r.count<1||r.count>HistoryArchiveMaxEntries||r.format!=="agentnet-history-v1")throw Error("invalid history archive manifest");return r;
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||r.count<1||r.count>HistoryArchiveMaxEntries||r.format!==HistoryArchiveFormat)throw Error("invalid history archive manifest");return r;
 }
