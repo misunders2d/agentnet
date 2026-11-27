@@ -1109,6 +1109,9 @@ func TestBackToBackRemoteAsksQueueOnceWhenNativeCannotSteer(t *testing.T) {
 	if err != nil || !found || next.ID != second {
 		t.Fatal("next turn was not selected", next.ID, found, err)
 	}
+	if steeringOf(t, a, second) != "" {
+		t.Fatal("the refused follow-up was claimed as its own turn still marked steered")
+	}
 	a.runJob(tctx(t), next, &Responder{Harness: "agentstub", Dir: stub.dir, Timeout: 5 * time.Second}, nil)
 	waitState(t, a, second, stateAnswered)
 	if prompt := stub.last(); !strings.Contains(prompt, "Compare the two sample colors") || !strings.Contains(prompt, "Continue only the new correction") || !strings.Contains(prompt, "Use English instead") || stub.runs() != 1 {

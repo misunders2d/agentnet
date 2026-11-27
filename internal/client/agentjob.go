@@ -459,8 +459,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 			}
 			beforeAgentClaim()
 			res, err = tx.Exec(`UPDATE inbox SET state = ?, responder = ?, detail = NULL, attempts = attempts + 1, last_attempt_at = unixepoch(),
-				steering_parent=CASE WHEN queued_followup_parent IS NULL THEN steering_parent END,
-				steering_attempt=CASE WHEN queued_followup_parent IS NULL THEN steering_attempt END
+				steering_parent=NULL, steering_attempt=NULL -- its own run: never reported steered
 				WHERE id = ? AND state = ?`, stateRunning, responder, r.j.ID, r.state)
 			if err == nil {
 				n, _ := res.RowsAffected()
