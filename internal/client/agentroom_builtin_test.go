@@ -31,10 +31,20 @@ func TestMyAgentsRoomCannotBeRenamedOrLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if other.State.Conv == room {
-		t.Fatal("look-alike is the room")
+	// Both may carry the same creation second; the room is whichever
+	// MyAgentsRoom picks (oldest, then lowest ID). The other is a look-alike.
+	built, err := a.MyAgentsRoom(tctx(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err = a.RenameGroup(tctx(t), other.State.Conv, "Spare"); errors.Is(err, ErrBuiltInGroup) {
+	spare := other.State.Conv
+	if built == spare {
+		spare = room
+	}
+	if _, err = a.RenameGroup(tctx(t), built, "Pi team"); !errors.Is(err, ErrBuiltInGroup) {
+		t.Fatalf("rename of the chosen My agents: %v", err)
+	}
+	if _, err = a.RenameGroup(tctx(t), spare, "Spare"); errors.Is(err, ErrBuiltInGroup) {
 		t.Fatalf("a look-alike is not built in: %v", err)
 	}
 }
