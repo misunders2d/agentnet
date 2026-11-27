@@ -169,6 +169,9 @@ func (a *Agent) admitGroupVisitorInvite(ctx context.Context, env envelope.Envelo
 	if err != nil {
 		return true, hold(reasonInvalid, err.Error())
 	}
+	if ev.Type == protocol.EventDismiss {
+		return a.admitGroupVisitorCancel(env, in, root, sp, sender, fromQuarantine, hold)
+	}
 	if ev.Type != protocol.EventInvite || ev.Group == nil || ev.Group.HostRole != "visitor" || ev.Host == nil || ev.Host.Address != a.Address || ev.Host.Fingerprint != a.Self().Fingerprint() || ev.Host.Person != me.info.Person {
 		return false, nil
 	}
@@ -203,6 +206,37 @@ func (a *Agent) admitGroupVisitorInvite(ctx context.Context, env envelope.Envelo
 		a.convWork.due(convRetry)
 		a.kickNow()
 		a.wakeWorker()
+	}
+	return true, err
+}
+
+// admitGroupVisitorCancel records, before any group context is held, the
+// exact inviter device's signed dismissal of this device's own pending
+// visitor invitation (MEL-841): otherwise it waits for context while the
+// cancelled invitation stays acceptable. It is evidence only, resolved with
+// all usual checks once context is held; anything else takes the usual path.
+func (a *Agent) admitGroupVisitorCancel(env envelope.Envelope, in envelope.Inner, root protocol.ConvRoot, sp personRow, sender identity.Public, fromQuarantine bool, hold func(string, string) error) (bool, error) {
+	if _, err := groupTurnPacketIn(a.store.db, in.Conv); !errors.Is(err, ErrGroupContextPending) {
+		return false, err
+	}
+	inv, err := groupVisitorInvite(a.store.db, root, in.PID, a.Address, a.Self().Fingerprint())
+	if err != nil {
+		return false, nil
+	}
+	ev, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+	if err != nil {
+		return true, hold(reasonInvalid, err.Error())
+	}
+	if ev.Prev != inv.Hash() || ev.Author.Person != inv.Author.Person || ev.Author.Address != inv.Author.Address || ev.Author.Fingerprint != inv.Author.Fingerprint || ev.Author.Person != sp.info.Person || !sp.has(env.From, sender.Fingerprint()) {
+		return false, nil
+	}
+	result, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, []byte(in.Body)) })
+	if err == nil && result == admitConflict {
+		return true, hold(reasonDuplicate, "group: visitor cancellation logical conflict")
+	}
+	if err == nil {
+		a.convWork.due(convRetry)
+		a.kickNow()
 	}
 	return true, err
 }

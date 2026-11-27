@@ -1,9 +1,14 @@
 package client
 
 import (
+	"encoding/json"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -401,5 +406,179 @@ func TestGroupGuestAndMemberInvitationFirstCancelled(t *testing.T) {
 				assertNothingHeld(t, w.bob)
 			})
 		}
+	}
+}
+
+// deliverPIDCopies hands receiver, in order, the sender's stored copies of
+// pid addressed to it whose sub is sub, and nothing else.
+func deliverPIDCopies(t *testing.T, sender, receiver *Agent, pid, sub string) {
+	t.Helper()
+	rows, err := sender.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND pid=? AND sub=? ORDER BY rowid`, receiver.Address, pid, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envs []envelope.Envelope
+	for rows.Next() {
+		var raw []byte
+		var env envelope.Envelope
+		if err = rows.Scan(&raw); err == nil {
+			err = json.Unmarshal(raw, &env)
+		}
+		if err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		envs = append(envs, env)
+	}
+	rows.Close()
+	for _, env := range envs {
+		if err = sender.uploadAll(tctx(t), env); err != nil {
+			t.Fatal(err)
+		}
+		if err = receiver.accept(tctx(t), env); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The incident's timing (MEL-841): the inviter's dismissal of a pending
+// visitor invitation reaches the invitee before any group context. It was
+// held for context, so once context arrived the cancelled invitation stayed
+// acceptable until a later proof retry. The exact inviter's dismissal of
+// this device's own invitation is now recorded at once.
+func TestGroupGuestCancellationBeforeContext(t *testing.T) {
+	w, p := groupLifecycleFixture(t, false)
+	stopA := runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	stopA()
+	stopB()
+	inviter, guest, conv := w.alice, w.bob, p.Root.ID()
+	first, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = inviter.DismissParticipation(tctx(t), first.PID); err != nil {
+		t.Fatal(err)
+	}
+	deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent) // invite, scope, dismissal: no context yet
+	if _, err = guest.GroupContext(conv); !errors.Is(err, ErrGroupContextPending) {
+		t.Fatalf("context before its carrier: %v", err)
+	}
+	deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubGroupProof)
+	deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubGroupContext)
+	if got, e := guest.Participation(first.PID); e != nil || got.State != PartDismissed {
+		t.Fatalf("cancelled invitation not dismissed once context arrived: %+v %v", got, e)
+	}
+	if got, e := guest.AcceptParticipation(tctx(t), first.PID); e == nil {
+		t.Fatalf("cancelled invitation accepted: %+v", got)
+	}
+}
+
+// offlineGroupGuestFixture is a solo group whose inviter and invitee have
+// published their capabilities and stopped: copies move only by hand.
+func offlineGroupGuestFixture(t *testing.T) (*world, string) {
+	t.Helper()
+	w, p := groupLifecycleFixture(t, false)
+	stopA := runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	stopA()
+	stopB()
+	return w, p.Root.ID()
+}
+
+// The incident's order: the first invitation and its dismissal arrive with
+// no group context; context comes with the second invitation.
+func TestGroupGuestCancellationBeforeContextSecondInvite(t *testing.T) {
+	w, conv := offlineGroupGuestFixture(t)
+	inviter, guest := w.alice, w.bob
+	first, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = inviter.DismissParticipation(tctx(t), first.PID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+	for _, sub := range []string{envelope.SubEvent, envelope.SubGroupProof, envelope.SubGroupContext} {
+		deliverPIDCopies(t, inviter, guest, second.PID, sub)
+	}
+	if got, e := guest.Participation(first.PID); e != nil || got.State != PartDismissed {
+		t.Fatalf("cancelled invitation not dismissed once context arrived: %+v %v", got, e)
+	}
+	for guest.retryProof(tctx(t)) {
+	}
+	if got, e := guest.AcceptParticipation(tctx(t), first.PID); e == nil {
+		t.Fatalf("cancelled invitation accepted: %+v", got)
+	}
+	if got, e := guest.Participation(second.PID); e != nil || got.State != PartInvited || got.Held != 0 {
+		t.Fatalf("live invitation: %+v %v", got, e)
+	}
+	if _, err = guest.AcceptParticipation(tctx(t), second.PID); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, inviter)
+	runAgent(t, guest)
+	eventually(t, "inviter sees guest active", func() bool { p, e := inviter.Participation(second.PID); return e == nil && p.HumanActive() })
+	if _, err = inviter.SendConv(tctx(t), conv, ConvOutgoing{Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "guest shows inviter turn", func() bool {
+		return slices.ContainsFunc(groupTurns(t, guest, conv), func(m ConvMessage) bool { return m.Body == "hello" })
+	})
+	assertNothingHeld(t, guest)
+}
+
+// Fail closed: a dismissal that does not follow the invitation exactly is
+// not recorded early; it waits for context as before.
+func TestGroupGuestCancellationBeforeContextWrongPrev(t *testing.T) {
+	w, conv := offlineGroupGuestFixture(t)
+	inviter, guest := w.alice, w.bob
+	first, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	me, _, err := inviter.store.selfPerson(inviter.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bogus := protocol.ParticipationEvent{V: 1, Conv: conv, PID: first.PID, Type: protocol.EventDismiss, Prev: strings.Repeat("ab", 32), TS: time.Now().Unix(),
+		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: inviter.Address, Fingerprint: me.info.Fingerprint}}
+	deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+	bogus.Sign(inviter.id.Sign)
+	body, _ := json.Marshal(bogus)
+	root, _, _, err := inviter.store.conversation(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRaw, _ := json.Marshal(root)
+	key, err := guest.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: protocol.NewID(), From: inviter.Address, To: guest.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: rootRaw, PID: first.PID, Sub: envelope.SubEvent, Body: string(body)}
+	env, err := envelope.Seal(in, inviter.id.Sign, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = guest.accept(tctx(t), env); err != nil {
+		t.Fatal(err)
+	}
+	if heldReason(t, guest, env.ID) != reasonProof {
+		t.Fatal("dismissal with another prev was not left waiting for context")
+	}
+	evs, err := guest.store.participationEvents(conv, first.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(evs, func(ev protocol.ParticipationEvent) bool { return ev.Type == protocol.EventDismiss }) {
+		t.Fatal("dismissal with another prev recorded without context")
 	}
 }
