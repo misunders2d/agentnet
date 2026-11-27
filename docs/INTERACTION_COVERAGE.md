@@ -32,7 +32,7 @@ and the stopped-run boundary. The retry uses the exact edit job's stored
 result and checks participation again while quoting the original turn.
 `TestEditFollowsUpCompletedRequest` exercises the direct worker path.
 Antigravity steers over ACP like Pi, Claude and Codex (docs/revival/M4.md);
-`TestAgyACP` covers an edit reaching agy's running turn with one answer,
+`TestAgyACP*` cover an edit reaching agy's running turn with one answer,
 a correction refused while agy waits, a lost process, permission denial and
 conversation resume. The edit status now tells the paths apart: "Edit queued
 as a follow-up", "Sending the edit to the running agent", "Edit reached the

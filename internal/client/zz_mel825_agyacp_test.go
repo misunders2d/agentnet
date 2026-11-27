@@ -224,15 +224,29 @@ func agyACPFixture(t *testing.T, mode string) (agyACPFixtureLog, string) {
 	return agyACPFixtureLog{log}, dir
 }
 
-// MEL-825: Antigravity over ACP, against the stand-in process. One
-// top-level test, last in the package list, so the race shards stay put.
+// MEL-825: Antigravity over ACP, against the stand-in process. These
+// top-level tests stay last in the package list, so the earlier race
+// shards keep their tests, and each lands in the next shard: one heavy
+// test would push a single shard past its 600-second bound.
 func TestAgyACP(t *testing.T) {
 	t.Run("launch selection", agyACPLaunchSelection)
 	t.Run("bridge", agyACPBridgeCases)
+}
+
+func TestAgyACPEdit(t *testing.T) {
 	t.Run("edit steers the running request", agyACPEditSteersRunningRequest)
+}
+
+func TestAgyACPSessions(t *testing.T) {
 	t.Run("sessions", agyACPWorkerSessions)
 	t.Run("refused resume", agyACPRefusedResume)
+}
+
+func TestAgyACPNeedsOwner(t *testing.T) {
 	t.Run("needs the owner", agyACPNeedsOwner)
+}
+
+func TestAgyACPLive(t *testing.T) {
 	t.Run("live agy", agyACPLive)
 }
 
