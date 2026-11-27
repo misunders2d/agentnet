@@ -862,7 +862,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   return (
     <><form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} {...watch} aria-label="Write a message" data-conv={conv} data-part="composer"
-      className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
+      className="relative bg-canvas px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>
       {/* What this message carries (reply, files, who it asks, recipients, status). In a short

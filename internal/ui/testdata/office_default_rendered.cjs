@@ -128,6 +128,7 @@ const origin = new URL(target).origin;
         send: height(get('send')), icon: height(bar.querySelector('svg')),
         draft: [getComputedStyle(field).fontSize, getComputedStyle(field).lineHeight],
         divider: getComputedStyle(el.closest('[data-part=composer]')).borderTopWidth,
+        band: [getComputedStyle(el.closest('[data-part=composer]')).backgroundColor, getComputedStyle(el.closest('[data-part=conversation]')).backgroundColor],
         sendText: get('send').textContent.trim(),
       };
     });
@@ -137,6 +138,7 @@ const origin = new URL(target).origin;
     await strip.waitFor();
     const m = await measure();
     assert.deepEqual(m.draft, ['16px', '24px'], 'draft text and line height ' + JSON.stringify(m));
+    assert.equal(m.band[0], m.band[1], 'no second band behind the composer frame ' + JSON.stringify(m.band));
     if (touch) {
       assert.deepEqual([m.formatTarget, m.toolTarget, m.send, m.tools], [44, 44, 44, before], 'phone Aa keeps targets and row height');
     } else {
