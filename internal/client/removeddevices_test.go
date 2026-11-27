@@ -33,6 +33,11 @@ func TestRemovedDevicesExactCurrentKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(true)
+	// Its device thread stays searchable history (GET /api/topics).
+	page, err := w.alice.Topics(TopicQuery{Query: "current device"})
+	if err != nil || !slices.ContainsFunc(page.Topics, func(s ThreadSummary) bool { return s.Peer == phone.Address }) {
+		t.Fatalf("removed device's thread not found by search: %+v %v", page.Topics, err)
+	}
 	newKey, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)

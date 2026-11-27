@@ -293,9 +293,11 @@ export function deviceOwner(address: string, o: T.Overview | null): T.PersonView
 export const personOf = (address: string, o: T.Overview | null): T.PersonView | null => (address ? deviceOwner(address, o) : null);
 
 /** removedOwnDevice: a device this person removed from their signed roster
- *  (overview.removed_devices). It stays yours in history, never an active chat. */
+ *  (overview.removed_devices) that no current roster names. Its threads are
+ *  history, never an active chat. Only rows name it as yours: it is never
+ *  "you" for review or authority (removed devices lose that access). */
 export const removedOwnDevice = (address: string, o: T.Overview | null | undefined) =>
-  !!o?.person && !!address && (o.removed_devices || []).includes(address);
+  !!o?.person && !!address && (o.removed_devices || []).includes(address) && !deviceOwner(address, o);
 
 /** isMine: the address is this device, or another device of this person. */
 export const isMine = (address: string, o: T.Overview | null) =>
@@ -356,7 +358,6 @@ export function deviceWho(address: string, o: T.Overview | null | undefined): De
   const device = niceDevice(address), agent = runsAgent(address, o);
   if (o && address === o.me.address) return { relation: "this", agent, person: o.person || null, device, verified: true, short: "", name: "You" };
   const p = deviceOwner(address, o || null);
-  if (!p && removedOwnDevice(address, o)) return { relation: "own", agent, person: o!.person!, device, verified: true, short: "", name: "You" };
   if (!p) return { relation: "unknown", agent, person: null, device, verified: false, short: "", name: device || "Someone" };
   if (o?.person && (p === o.person || (!!p.person && p.person === o.person.person))) return { relation: "own", agent, person: p, device, verified: true, short: "", name: "You" };
   const verified = p.state !== "listed";
@@ -382,6 +383,7 @@ export interface ThreadRow { kind: "agent" | "person"; title: string; subtitle: 
  *  - another person's device that runs none: that person ("Vitalii" · "from Phone"). */
 export function threadRow(peer: string, o: T.Overview | null | undefined, names: Record<string, string>, binding?:T.ThreadSummary): ThreadRow {
   if(binding?.agent_host&&(binding.agent_id||binding.agent_legacy)){const host=binding.agent_host;return {kind:"agent",title:binding.agent_id?concreteAgentName(binding.agent_id,names):"Agent history",subtitle:"on "+niceDevice(host)+(binding.agent_legacy?" · original agent unknown":""),seed:binding.agent_id||host,local:host===o?.me.address};}
+  if (removedOwnDevice(peer, o)) return { kind: "person", title: "Your " + niceDevice(peer), subtitle: "Removed device", seed: peer, local: false };
   const w = deviceWho(peer, o), me = o?.person;
   if (w.agent) {
     if (!w.person) return { kind: "agent", title: w.device || "Agent", subtitle: "Agent · not linked to a person", seed: peer, local: false };
@@ -389,7 +391,7 @@ export function threadRow(peer: string, o: T.Overview | null | undefined, names:
   }
   if (w.relation === "own" || w.relation === "this") {
     if (o?.me.agent) return { kind: "agent", title: "Agent history", subtitle: "On this computer · asked from your " + w.device, seed: o.me.address, local: true };
-    return { kind: "person", title: "Your " + w.device, subtitle: removedOwnDevice(peer, o) ? "Removed device" : "Your device", seed: peer, local: false };
+    return { kind: "person", title: "Your " + w.device, subtitle: "Your device", seed: peer, local: false };
   }
   if (w.relation === "person") return { kind: "person", title: whoName(w), subtitle: "from " + w.device, seed: w.person?.person || peer, local: false };
   return { kind: "person", title: w.device || "Someone", subtitle: "Not linked to a person", seed: peer, local: false };

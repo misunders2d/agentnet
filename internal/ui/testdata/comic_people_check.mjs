@@ -61,18 +61,18 @@ for (const agent of [true, false]) {
   assert.equal(m.chatList({ ...gone, threads: [phoneThread] }, {}).length, 0, "a removed own device's thread is not an active chat (agent=" + agent + ")");
   assert.equal(m.chatList({ ...gone, threads: [], topics: [{ peer: "admin/phone-3", total: 3, archived: 3, archived_unread: 0, latest: phoneThread }] }, {}).length, 0, "nor its archived topics (agent=" + agent + ")");
   r = m.threadRow("admin/phone-3", gone, {});
-  assert.notEqual(r.subtitle, "Not linked to a person", "history keeps it yours");
-  assert.deepEqual(m.deviceWho("admin/phone-3", gone).relation, "own");
+  assert.deepEqual([r.kind, r.title, r.subtitle], ["person", "Your Phone 3", "Removed device"], "history keeps it yours (agent=" + agent + ")");
+  // Never "you" for review or asker words: a removed (maybe lost) phone lost that access.
+  assert.equal(m.deviceWho("admin/phone-3", gone).relation, "unknown");
 }
-r = m.threadRow("admin/phone-3", { ...laptop(false), removed_devices: ["admin/phone-3"] }, {});
-assert.deepEqual([r.kind, r.title, r.subtitle], ["person", "Your Phone 3", "Removed device"]);
 // This computer's current agent, once asked from the removed phone, keeps its row.
 const aid = "0123456789abcdef0123456789abcdef";
 const bound = { ...phoneThread, id: "old2", agent_host: "admin/laptop", agent_key: "11111111-a", agent_id: aid };
 const agentNames = { [aid]: "Claude", [aid + "#current"]: "true", [aid + "#host"]: "admin/laptop", [aid + "#host_key"]: "11111111-a" };
 assert.equal(m.chatList({ ...o, removed_devices: ["admin/phone-3"], threads: [bound] }, agentNames).length, 1, "a current agent's topic asked from it stays listed");
-// Another person's device is never taken for yours by this list.
-assert.equal(m.deviceWho("vitalii/phone", { ...o, removed_devices: ["vitalii/phone"] }).relation, "person");
+// A device a current roster names is never taken for a removed one of yours.
+r = m.threadRow("vitalii/phone", { ...o, removed_devices: ["vitalii/phone"] }, {});
+assert.deepEqual([r.title, r.subtitle], ["Vitalii", "from Phone"]);
 assert.equal(m.removedOwnDevice("admin/phone-3", { ...o, person: undefined, removed_devices: ["admin/phone-3"] }), false, "no person here: nothing is yours");
 
 // Message authors in the laptop↔Pixel thread.

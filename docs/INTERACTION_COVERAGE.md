@@ -4474,10 +4474,13 @@ history). The overview now names this person's own removed devices
 the person's verified roster history and is no longer current). Their
 unbound device threads leave the active list; a current agent's topic once
 asked from them keeps its agent row; the threads stay reachable through
-topic search (`GET /api/topics`) and read as yours ("Your Phone 3 · Removed
-device", or Agent history on a computer running an agent). No control
-changed: there is no new interaction to time. Evidence:
-`comic_people_check.mjs` (fails on the old model with "a removed own
-device's thread is not an active chat"), `TestRemovedDevicesExactCurrentKey`
-(own list), `TestOwnPermissionInventory` (overview field after a real
-removal).
+topic search (`GET /api/topics`, labelled "Your Phone 3") and their row reads
+"Your Phone 3 · Removed device". Only rows name it as yours: review and asker
+words never call a removed (perhaps lost) device "you". No control changed:
+there is no new interaction to time. Evidence: `comic_people_check.mjs`
+(fails on the old model with "a removed own device's thread is not an active
+chat"), `TestRemovedDevicesExactCurrentKey` (own list; the removed phone's
+thread still found by topic search), `TestOwnPermissionInventory` (overview
+field after a real removal). Not covered: the browser engine
+(`static/engine.mjs`) builds its own overview without `removed_devices`, so a
+browser still lists such a row.
