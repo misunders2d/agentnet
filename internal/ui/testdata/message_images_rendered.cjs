@@ -64,7 +64,7 @@ const server=http.createServer(async(req,res)=>{
  if(p==='/assets/skins/index.json'){json(res,selected.id==='comic'?[selected]:[manifest(comic),selected]);return;}
  if(p===skinRoute+'entry.mjs'){res.setHeader('Content-Type','text/javascript');res.end(bundle);return;}
  if(p===skinRoute+'style.css'){res.setHeader('Content-Type','text/css');res.end(styles);return;}
- if(p.startsWith('/assets/')){const packageFile=p.startsWith(skinRoute);const base=packageFile?skin:assets;const file=path.resolve(base,p.slice(packageFile?skinRoute.length:'/assets/'.length));if(file.startsWith(base+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',/\.(mjs|js)$/.test(file)?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':'application/octet-stream');res.end(fs.readFileSync(file));return;}}
+ if(p.startsWith('/assets/')){const packageFile=p.startsWith(skinRoute);let base=packageFile?skin:assets,file=path.resolve(base,p.slice(packageFile?skinRoute.length:'/assets/'.length));if(packageFile&&!fs.existsSync(file)){base=comic;file=path.resolve(comic,p.slice(skinRoute.length));}/* Office omits files equal to Comic's; the host serves Comic's copy (static/skins.go builtinSkin). */if(file.startsWith(base+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',/\.(mjs|js)$/.test(file)?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':'application/octet-stream');res.end(fs.readFileSync(file));return;}}
  if(p==='/api/workspaces'){json(res,[{id:'default',handle,state:'enrolled',name:'Fictional media workspace',address:me.address,realm:'3'.repeat(32),endpoint:'https://fixture.invalid'}]);return;}
  if(p.endsWith('/events')){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});res.write(': ready\n\n');fixture.events.add(res);req.on('close',()=>fixture.events.delete(res));return;}
  const api=p.replace(/^\/workspaces\/default\/[a-f0-9]{32}/,'');
@@ -279,7 +279,7 @@ async function checkPending(page, phone) {
    const held=mode==='album3'&&!latency;
    if(held)fixture.hold={index:fixture.files[1].index,...Promise.withResolvers()};
    await page.goto(origin+'/?skin='+selected.id+'#conv='+conv+'&workspace=default');
-   if(selected.id!=='comic')await page.getByRole('button',{name:'Use this skin',exact:true}).click();
+   if(!['comic','office'].includes(selected.id))await page.getByRole('button',{name:'Use this skin',exact:true}).click(); // built-in skins ask no trust
    if(mode==='pending'){
     await page.locator('p').filter({hasText:'Before the album'}).waitFor();
     stage='pending album';Object.assign(row,await checkPending(page,phone));
