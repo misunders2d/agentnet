@@ -190,6 +190,16 @@ func sameGroupRoot(a, b protocol.ConvRoot) bool {
 	return bytes.Equal(x, y)
 }
 
+// groupReaderBehind: this device is not listed by its own current context.
+// That context may be older than the sender's: a new member's first turn
+// can come before the context that admits it (carriers wait for their
+// upload, a turn does not). The turn waits for context and is checked again,
+// never admitted before. Only the reader's own device: a sender its context
+// does not list stays refused.
+type groupReaderBehind struct{ error }
+
+func (e groupReaderBehind) Unwrap() error { return e.error }
+
 func groupTurnCheck(q dbq, packet GroupContext, address, fp string) error {
 	return groupDeliveryRecipient(q, packet, address, fp)
 }
@@ -559,8 +569,11 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		if e != nil {
 			return e
 		}
-		for _, d := range []identity.Public{a.Self(), sender} {
+		for i, d := range []identity.Public{a.Self(), sender} {
 			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
+				if i == 0 && errors.Is(e, errGroupRecipientNotCurrent) {
+					return groupReaderBehind{e}
+				}
 				return e
 			}
 		}
@@ -597,11 +610,8 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		return nil
 	}
 	if err = check(a.store.db); err != nil {
-		// A device its current context does not list may hold only an older
-		// context than the sender's: a new member's first turn can come
-		// before the context that admits it (carriers wait for their upload,
-		// a turn does not). It waits for context, never admitted before.
-		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) || errors.Is(err, errGroupRecipientNotCurrent) {
+		var behind groupReaderBehind
+		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) || errors.As(err, &behind) {
 			return hold(reasonProof, err.Error())
 		}
 		return hold(reasonInvalid, err.Error())

@@ -825,3 +825,68 @@ func TestGroupNewMemberTurnBeforeItsContext(t *testing.T) {
 		t.Fatalf("new member's first turn not shown once its context arrived: %v (held %q)", convBodies(t, w.bob, conv), heldReason(t, w.bob, turns[len(turns)-1].ID))
 	}
 }
+
+// The proof wait is the reader's own: a turn whose sender the reader's
+// current context does not list stays refused, even once that person is
+// admitted again later (a turn written while removed never counts against a
+// newer context).
+func TestGroupRemovedSenderTurnStaysRefused(t *testing.T) {
+	w, p := groupLifecycleFixture(t, false)
+	stopA := runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	conv := p.Root.ID()
+	first := groupLifecycleInvite(t, w, p, nil)
+	awaitGroupInvitation(t, w.bob, first.ID, "pending")
+	if err := w.bob.DecideGroupInvitation(tctx(t), first.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "member context", func() bool {
+		got, e := w.bob.GroupContext(conv)
+		return e == nil && len(got.State.Members) == 2
+	})
+	stopA()
+	stopB()
+	bob, _, err := w.bob.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.alice.RemoveGroupMember(tctx(t), conv, bob.Person); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "written while removed"}); err != nil {
+		t.Fatal(err)
+	}
+	stale := convCopies(t, w.bob, w.alice, conv, "")
+	if len(stale) == 0 {
+		t.Fatal("no copy of the removed member's turn")
+	}
+	deliverCopies(t, w.bob, w.alice, stale[len(stale)-1:])
+	id := stale[len(stale)-1].ID
+	if got := heldReason(t, w.alice, id); got != reasonInvalid {
+		t.Fatalf("turn of a sender the context does not list held as %q", got)
+	}
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	again, err := w.alice.InviteGroup(tctx(t), conv, bob.Person, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitGroupInvitation(t, w.bob, again.ID, "pending")
+	if err = w.bob.DecideGroupInvitation(tctx(t), again.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "member again at the inviter", func() bool {
+		got, e := w.alice.GroupContext(conv)
+		return e == nil && len(got.State.Members) == 2
+	})
+	for w.alice.retryProof(tctx(t)) {
+	}
+	if got := heldReason(t, w.alice, id); got != reasonInvalid {
+		t.Fatalf("turn written while removed held as %q once readmitted", got)
+	}
+	if slices.Contains(convBodies(t, w.alice, conv), "in:written while removed") {
+		t.Fatal("turn written while removed shown once readmitted")
+	}
+}
