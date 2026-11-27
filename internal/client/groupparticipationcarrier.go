@@ -203,6 +203,11 @@ func (a *Agent) admitGroupVisitorInvite(ctx context.Context, env envelope.Envelo
 		return true, hold(reasonDuplicate, "group: visitor invitation logical conflict")
 	}
 	if err == nil {
+		// Its cancellation may have come first: recorded now, before the
+		// invitation is shown or its context arrives (MEL-841).
+		if e := a.admitHeldDismissals(ctx, ev.Author.Address, in.Conv, in.PID); e != nil {
+			a.Logf("held cancellation of invitation %s: %v", in.PID, e)
+		}
 		a.convWork.due(convRetry)
 		a.kickNow()
 		a.wakeWorker()
@@ -239,6 +244,34 @@ func (a *Agent) admitGroupVisitorCancel(env envelope.Envelope, in envelope.Inner
 		a.kickNow()
 	}
 	return true, err
+}
+
+// admitHeldDismissals admits now, with every usual check, the dismissals
+// of pid in conv from the device from that wait held for proof (MEL-841): a
+// cancellation that came before its invitation would otherwise wait for the
+// next proof retry while the cancelled invitation is shown and acceptable.
+// Only the exact inviter's signed dismissal of that exact invitation counts
+// (admitGroupVisitorCancel, or the usual path once context is held);
+// anything else stays held as it was. A transient failure is returned.
+func (a *Agent) admitHeldDismissals(ctx context.Context, from, conv, pid string) error {
+	envs, err := a.store.held(from, reasonProof)
+	if err != nil {
+		return err
+	}
+	only := func(in envelope.Inner) bool {
+		if in.V != envelope.Version2 || in.Conv != conv || in.PID != pid || in.Sub != envelope.SubEvent {
+			return false
+		}
+		ev, e := protocol.ParseParticipationEvent([]byte(in.Body))
+		return e == nil && ev.Type == protocol.EventDismiss
+	}
+	ctx = context.WithValue(ctx, receivePageKey{}, nil) // its own write, never staged with the message that led here
+	for _, env := range envs {
+		if _, checked, err := a.recheckHeld(ctx, env, only); checked && err != nil && transient(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) acceptGroupVisitorContext(ctx context.Context, packet GroupContext, in envelope.Inner, sender identity.Public) error {

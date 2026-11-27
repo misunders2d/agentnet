@@ -413,6 +413,13 @@ func TestGroupGuestAndMemberInvitationFirstCancelled(t *testing.T) {
 // pid addressed to it whose sub is sub, and nothing else.
 func deliverPIDCopies(t *testing.T, sender, receiver *Agent, pid, sub string) {
 	t.Helper()
+	deliverCopies(t, sender, receiver, pidCopies(t, sender, receiver, pid, sub))
+}
+
+// pidCopies returns, in order, the sender's stored copies of pid addressed
+// to receiver whose sub is sub.
+func pidCopies(t *testing.T, sender, receiver *Agent, pid, sub string) []envelope.Envelope {
+	t.Helper()
 	rows, err := sender.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND pid=? AND sub=? ORDER BY rowid`, receiver.Address, pid, sub)
 	if err != nil {
 		t.Fatal(err)
@@ -431,11 +438,17 @@ func deliverPIDCopies(t *testing.T, sender, receiver *Agent, pid, sub string) {
 		envs = append(envs, env)
 	}
 	rows.Close()
+	return envs
+}
+
+// deliverCopies hands receiver envs, in order, as the relay would.
+func deliverCopies(t *testing.T, sender, receiver *Agent, envs []envelope.Envelope) {
+	t.Helper()
 	for _, env := range envs {
-		if err = sender.uploadAll(tctx(t), env); err != nil {
+		if err := sender.uploadAll(tctx(t), env); err != nil {
 			t.Fatal(err)
 		}
-		if err = receiver.accept(tctx(t), env); err != nil {
+		if err := receiver.accept(tctx(t), env); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -537,8 +550,15 @@ func TestGroupGuestCancellationBeforeContextSecondInvite(t *testing.T) {
 }
 
 // Fail closed: a dismissal that does not follow the invitation exactly is
-// not recorded early; it waits for context as before.
+// not recorded early, whether it comes after the invitation or before it;
+// it waits for context as before.
 func TestGroupGuestCancellationBeforeContextWrongPrev(t *testing.T) {
+	for _, beforeInvite := range []bool{false, true} {
+		t.Run(map[bool]string{false: "after-invite", true: "before-invite"}[beforeInvite], func(t *testing.T) { groupGuestWrongPrev(t, beforeInvite) })
+	}
+}
+
+func groupGuestWrongPrev(t *testing.T, beforeInvite bool) {
 	w, conv := offlineGroupGuestFixture(t)
 	inviter, guest := w.alice, w.bob
 	first, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "first")
@@ -551,7 +571,9 @@ func TestGroupGuestCancellationBeforeContextWrongPrev(t *testing.T) {
 	}
 	bogus := protocol.ParticipationEvent{V: 1, Conv: conv, PID: first.PID, Type: protocol.EventDismiss, Prev: strings.Repeat("ab", 32), TS: time.Now().Unix(),
 		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: inviter.Address, Fingerprint: me.info.Fingerprint}}
-	deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+	if !beforeInvite {
+		deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+	}
 	bogus.Sign(inviter.id.Sign)
 	body, _ := json.Marshal(bogus)
 	root, _, _, err := inviter.store.conversation(conv)
@@ -571,6 +593,9 @@ func TestGroupGuestCancellationBeforeContextWrongPrev(t *testing.T) {
 	if err = guest.accept(tctx(t), env); err != nil {
 		t.Fatal(err)
 	}
+	if beforeInvite {
+		deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+	}
 	if heldReason(t, guest, env.ID) != reasonProof {
 		t.Fatal("dismissal with another prev was not left waiting for context")
 	}
@@ -580,5 +605,71 @@ func TestGroupGuestCancellationBeforeContextWrongPrev(t *testing.T) {
 	}
 	if slices.ContainsFunc(evs, func(ev protocol.ParticipationEvent) bool { return ev.Type == protocol.EventDismiss }) {
 		t.Fatal("dismissal with another prev recorded without context")
+	}
+}
+
+// Review of 1cc6839e (MEL-841): the dismissal can reach the invitee before
+// its invitation. It is then held for proof, and the invitation and its
+// context could arrive before the next proof retry, leaving the cancelled
+// invitation shown and acceptable while its exact cancellation was held.
+// No proof retry runs here between arrival and the acceptance. Context comes
+// with the cancelled invitation itself, or with a second, live one.
+func TestGroupGuestCancellationBeforeInvite(t *testing.T) {
+	for _, second := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same", true: "second"}[second], func(t *testing.T) {
+			w, conv := offlineGroupGuestFixture(t)
+			inviter, guest := w.alice, w.bob
+			first, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = inviter.DismissParticipation(tctx(t), first.PID); err != nil {
+				t.Fatal(err)
+			}
+			carrier := first.PID
+			if second {
+				live, e := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "second")
+				if e != nil {
+					t.Fatal(e)
+				}
+				carrier = live.PID
+			}
+			events := pidCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+			slices.Reverse(events) // the dismissal first, the invitation last
+			deliverCopies(t, inviter, guest, events[:1])
+			if heldReason(t, guest, events[0].ID) != reasonProof {
+				t.Fatal("dismissal before its invitation was not held for proof")
+			}
+			deliverCopies(t, inviter, guest, events[1:])
+			if second {
+				deliverPIDCopies(t, inviter, guest, carrier, envelope.SubEvent)
+			}
+			deliverPIDCopies(t, inviter, guest, carrier, envelope.SubGroupProof)
+			deliverPIDCopies(t, inviter, guest, carrier, envelope.SubGroupContext)
+			if _, e := guest.GroupContext(conv); e != nil {
+				t.Fatalf("context: %v", e)
+			}
+			if got, e := guest.Participation(first.PID); e != nil || got.State != PartDismissed {
+				t.Fatalf("cancelled invitation shown once context arrived: %+v %v", got, e)
+			}
+			if got, e := guest.AcceptParticipation(tctx(t), first.PID); e == nil {
+				t.Fatalf("cancelled invitation accepted: %+v", got)
+			}
+			if !second {
+				return
+			}
+			for guest.retryProof(tctx(t)) {
+			}
+			if got, e := guest.Participation(carrier); e != nil || got.State != PartInvited || got.Held != 0 {
+				t.Fatalf("live invitation: %+v %v", got, e)
+			}
+			if _, err = guest.AcceptParticipation(tctx(t), carrier); err != nil {
+				t.Fatal(err)
+			}
+			runAgent(t, inviter)
+			runAgent(t, guest)
+			eventually(t, "inviter sees guest active", func() bool { p, e := inviter.Participation(carrier); return e == nil && p.HumanActive() })
+			assertNothingHeld(t, guest)
+		})
 	}
 }

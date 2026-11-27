@@ -1027,6 +1027,13 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 	if own, err := a.ownEvent(info.Conv, pid, typ, protocol.EventAccept, protocol.EventDecline); err != nil || own != nil {
 		return a.resendOwn(ctx, info, own, err)
 	}
+	if info.State == PartInvited {
+		// A cancellation that came before the invitation may still wait
+		// held: it counts first (MEL-841).
+		if info, err = a.admitHeldDismissalsOf(ctx, info); err != nil {
+			return info, err
+		}
+	}
 	if info.State != PartInvited {
 		return info, fmt.Errorf("the invite is %s, not waiting for a decision", info.State)
 	}
@@ -1039,6 +1046,24 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 		return a.resendOwn(ctx, info, own, e)
 	}
 	return decided, err
+}
+
+// admitHeldDismissalsOf admits the held dismissals of info's invitation by
+// its exact author device (admitHeldDismissals) and reads info again.
+func (a *Agent) admitHeldDismissalsOf(ctx context.Context, info ParticipationInfo) (ParticipationInfo, error) {
+	evs, err := a.store.participationEvents(info.Conv, info.PID)
+	if err != nil {
+		return info, err
+	}
+	for _, ev := range evs {
+		if ev.Type == protocol.EventInvite && ev.Hash() == info.Invite {
+			if err = a.admitHeldDismissals(ctx, ev.Author.Address, info.Conv, info.PID); err != nil {
+				return info, err
+			}
+			return a.Participation(info.PID)
+		}
+	}
+	return info, nil
 }
 
 // resendOwn retries this installation's own stored decision own: a retry

@@ -1422,43 +1422,11 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 	}()
 	more = len(envs) == proofPage
 	for _, env := range envs {
-		if err := historyRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
+		key, checked, err := a.recheckHeld(ctx, env, nil)
+		if !checked {
 			continue
 		}
-		if err := statusRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
-			continue
-		}
-		sender, _, found, err := a.store.peer(env.From)
-		if err != nil || !found {
-			continue
-		}
-		in, err := envelope.Open(env, a.id, a.Address, sender)
-		if err != nil || (in.V != envelope.Version2 && in.V != envelope.Version3) {
-			continue
-		}
-		// One check per re-sent record: a copy of a row still held waits for it.
-		key := heldCopyKey(env, in, sender)
-		if key != "" {
-			if of, err := a.store.settleHeld(env.ID, env.From, key); err != nil || of != "" {
-				continue
-			}
-		}
-		if in.Sub == envelope.SubStatus && in.Conv != "" && statusSenderCheck(a.store.db, sender) != nil {
-			continue
-		}
-		admit := a.admitConv
-		if in.V == envelope.Version3 {
-			admit = a.admitControl
-		}
-		retryCtx := ctx
-		var relay bool
-		if err := a.store.db.QueryRow(`SELECT relay_ingress FROM quarantine WHERE id=?`, env.ID).Scan(&relay); err != nil {
-			continue
-		}
-		if relay {
-			retryCtx = withRelayIngress(ctx, env.ID)
-		}
-		if err := admit(retryCtx, env, in, sender, true); err != nil && transient(err) {
+		if err != nil && transient(err) {
 			// A transient failure: this page is looked at again
 			// after the transient retry wait (1 s doubling to 45 s), not only
 			// when other evidence comes. Any other failure keeps only this
@@ -1477,6 +1445,53 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 		}
 	}
 	return more
+}
+
+// recheckHeld admits env, held for proof, again with every usual check: one
+// row of retryProof. It is not looked at (checked false) while a recovery
+// still guards it, while it is a copy of a row still held, once it left the
+// quarantine, or when only, if set, does not pick its opened content.
+func (a *Agent) recheckHeld(ctx context.Context, env envelope.Envelope, only func(envelope.Inner) bool) (key string, checked bool, err error) {
+	if err := historyRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
+		return "", false, nil
+	}
+	if err := statusRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
+		return "", false, nil
+	}
+	sender, _, found, err := a.store.peer(env.From)
+	if err != nil || !found {
+		return "", false, nil
+	}
+	in, err := envelope.Open(env, a.id, a.Address, sender)
+	if err != nil || (in.V != envelope.Version2 && in.V != envelope.Version3) {
+		return "", false, nil
+	}
+	if only != nil && !only(in) {
+		return "", false, nil
+	}
+	// One check per re-sent record: a copy of a row still held waits for it.
+	key = heldCopyKey(env, in, sender)
+	if key != "" {
+		if of, err := a.store.settleHeld(env.ID, env.From, key); err != nil || of != "" {
+			return "", false, nil
+		}
+	}
+	if in.Sub == envelope.SubStatus && in.Conv != "" && statusSenderCheck(a.store.db, sender) != nil {
+		return "", false, nil
+	}
+	admit := a.admitConv
+	if in.V == envelope.Version3 {
+		admit = a.admitControl
+	}
+	retryCtx := ctx
+	var relay bool
+	if err := a.store.db.QueryRow(`SELECT relay_ingress FROM quarantine WHERE id=?`, env.ID).Scan(&relay); err != nil {
+		return "", false, nil
+	}
+	if relay {
+		retryCtx = withRelayIngress(ctx, env.ID)
+	}
+	return key, true, admit(retryCtx, env, in, sender, true)
 }
 
 // holdForPerson holds a message for a person problem: a frozen person as a
