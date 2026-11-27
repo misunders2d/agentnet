@@ -95,6 +95,24 @@ async function burstAndFailures(browser, origin) {
   await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
   await alert.waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => fixture.maxInFlight), 2);
+  // Steady traffic, as during a long copy: events keep arriving while reads
+  // answer one by one. A fresh workspace's status still appears, and a
+  // pressed Refresh returns, before the events stop.
+  await page.evaluate(() => { fixture.holdAll = true; fixture.held.length = 0; fixture.inFlight = 0; fixture.switchHost(); });
+  await page.waitForFunction(() => fixture.held.length === 1);
+  await panel.getByText('Reading attachment storage…', { exact: true }).waitFor();
+  const steady = async rounds => { for (let i = 0; i < rounds; i++) { await page.evaluate(() => { fixture.emit(); fixture.emit(); fixture.held.shift()(); }); await page.waitForTimeout(10); } };
+  await steady(10);
+  await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
+  assert.ok(await page.evaluate(() => fixture.held.length) >= 1, 'status appears while reads are still in flight');
+  await refresh.click();
+  await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+  await steady(10);
+  await refresh.waitFor();
+  assert.ok(await page.evaluate(() => fixture.held.length) >= 1, 'Refresh returns while events continue');
+  assert.ok(await page.evaluate(() => fixture.maxInFlight) <= 2, 'steady traffic keeps at most two reads in flight');
+  await page.evaluate(() => { fixture.holdAll = false; fixture.held.splice(0).forEach(done => done()); });
+  await alert.waitFor({ state: 'detached' });
   // Refresh after another real network failure: the press clears the old
   // error and shows "Refreshing…" at once, then the retry succeeds.
   await page.evaluate(() => { fixture.real = true; });
@@ -134,7 +152,7 @@ async function burstAndFailures(browser, origin) {
   await refresh.waitFor();
   assert.deepEqual(errors, []);
   await context.close();
-  console.log(`390 light burst PASS (Refresh feedback ${Math.round(feedback)} ms): real fetch failure is named truthfully, 300 change events → 2 reads + 1 follow-up, Refresh stays usable, clears the error at once and retries; a silent read ends at the 30 s bound`);
+  console.log(`390 light burst PASS (Refresh feedback ${Math.round(feedback)} ms): real fetch failure is named truthfully, 300 change events → 2 reads + 1 follow-up, steady events still land reads and return Refresh, Refresh stays usable, clears the error at once and retries; a silent read ends at the 30 s bound`);
 }
 
 (async () => {

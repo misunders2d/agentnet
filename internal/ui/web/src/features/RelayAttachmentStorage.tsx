@@ -9,9 +9,11 @@ const endpoint = "/api/storage/attachments";
 const active = () => true;
 // Reads in flight at once. Every stored local write is a change event (a
 // history copy makes a burst of them); unbounded, each started its own relay
-// read, and the browser rejected the excess queued requests ("Failed to
-// fetch"). Later events coalesce into one follow-up read, as the store's
-// refresh lanes do; the newest read still wins over an older one.
+// read, and Chromium rejects fetches once about 1,350 are pending ("Failed
+// to fetch"). Later events coalesce into one follow-up read, as the store's
+// refresh lanes do. A read's answer is dropped only once a newer read has
+// answered, or an action or host change made it stale: under steady events
+// every read still lands.
 const maxReads = 2;
 // A read with no answer after this releases the card: the core's own relay
 // call is bounded at 20 s, so a longer wait means no answer will come.
@@ -33,26 +35,28 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
   const scope = useRef(0), reads = useRef(0), acting = useRef(false), queuedRefresh = useRef(false);
   const known = useRef<RelayStorageStatus | null>(null);
   // This scope's reads: how many are in flight, whether a change asked for
-  // another, and whether a shown "Refreshing…" still waits for its read.
-  const lane = useRef({ running: 0, again: false, shown: true });
+  // another, the newest read that answered or was made stale (floor), and the
+  // first read a shown "Refreshing…" waits for.
+  const lane = useRef({ running: 0, again: false, floor: 0, pressed: 1 });
 
   const read = useCallback(() => {
     const owner = scope.current, request = ++reads.current, mine = lane.current;
-    const current = () => owner === scope.current && request === reads.current && isActive();
-    mine.running++; mine.again = false; mine.shown = false;
+    const current = () => owner === scope.current && mine === lane.current && request > mine.floor && isActive();
+    mine.running++; mine.again = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const bound = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ReadBound()), relayStorageReadBound); });
     void (async () => {
       try {
         const next = readRelayStorage(await Promise.race([host.api(endpoint), bound]));
         if (!current()) return;
+        mine.floor = request;
         known.current = next; setStatus(next); setError("");
         if (!next.can_admin || !next.configured || next.state === "connected" || next.state === "migrating") setConsent("");
-      } catch (e) { if (current()) setError(readFailure(e)); }
+      } catch (e) { if (current()) { mine.floor = request; setError(readFailure(e)); } }
       finally {
         clearTimeout(timer);
         mine.running--;
-        if (current() && !mine.shown) setLoading(false);
+        if (owner === scope.current && mine === lane.current && request >= mine.pressed) { mine.pressed = Infinity; setLoading(false); }
         if (mine === lane.current && mine.again && mine.running < maxReads && isActive()) {
           if (acting.current) { mine.again = false; queuedRefresh.current = true; } else read();
         }
@@ -65,7 +69,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
   // background read never changes the button.
   const refresh = useCallback((manual = false) => {
     if (!isActive()) return;
-    if (manual) { lane.current.shown = true; setError(""); setLoading(true); }
+    if (manual) { lane.current.pressed = reads.current + 1; setError(""); setLoading(true); }
     if (acting.current) { queuedRefresh.current = true; return; }
     if (lane.current.running >= maxReads) { lane.current.again = true; return; }
     read();
@@ -73,7 +77,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
 
   useEffect(() => {
     scope.current++; reads.current++; acting.current = false; queuedRefresh.current = false; known.current = null;
-    lane.current = { running: 0, again: false, shown: true };
+    lane.current = { running: 0, again: false, floor: reads.current, pressed: reads.current + 1 };
     setStatus(null); setBusy(null); setConfirm(null); setConsent(""); setError(""); setLoading(true);
     refresh();
     const stop = host.listen(e => { if (e.type === "restart" || (e.type === "change" && !e.hint)) refresh(); });
@@ -86,7 +90,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
     if (acting.current || !isActive() || !before || !canUseStorageAction(before, action)) return;
     const owner = scope.current;
     const current = () => owner === scope.current && isActive();
-    acting.current = true; reads.current++; setBusy(action); setLoading(false); setError(""); setConfirm(null);
+    acting.current = true; lane.current.floor = reads.current; lane.current.pressed = Infinity; setBusy(action); setLoading(false); setError(""); setConfirm(null);
     if (action === "connect") setConsent("");
     try {
       const next = readRelayStorage(await host.api(endpoint, { action, ...(action === "connect" ? {} : { confirm: true }) }), action === "connect");
