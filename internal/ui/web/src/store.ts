@@ -2341,7 +2341,7 @@ export class Store {
     if(members?.list){
       const current=members.list().find(w=>w.id===workspace.id);
       if(!current || current.state!=="enrolled" || (current.handle || "")!==this.draftHandle
-        || current.address && current.address!==me.address || current.endpoint!==workspace.endpoint || current.realm!==workspace.realm)return;
+        || current.address && current.address!==me.address || current.endpoint!==workspace.endpoint || (current.realm || "")!==(workspace.realm || ""))return;
     }
     return {workspace:this.host.workspace.id,handle:this.draftHandle,endpoint:this.host.workspace.endpoint || "",realm:this.host.workspace.realm || "",address:me.address,fingerprint:me.fingerprint};
   }

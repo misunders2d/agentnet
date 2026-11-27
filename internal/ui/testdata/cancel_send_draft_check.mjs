@@ -204,6 +204,13 @@ await check('old in-flight callback cannot restore after registered handle repla
 for(const field of ['endpoint','realm'])await check('restart original recovery refuses changed '+field,async()=>{
   const w=await world();let r;try{r=await w.restart({[field]:'another-workspace'});await assert.rejects(r.queued()._discard(),/another conversation or identity/);assert.equal(w.cancels.length,0);assert.equal(w.rows().length,1);}finally{r?.stop();await w.stop();}
 });
+// A workspace without a realm: its binding has no realm field while the
+// registry lists realm "" (workspaces.mjs list). The draft owner is the same
+// identity, so Send submits and the draft is cleared (TestUpdateReloadKeepsDraftsRendered).
+await check('a realm-less workspace still owns its drafts: Send submits',async()=>{
+  const w=await world({text:'realm-less send'},'android',false,{beforeSend:({host})=>{delete host.workspace.realm;host.workspaces.list=()=>[{...host.workspace,realm:''}];}});
+  try{assert.equal(w.posts.length,1);assert.equal(w.store.draft(conv).text,'');}finally{await w.stop();}
+});
 await check('wrong conversation cannot use original recovery for a Cancel',async()=>{
   const w=await world();try{const wrong=w.store.sends.merge(other,w.rows()).find(m=>m.queued_send);await assert.rejects(wrong._discard,/another conversation/);assert.equal(w.rows().length,1);assert.equal(w.store.draft(conv).text,'');}finally{await w.stop();}
 });
