@@ -745,3 +745,83 @@ func sealGuestEvent(t *testing.T, from, to *Agent, conv string, ev protocol.Part
 	}
 	return env
 }
+
+// convCopies returns, in order, the sender's stored copies in conv addressed
+// to receiver whose sub is sub, without a PID.
+func convCopies(t *testing.T, sender, receiver *Agent, conv, sub string) []envelope.Envelope {
+	t.Helper()
+	rows, err := sender.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND conv=? AND coalesce(sub,'')=? AND coalesce(pid,'')='' ORDER BY rowid`, receiver.Address, conv, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var envs []envelope.Envelope
+	for rows.Next() {
+		var raw []byte
+		var env envelope.Envelope
+		if err = rows.Scan(&raw); err == nil {
+			err = json.Unmarshal(raw, &env)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		envs = append(envs, env)
+	}
+	return envs
+}
+
+// CI (macOS, b4d50ffe) in TestGroupGuestAndMemberInvitationFirstCancelled:
+// a guest, holding the group's context as a visitor, accepts a membership;
+// the inviter's first turn to the new member overtakes the new context
+// (carriers wait for their upload; a turn does not). Checked against the
+// visitor context, the turn was held as invalid for good and never shown.
+// It waits for context instead, and shows once that arrives.
+func TestGroupNewMemberTurnBeforeItsContext(t *testing.T) {
+	w := newWorld(t, "")
+	persons(t, w.alice, w.bob)
+	runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	p, err := w.alice.CreateGroup(tctx(t), "Solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob} {
+		roomReader(t, a)
+	}
+	conv := p.Root.ID()
+	guestP, err := w.alice.InviteHumanInScope(WithQueuedSend(tctx(t), ""), conv, w.bob.Address, nil, "guest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "guest invitation", func() bool { p, e := w.bob.Participation(guestP.PID); return e == nil && p.State == PartInvited })
+	eventually(t, "visitor context", func() bool { _, e := w.bob.GroupContext(conv); return e == nil })
+	member := groupLifecycleInvite(t, w, p, nil)
+	awaitGroupInvitation(t, w.bob, member.ID, "pending")
+	stopB()
+	if err = w.bob.DecideGroupInvitation(tctx(t), member.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.bob.FlushOutbox(tctx(t))
+	eventually(t, "membership published", func() bool {
+		r, e := groupInvitationIn(w.alice.store.db, member.ID, "out")
+		return e == nil && r.State == "published"
+	})
+	if _, err = w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	turns := convCopies(t, w.alice, w.bob, conv, "")
+	if len(turns) == 0 {
+		t.Fatal("no turn copy for the new member")
+	}
+	deliverCopies(t, w.alice, w.bob, turns[len(turns)-1:])
+	for _, sub := range []string{envelope.SubGroupProof, envelope.SubGroupContext} {
+		deliverCopies(t, w.alice, w.bob, convCopies(t, w.alice, w.bob, conv, sub))
+	}
+	for w.bob.retryProof(tctx(t)) {
+	}
+	if !slices.Contains(convBodies(t, w.bob, conv), "in:hello") {
+		t.Fatalf("new member's first turn not shown once its context arrived: %v (held %q)", convBodies(t, w.bob, conv), heldReason(t, w.bob, turns[len(turns)-1].ID))
+	}
+}

@@ -597,7 +597,11 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		return nil
 	}
 	if err = check(a.store.db); err != nil {
-		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) {
+		// A device its current context does not list may hold only an older
+		// context than the sender's: a new member's first turn can come
+		// before the context that admits it (carriers wait for their upload,
+		// a turn does not). It waits for context, never admitted before.
+		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) || errors.Is(err, errGroupRecipientNotCurrent) {
 			return hold(reasonProof, err.Error())
 		}
 		return hold(reasonInvalid, err.Error())
