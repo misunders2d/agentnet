@@ -10,6 +10,9 @@ This record starts with v0.8.1; earlier releases remain on the
   (MEL-840). With only you in the group and your agent on the same
   computer, messages, inviting the agent and asking it all failed with
   "no recipient". They now go through.
+- A cancelled invitation disappears right away, even before you have joined
+  the group (MEL-841). Before, the cancellation waited until you accepted,
+  so a cancelled invitation still showed and could be accepted.
 - "My agents" is your built-in group for your agents. It no longer offers
   Leave, and says what it is (MEL-842). A group change that was refused can
   now be dismissed instead of staying on screen.
