@@ -55,11 +55,18 @@ const server=http.createServer((req,res)=>{const [skin,file]=req.url.slice(1).sp
   for(let i=0;i<9;i++){const s=await rows.nth(i).evaluate(n=>{const c=getComputedStyle(n);return {tag:n.tagName,border:c.borderTopWidth,bg:c.backgroundColor,img:n.querySelectorAll('img,svg:not([aria-hidden])').length,size:c.fontSize}});
    assert.equal(s.tag,'P');assert.equal(s.border,'0px');assert.equal(s.bg,'rgba(0, 0, 0, 0)');assert.equal(s.size,'13px');}
   const joined=rows.nth(1),said=await joined.innerText();for(const part of ['joined to help','invited by you','saw 17 messages'])assert(said.includes(part),part+' in '+JSON.stringify(said));
-  await joined.getByRole('button',{name:'See what it saw',exact:true}).click();await page.getByRole('dialog').waitFor();
+  const sawButton=joined.getByRole('button',{name:/ saw 17 messages, show them$/});
+  // Keyboard: the arrow keys reach the button from a neighbouring message, Enter opens, Escape returns focus.
+  await sawButton.focus();await page.keyboard.press('ArrowDown');
+  assert.equal(await sawButton.evaluate(b=>document.activeElement!==b),true,'ArrowDown leaves the service button');
+  await page.keyboard.press('ArrowUp');assert.equal(await sawButton.evaluate(b=>document.activeElement===b),true,'ArrowUp returns to the service button');
+  await page.keyboard.press('Enter');await page.getByRole('dialog').waitFor();await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+  assert.equal(await sawButton.evaluate(b=>document.activeElement===b),true,'focus returns to the service button');
+  await sawButton.click();await page.getByRole('dialog').waitFor();
   if(process.env.AGENTNET_SERVICE_ROWS_EVIDENCE)await page.screenshot({path:process.env.AGENTNET_SERVICE_ROWS_EVIDENCE+'-'+skin+'-sheet-'+width+'.png'});
   await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);reports.push({skin,width,tallest,total:Math.round(total)});await page.close();
  }
- console.log(JSON.stringify({ok:true,reports,scope:'participation records render as one quiet line each; See what they saw still opens'}));
+ console.log(JSON.stringify({ok:true,reports,scope:'participation records render as one quiet line each; saw N messages opens by mouse and keyboard'}));
  }finally{await browser?.close();await new Promise(r=>server.close(r));fs.rmSync(work,{recursive:true,force:true})}
 })().catch(e=>{console.error(e.stack);process.exitCode=1});

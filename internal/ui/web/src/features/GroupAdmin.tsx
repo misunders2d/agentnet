@@ -9,7 +9,7 @@ import { IconCrown, IconDoorExit, IconDotsVertical, IconPencil, IconUserMinus } 
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
 import { useStore, type PendingGroupChange } from "../store";
-import { personName } from "../model";
+import { myAgentsRoomId, personName } from "../model";
 import { usePortal } from "../owned";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -26,12 +26,12 @@ export function groupRights(t: T.DMThread | null, o: T.Overview | null) {
   const me = o?.person?.person;
   const admin = member && !!me && (t!.members || []).some((m) => m.person === me && m.admin);
   // The person's built-in "My agents" room (client.MyAgentsRoom, MEL-713):
-  // their own group with nobody else in it. It is never left.
-  const builtIn = member && !!me && t!.title === MY_AGENTS_ROOM && (t!.members || []).length === 1 && t!.members![0].person === me;
+  // exactly the one room their agents use, never a look-alike. It is never
+  // left (the server also refuses: its only member is its last admin).
+  const builtIn = member && t!.id === myAgentsRoomId(o);
   return { member, admin, builtIn };
 }
 
-export const MY_AGENTS_ROOM = "My agents";
 export const BUILT_IN_NOTE = "This is your built-in group where your own agents talk with you and each other. It can’t be left.";
 
 /** GroupChangeSheet asks for one group change in plain words and makes it. */

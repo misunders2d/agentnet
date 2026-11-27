@@ -8,9 +8,9 @@ import {Store,useStore,unsentIn} from './src/store';import {StoreContext} from '
 import {RoomPanel,RoomSheet} from './src/features/RoomPanel';import {GroupChanges,groupRights} from './src/features/GroupAdmin';
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const action=new URL(location.href).searchParams.get('action'),self={person:'self',label:'Fixture owner',address:'self/laptop',state:'self',admin:true},other={person:'peer',label:'Fixture peer',address:'peer/laptop',state:'pinned',admin:action==='demote'};
-const builtin=action==='builtin',group={seq:1,id:'group-one',kind:'group',title:builtin?'My agents':'Fixture group',role:'member',members:builtin?[self]:[self,other],peer:other,created:'2026-01-01T00:00:00Z',messages:[],agents:[],guests:[]};
+const builtin=action==='builtin'||action==='lookalike',group={seq:1,id:'group-one',kind:'group',title:builtin?'My agents':'Fixture group',role:'member',members:builtin?[self]:[self,other],peer:other,created:'2026-01-01T00:00:00Z',messages:[],agents:[],guests:[]};
 const second={...group,id:'group-two',title:'Other group',members:structuredClone(group.members)};
-const overview={seq:1,version:'fixture',role:'person',groups:true,me:{address:self.address},person:{...self,devices:[]},people:[other],dms:[group,second],threads:[],needs_you:[]};
+const overview={seq:1,version:'fixture',role:'person',groups:true,me:{address:self.address},person:{...self,devices:[]},people:[other],dms:[group,second,...(action==='lookalike'?[{...group,id:'group-zero',created:'2025-12-01T00:00:00Z'}]:[])],threads:[],needs_you:[]};
 const f=window.fixture={writes:[],reads:0,group,overview};
 const host={platform:'daemon',workspace:{id:'group-changes',state:'enrolled'},listen(){return()=>{}},async api(p,b){
  if(p.startsWith('/api/overview'))return structuredClone(overview);
@@ -92,6 +92,18 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   assert.equal(await panel.getByRole('button',{name:'Leave group…',exact:true}).count(),0,'no Leave in My agents');
   assert.equal(await page.evaluate(()=>fixture.rights().builtIn),true);
   await panel.getByRole('button',{name:'Rename group…',exact:true}).waitFor();
+  assert.deepEqual(errors,[]);await page.close();
+ }
+ // Only the one room the agents use is built in: a newer look-alike solo
+ // group with the same title (an older one exists) can still be left.
+ {
+  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));page.setDefaultTimeout(5000);
+  await page.goto('http://127.0.0.1:'+server.address().port+'/?action=lookalike');
+  const panel=page.getByRole('complementary',{name:'In this chat'});
+  await page.getByRole('button',{name:'Open members',exact:true}).click();await panel.waitFor();
+  assert.equal(await page.evaluate(()=>fixture.rights().builtIn),false,'a look-alike is not built in');
+  await panel.getByRole('button',{name:'Leave group…',exact:true}).waitFor();
+  assert.equal(await panel.getByText('It can’t be left.',{exact:false}).count(),0);
   assert.deepEqual(errors,[]);await page.close();
  }
  {

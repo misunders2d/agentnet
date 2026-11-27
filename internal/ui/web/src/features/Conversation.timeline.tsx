@@ -146,8 +146,10 @@ export function Timeline({ ctx, messages, focus, focusSeq, unread, readVisit, se
     if (!log?.contains(el) || e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
     const row = el.closest<HTMLElement>("[data-mid]");
     if (!row) return;
-    if (el.hasAttribute("data-message-bubble") && ["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
-      const bubbles = [...log.querySelectorAll<HTMLElement>("[data-message-bubble][tabindex]")].filter(b => !b.closest("[hidden],[inert]") && b.getClientRects().length);
+    // Arrow keys step through the messages and the service lines' own
+    // buttons (saw N messages), so none of them is skipped.
+    if ((el.hasAttribute("data-message-bubble") || el.hasAttribute("data-event-action")) && ["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+      const bubbles = [...log.querySelectorAll<HTMLElement>("[data-message-bubble][tabindex],[data-event-action]")].filter(b => !b.closest("[hidden],[inert]") && b.getClientRects().length);
       const index = bubbles.indexOf(el);
       const next = e.key === "Home" ? 0 : e.key === "End" ? bubbles.length - 1 : Math.max(0, Math.min(bubbles.length - 1, index + (e.key === "ArrowUp" ? -1 : 1)));
       if (bubbles[next]) { e.preventDefault(); bubbles[next].focus(); }

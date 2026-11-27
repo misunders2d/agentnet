@@ -848,3 +848,16 @@ export function holdSentence(code: string, name: string, browser = false): strin
     default: return "It says it’s from " + name + ", but that couldn’t be checked, so it isn’t shown.";
   }
 }
+
+/** The person's "My agents" room (MEL-713), chosen as client.MyAgentsRoom
+ *  chooses it so the app and terminals share one: the oldest current group
+ *  of theirs by that title with no other person. Only that one room is the
+ *  built-in group; another group that happens to share the title is not. */
+export const MY_AGENTS = "My agents";
+export function myAgentsRoomId(o: T.Overview | null | undefined): string | undefined {
+  const me = o?.person?.person;
+  if (!me) return;
+  const at = (d: T.DMSummary) => Date.parse(d.created) || 0;
+  return (o!.dms || []).filter(d => d.kind === "group" && d.title === MY_AGENTS && !d.frozen && d.members?.length === 1 && d.members[0].person === me)
+    .sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1))[0]?.id;
+}

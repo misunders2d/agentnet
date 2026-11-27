@@ -503,14 +503,15 @@ function EventDivider({ m, ctx, all }: { m: T.DMMessage; ctx: Ctx; all: AnyMsg[]
   // the joined/left cards took the whole screen.
   const joined = divider && k!.kind === "joined";
   const seen = joined ? visit!.shared.length + visit!.missing : 0;
+  const sawText = "saw " + seen + (seen === 1 ? " message" : " messages");
   return (<>
     <p data-mid={m.id} role="note" data-event={divider ? k!.kind : undefined}
       className="mx-auto my-1 max-w-[min(94%,680px)] px-4 text-center text-[13px] leading-snug text-muted [overflow-wrap:anywhere]">
       {line}{sub && <span> · {sub}</span>}<span className="whitespace-nowrap"> · {stampOf(m.at)}</span>
       {joined && seen > 0 && <>{" · "}
-        <button type="button" onClick={() => setSaw(true)} aria-label={name === "You" ? "See what you saw" : a ? "See what it saw" : "See what they saw"}
+        <button type="button" data-event-action onClick={() => setSaw(true)} aria-label={name + " " + sawText + ", show them"}
           className="relative inline-flex items-baseline gap-1 font-semibold text-agent-ink underline decoration-agent-ink/40 underline-offset-2 before:absolute before:-inset-x-1 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-[''] hover:decoration-agent-ink">
-          <IconEye size={14} className="self-center" />{"saw " + seen + (seen === 1 ? " message" : " messages")}
+          <IconEye size={14} className="self-center" />{sawText}
         </button></>}
     </p>
     {saw !== null && ctx.dm && <WhatTheySaw t={ctx.dm} g={visit!} open={saw} onOpenChange={setSaw} />}
