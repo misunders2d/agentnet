@@ -581,7 +581,15 @@ func checkVersion3(in Inner) error {
 			return errors.New("an assistant reaction names its executor or default responder (device thread) or its participation (conversation)")
 		}
 	}
-	if in.Conv == "" {
+	if in.Conv == "" && in.Sub == SubClear {
+		// A device chat deletion (rem3): this person's own replica to their own
+		// devices, named and fanned as a conversation deletion is.
+		if !validID(in.LID) || !in.Replica {
+			return errors.New("a device chat deletion names its own logical id and is a replica")
+		} else if err := checkFan(in.Fan); err != nil {
+			return err
+		}
+	} else if in.Conv == "" {
 		if in.LID != "" || in.Replica || in.Fan != nil {
 			return errors.New("a device-thread control has no logical id, no fan and is no replica")
 		}
@@ -624,7 +632,7 @@ func checkVersion3(in Inner) error {
 		}
 	case SubClear:
 		var r Clear
-		if in.Conv == "" || dec.Decode(&r) != nil || !r.valid() {
+		if dec.Decode(&r) != nil || !r.valid() { // no conversation: a device chat's turns (rem3)
 			return errors.New("malformed conversation deletion")
 		}
 	default:

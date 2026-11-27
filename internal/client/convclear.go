@@ -39,8 +39,14 @@ import (
 // not yet sent) is hidden at once and erased by the local change that ends
 // that work (eraseLoop, on the daemon's change feed, as the worker's).
 //
-// A device thread (no conversation) exists on this device only: deleting
-// one erases exactly that reply-linked thread here, and tells no one.
+// A device chat (threads with no conversation: a DM with a person or an
+// agent, owner decision 2026-11-27) is deleted the same way: its turns are
+// named in a clear with no conversation, held for each own device until it
+// reads rem3 (protocol.CapDeviceClear) — an older device refuses such a clear
+// as malformed, so it never receives one. The other person keeps theirs.
+//
+// Deleting one topic (DeleteThread) erases exactly that reply-linked thread;
+// deleting the chat (DeleteDeviceChat) erases every topic of its row.
 const convClearSchema = `
 CREATE TABLE conv_erased(
   conv TEXT NOT NULL,
@@ -87,7 +93,6 @@ type ConversationDeleted struct {
 	Erased   int    `json:"erased"`              // turns erased here
 	Kept     int    `json:"kept,omitempty"`      // of those, hidden but kept until their work ends
 	Devices  int    `json:"devices,omitempty"`   // other devices of this person it is queued for (each applies it when it can read it)
-	ThisOnly bool   `json:"this_only,omitempty"` // a device thread: it exists on this device only
 }
 
 // ErrNothingToDelete refuses a deletion that would erase nothing.
@@ -241,7 +246,7 @@ type peerThreads struct {
 // with the controls on their messages.
 func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (ConversationDeleted, error) {
 	selfFP := a.Self().Fingerprint()
-	out := ConversationDeleted{Deletion: protocol.NewID(), ThisOnly: true}
+	out := ConversationDeleted{Deletion: protocol.NewID()}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return out, err
@@ -260,7 +265,7 @@ func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (Conversation
 						return out, err
 					}
 				}
-				if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion) VALUES('', ?, ?, ?)`, key, m, out.Deletion); err != nil {
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared) VALUES('', ?, ?, ?, 0)`, key, m, out.Deletion); err != nil {
 					return out, err
 				}
 				out.Erased++
@@ -271,10 +276,10 @@ func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (Conversation
 		}
 	}
 	// Controls on its messages are erased with them.
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion)
-		SELECT '', coalesce(i.verified_by,i.claimed_fp), i.id, ? FROM inbox i JOIN conv_erased t ON t.conv = '' AND t.lid = i.ref_id AND t.key = i.ref_fp
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared)
+		SELECT '', coalesce(i.verified_by,i.claimed_fp), i.id, ?, 0 FROM inbox i JOIN conv_erased t ON t.conv = '' AND t.lid = i.ref_id AND t.key = i.ref_fp
 		 WHERE i.conv IS NULL AND i.ref_id IS NOT NULL AND coalesce(i.verified_by,i.claimed_fp) IS NOT NULL AND t.deletion = ?
-		UNION SELECT '', ?, o.id, ? FROM outbox o JOIN conv_erased t ON t.conv = '' AND t.lid = o.ref_id AND t.key = o.ref_fp
+		UNION SELECT '', ?, o.id, ?, 0 FROM outbox o JOIN conv_erased t ON t.conv = '' AND t.lid = o.ref_id AND t.key = o.ref_fp
 		 WHERE o.conv IS NULL AND o.ref_id IS NOT NULL AND t.deletion = ?`, out.Deletion, out.Deletion, selfFP, out.Deletion, out.Deletion); err != nil {
 		return out, err
 	}
@@ -288,8 +293,11 @@ func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (Conversation
 		return out, err
 	}
 	a.dropErasedFiles("")
+	// The person's other devices erase the same turns (shared state follows
+	// the person, AGENTS.md); each applies it once it reads clr2.
+	out.Devices, err = a.shareErased(context.Background())
 	notifyDaemon(a.home)
-	return out, nil
+	return out, err
 }
 
 // eraseCoveredIn blanks what erased turns of conv ("" for device threads)
@@ -449,10 +457,12 @@ func (a *Agent) admitClear(ctx context.Context, env envelope.Envelope, in envelo
 	if !ok || !me.has(env.From, sender.Fingerprint()) || env.From == a.Address {
 		return hold(reasonInvalid, "a conversation deletion comes only from another current device of this person")
 	}
-	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
-		return err
-	} else if !found {
-		return hold(reasonProof, "the conversation is not here (yet)")
+	if in.Conv != "" { // no conversation: a device chat, whose turns are named alone (clr2)
+		if _, _, found, err := a.store.conversation(in.Conv); err != nil {
+			return err
+		} else if !found {
+			return hold(reasonProof, "the conversation is not here (yet)")
+		}
 	}
 	selfFP := a.Self().Fingerprint()
 	tx, err := a.store.db.Begin()
@@ -482,6 +492,13 @@ func (a *Agent) admitClear(ctx context.Context, env envelope.Envelope, in envelo
 	for _, t := range turns {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion) VALUES(?, ?, ?, ?)`, in.Conv, t.Fingerprint, t.ID, part.Deletion); err != nil {
 			return err
+		}
+	}
+	if in.Conv == "" { // a device chat's topics: their names and marks go with them (forgetTopics)
+		for _, t := range turns {
+			if _, err := tx.Exec(`DELETE FROM topic_state WHERE topic = ?`, t.ID); err != nil {
+				return err
+			}
 		}
 	}
 	if err := eraseCoveredIn(tx, in.Conv, selfFP); err != nil {
@@ -536,7 +553,11 @@ func (a *Agent) clearCopies(me personRow, devs []identity.Public, parts []clearP
 			if err != nil {
 				return nil, err
 			}
-			copies = append(copies, outCopy{env: env, in: in, state: stateQueued, required: protocol.CapConvClear, recipientFP: dev.Fingerprint()})
+			required := protocol.CapConvClear
+			if p.conv == "" { // a device chat: older devices refuse it as malformed (envelope.go)
+				required = protocol.CapDeviceClear
+			}
+			copies = append(copies, outCopy{env: env, in: in, state: stateQueued, required: required, recipientFP: dev.Fingerprint()})
 		}
 	}
 	return copies, nil
@@ -562,7 +583,7 @@ func (a *Agent) shareErased(ctx context.Context) (int, error) {
 	if err != nil || !ok {
 		return 0, err
 	}
-	rows, err := a.store.db.Query(`SELECT DISTINCT deletion, conv FROM conv_erased WHERE shared = 0 AND conv <> '' ORDER BY deletion`)
+	rows, err := a.store.db.Query(`SELECT DISTINCT deletion, conv FROM conv_erased WHERE shared = 0 ORDER BY deletion`)
 	if err != nil {
 		return 0, err
 	}
@@ -673,7 +694,7 @@ func (a *Agent) replayErased(dev identity.Public) {
 	if err != nil || !ok {
 		return
 	}
-	rows, err := a.store.db.Query(`SELECT conv, key, lid FROM conv_erased WHERE conv <> '' ORDER BY conv, key, lid`)
+	rows, err := a.store.db.Query(`SELECT conv, key, lid FROM conv_erased ORDER BY conv, key, lid`)
 	if err != nil {
 		return
 	}
@@ -842,7 +863,7 @@ func (a *Agent) sweepErased(ctx context.Context) (held bool) {
 		held = true
 	}
 	var untold bool
-	if err := a.store.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM conv_erased WHERE shared = 0 AND conv <> '')`).Scan(&untold); err != nil || untold {
+	if err := a.store.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM conv_erased WHERE shared = 0)`).Scan(&untold); err != nil || untold {
 		held = true
 	}
 	return held

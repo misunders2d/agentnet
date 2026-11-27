@@ -155,7 +155,7 @@ and catch the error. Failures differ by platform.
 | `POST /api/message/react` | D B | Add or remove a reaction. | `{id, dir, conv?, emoji, remove?}` | `{note}` |
 | `POST /api/message/edit` | D B | Edit your own message. A running question or task keeps its original body. | `{id, dir, conv?, text}` | `{note}` |
 | `POST /api/message/delete` | D B | Delete your own message. This hides it and cancels nothing. | `{id, dir, conv?}` | `{note}` |
-| `POST /api/conversation/delete` | D B | Delete a conversation on all of this person's devices; a device topic on this device; or, with `chat: true`, the whole device chat (every topic of that thread's chat row) on this device. | `{conv}`, `{peer, thread}` or `{peer, thread, chat: true}` | `{note}` |
+| `POST /api/conversation/delete` | D B | Delete, on all of this person's devices, a conversation; a device topic; or, with `chat: true`, the whole device chat (every topic of that thread's chat row). Other own devices apply a device topic or chat deletion once they read `rem3`; other people keep their copies. | `{conv}`, `{peer, thread}` or `{peer, thread, chat: true}` | `{note}` |
 | `POST /api/history/contribution/preview` | D B | Review quoting selected messages from one chat into another. | `{source, ids:[id], destination, topic?, new_topic?, title?, files?:[{id, index}]}` | review: the request plus `{operation, token, body, items, audience, imported_at, audience_pending}` |
 | `POST /api/history/contribution/apply` | D B | Send exactly the reviewed contribution. If anything changed, it is refused: review again. | the review, unchanged | D: `{ID, LID, State, Detail, Copies}` (Go field names). B: `{id, lid, state, detail?, copies?}` (a repeated apply answers without `detail`) |
 | `POST /api/topic/transfer/preview` | D B | Freeze a whole authorized topic as inert quotations into another existing full-member DM or group. | `{source,topic?,destination,destination_topic?,new_topic?,title?}` or `{peer,thread,destination,...}` for one concrete direct-agent thread | durable review `{id,token,created_at,cutoff,total_items,total_batches,total_files,total_bytes,cursor,state,audience,audience_total,audience_next,audience_pending,...request}`; first 16 recipients, no preview plaintext retained; `total_bytes` counts source text and files |
@@ -392,7 +392,8 @@ Missing metadata retains the ordinary overview fallback.
 Reminder intent uses signed, encrypted quiet `reminder-sync` carriers, explicitly gated by
 `rem1`; it grants no execution or read authority. This allocation consumes the final
 reserved capability slot: producers may now advertise 32 names, matching the existing
-v0.9.1 reader limit; the 1024-byte signed-record ceiling is unchanged. Older readers
+v0.9.1 reader limit; the 1024-byte signed-record ceiling is unchanged. `rem2` (blocks) and
+then `rem3` (device chat deletions) each took the previous name's slot and imply it. Older readers
 receive no unknown carrier and ordinary messages continue. Native notifications remain
 once per winning generation on each device. Browser devices update due state while
 running and retain it across reopen; closed tabs have no deadline or OS-banner promise.

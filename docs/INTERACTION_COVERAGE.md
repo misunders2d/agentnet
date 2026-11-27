@@ -4500,13 +4500,23 @@ posts `{peer, thread, chat: true}`: `DeleteDeviceChat` erases every topic of
 that row in one transaction (`eraseDeviceThreads`). The row leaves the list
 at once (`store.deletingRows`, by `directChatKey` and its newest `last_at`,
 as tdlib removes a chat locally first); a refusal brings it back, and a
-message newer than the deletion keeps it. Both deletions are on this device
-only: the dialogs and notes now say "Your other devices and {title} keep
-their copies" (device-history replicas hold them there), not the former
-"stored on this device only". Syncing the deletion to the person's other
-devices is parked (branch `wip/device-chat-clear-sync`): its reader
-capability would be the 33rd advertised name, which released v0.11.x readers,
-the hub's `PUT /v1/caps` and `wire.mjs` refuse. Evidence:
+message newer than the deletion keeps it. Both deletions are
+synced to the person's other devices (desktop, browser and Android
+engines): a clear with no conversation naming the erased turns, held for
+each own device until it reads `rem3`, which took `rem2`'s capability slot
+(owner decision; no 33rd name). The note reads "Deleted on all your devices:
+here now; your N other device(s) remove it once each is connected and runs an
+AgentNet version that applies it, and until then still show it. The other
+person keeps their copy." The dialog: "deleted here and, once they connect,
+on your other linked devices". Evidence for sync:
+`TestDeviceChatDeletionOnAllOwnDevices` (a v0.11.13-style phone listing rem2
+holds the deletion while still getting block sync; updated to rem3 it
+erases all three topics; re-delivered and fresh history stay erased; the
+other person keeps three), `TestBlockSyncHeldForNonReaderThenSent` (an own
+device read as neither rem1 nor rem2 holds a block copy, then gets it),
+`TestOwnCapsRem3OnlySwap`, `convclear_engine_check.mjs` (engine queues one
+clear per own device waiting for rem3; the updated phone applies every name;
+the tablet keeps waiting; shared Go/engine vectors for the clear). Evidence:
 `TestDeleteDeviceChatRemovesEveryTopic` (four topics; one topic delete leaves
 three, the chat delete leaves none; fails before with "delete chat: 400");
 `TestDeleteDeviceChatTakesArchivedTopics` (two of three topics archived by the

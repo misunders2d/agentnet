@@ -269,10 +269,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
       {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
       {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
       <Confirm open={!!del} onOpenChange={o => { if (!o) setDel(false); }} ok="Delete" onOk={remove}
-        title={th ? (del === "chat" ? "Delete this whole chat from this device?" : "Delete this topic from this device?") : "Delete this conversation from your devices?"}>
-        {th ? (del === "chat"
-          ? <p>Every topic of this chat is deleted on this device. Your other devices and {title} keep their copies; a new message starts the chat again.</p>
-          : <p>It’s deleted on this device only. Your other devices and {title} keep their copies.</p>) : <>
+        title={th ? (del === "chat" ? "Delete this whole chat from your devices?" : "Delete this topic from your devices?") : "Delete this conversation from your devices?"}>
+        {th ? <p>{del === "chat" ? "Every topic of this chat is deleted" : "It’s deleted"} here and, once they connect, on your other linked devices. {title} keeps their copy.{del === "chat" ? " A new message starts the chat again." : ""}</p> : <>
           <p>The messages go from this device and, once they connect, from your other linked devices.</p>
           <p>Everyone else keeps their copies. Anything already running finishes first. Members and guests stay as they are; a new message brings the chat back.</p>
         </>}

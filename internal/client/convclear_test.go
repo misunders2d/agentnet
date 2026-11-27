@@ -165,7 +165,7 @@ func TestDeleteConversationOnAllOwnDevices(t *testing.T) {
 	withConvClear(t, w.alice, phone)
 
 	done, err := w.alice.DeleteConversation(tctx(t), conv)
-	if err != nil || done.Erased != 3 || done.Devices != 1 || done.Kept != 0 || done.ThisOnly {
+	if err != nil || done.Erased != 3 || done.Devices != 1 || done.Kept != 0 {
 		t.Fatalf("delete: %+v %v", done, err)
 	}
 	if b := convBodies(t, w.alice, conv); len(b) != 0 {
@@ -442,7 +442,7 @@ func TestDeleteKeepsUnsentCopyUntilHandedOver(t *testing.T) {
 }
 
 // D5: a device thread is deleted exactly: the selected reply-linked thread
-// with that peer, on this device (its only copy), never another thread
+// with that peer, on this person's devices, never another thread
 // with the same peer; the peer keeps theirs; a later reply to it starts anew.
 func TestDeleteThreadExactScope(t *testing.T) {
 	w := newWorld(t, "")
@@ -462,7 +462,7 @@ func TestDeleteThreadExactScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	done, err := w.alice.DeleteThread(w.bob.Address, start.ID)
-	if err != nil || done.Erased != 2 || !done.ThisOnly {
+	if err != nil || done.Erased != 2 || done.Devices != 0 {
 		t.Fatalf("delete thread: %+v %v", done, err)
 	}
 	ts, _ := w.alice.Threads()

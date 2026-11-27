@@ -58,7 +58,9 @@ const erasedKey = (conv, key, lid) => conv + "|" + key + "|" + lid;
 const retainedIn = (r) => ["question", "task"].includes(r.kind) && ["pending", "accepted", "held", "awaiting", "running", "cancel_requested", "part_waiting", "helpers_waiting", "needs_human"].includes(r.state);
 const retainedOut = (r) => ["queued", "waiting", "receiver_waiting"].includes(r.state);
 // deletionNote is what the page says after a deletion (ui livedelete.go).
-const deletionNote = (thisOnly, devices, kept) => (thisOnly ? "Deleted on this device. Your other devices keep their copies, and so does the other person."
+const deletionNote = (device, devices, kept) => (device ? (devices === 0
+    ? "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion. The other person keeps their copy."
+    : "Deleted on all your devices: here now; your " + devices + " other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it. The other person keeps their copy.")
   : devices === 0 ? "Deleted here. No other device of yours was linked; one you link later gets the deletion. Others in it keep their copies."
   : "Deleted here. Queued for your " + devices + " other device(s): each removes it once it is connected and runs an AgentNet version that applies deletions; until then it still shows it there. Others in it keep their copies.")
   + (kept > 0 ? " " + kept + " item(s) still in progress keep running and are removed when they finish." : "");
@@ -4649,6 +4651,14 @@ export class Engine {
           }
           blocked.add(key); continue;
         }
+        if (rec.sub === wire.SubClear) { // a device chat deletion: held until that own device reads rem3 (clearCopies)
+          let ok = false, why2 = "";
+          try { [ok, why2] = await this.ctlSupport(rec.to, pin, wire.CapReminderSyncV3); } catch (e) { blocked.add(key); continue; }
+          if (!ok) {
+            if (rec.state !== "waiting" || rec.detail !== why2) { await this.receiverOutboxProgress({ ...rec, state: "waiting", detail: why2 }); this.changed(); }
+            blocked.add(key); continue;
+          }
+        }
         await this.post({ ...rec, state: "queued", detail: "" });
         if ((await this.store.get("outbox", rec.id))?.state === "queued") blocked.add(key);
         continue;
@@ -8776,7 +8786,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV2, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV3, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -10162,7 +10172,7 @@ export class Engine {
       if (!r.conv && r.control && r.ref && ids.has(deviceHistoryPeer(r,r.to || r.from) + "/" + r.ref.id)) add(r.to ? this.fp : r.fp, r.id); // its messages' controls go with them
     }
     const ops = [], checks = [];
-    for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: true } }); this.erased.add(k); }
+    for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); } // told to this person's other devices (shareErased, rem3)
     for (const m of threads.flat()) if (await this.store.get("kv", "topic/" + m.peer + "/" + m.id)) ops.push({ s: "kv", k: "topic/" + m.peer + "/" + m.id, v: undefined }); // its name and marks go with it
     let kept = 0;
     try {
@@ -10171,7 +10181,7 @@ export class Engine {
       await this.store.write(ops,checks);
     } finally { await this.loadErased(); }
     this.changed();
-    return { note: deletionNote(true, 0, kept) };
+    return { note: deletionNote(true, await this.shareErased(), kept) };
   }
 
   // clearCopies seals the parts of one deletion for devs (this person's other
@@ -10188,11 +10198,12 @@ export class Engine {
         const pin = (await this.store.get("pins", dev.address)) || (await this.sendKey(dev.address, admission).catch(() => null)); // a device just linked may not be pinned yet
         if (!pin || pin.pending || pin.fingerprint !== dev.fingerprint) continue; // a changed key is never used
         let ok = false, why = "";
-        try { [ok, why] = await this.ctlSupport(dev.address, pin, wire.CapConvClear, admission); } catch (e) { why = "server_unavailable: cannot reach your server"; }
+        const cap = conv ? wire.CapConvClear : wire.CapReminderSyncV3; // a device chat: older devices refuse a clear with no conversation (envelope.go)
+        try { [ok, why] = await this.ctlSupport(dev.address, pin, cap, admission); } catch (e) { why = "server_unavailable: cannot reach your server"; }
         const id = wire.newID();
         const envelope = await wire.seal({ v: wire.Version3, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind: "message", sub: wire.SubClear, body, ref, conv, lid, replica: true, fan }, this.keys, await this.pubOf(pin));
         recs.push({ v: 3, control: true, id, conv, lid, to: dev.address, fp: this.fp, own: true, person: this.me.person, kind: "message", sub: wire.SubClear, body, ref, at, aside: true,
-          required_cap: wire.CapConvClear, recipient_fp: dev.fingerprint, state: ok ? "queued" : "waiting", detail: ok ? "" : why, envelope });
+          required_cap: cap, recipient_fp: dev.fingerprint, state: ok ? "queued" : "waiting", detail: ok ? "" : why, envelope });
       }
     }
     return recs;
@@ -10205,7 +10216,7 @@ export class Engine {
   async shareErased() {
     if (!this.me) return 0;
     const devs = this.me.devices.filter((d) => d.address !== this.address), byDeletion = new Map();
-    for (const r of await this.store.all("erased")) if (!r.shared && r.conv) byDeletion.set(r.deletion, [...(byDeletion.get(r.deletion) || []), r]);
+    for (const r of await this.store.all("erased")) if (!r.shared) byDeletion.set(r.deletion, [...(byDeletion.get(r.deletion) || []), r]); // a device chat's too (conv "", rem3)
     for (const list of byDeletion.values()) {
       const turns = list.map((r) => ({ id: r.lid, fingerprint: r.key })).sort((a, b) => (a.fingerprint + a.id < b.fingerprint + b.id ? -1 : 1));
       const recs = await this.clearCopies(devs, list[0].conv, list[0].deletion, turns);
@@ -10224,7 +10235,7 @@ export class Engine {
   async replayErased(dev) {
     if (!this.me) return;
     const byConv = new Map();
-    for (const r of await this.store.all("erased")) if (r.conv) byConv.set(r.conv, [...(byConv.get(r.conv) || []), { id: r.lid, fingerprint: r.key }]);
+    for (const r of await this.store.all("erased")) byConv.set(r.conv, [...(byConv.get(r.conv) || []), { id: r.lid, fingerprint: r.key }]); // "" names device chat turns (rem3)
     const recs = [];
     for (const [conv, turns] of byConv) recs.push(...await this.clearCopies([dev], conv, wire.newID(), turns));
     if (!recs.length) return;
@@ -10241,7 +10252,7 @@ export class Engine {
     let part;
     try { part = wire.parseControl(wire.SubClear, n.body); } catch (e) { throw new Hold("invalid", "a malformed conversation deletion"); }
     if (!this.me || env.from === this.address || !this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint)) throw new Hold("invalid", "a conversation deletion comes only from another current device of this person");
-    if (!(await this.store.get("convs", n.conv)) && !(await this.groupRecord(n.conv))) throw new Hold("proof_pending", "the conversation is not here (yet)");
+    if (n.conv && !(await this.store.get("convs", n.conv)) && !(await this.groupRecord(n.conv))) throw new Hold("proof_pending", "the conversation is not here (yet)"); // no conversation: a device chat (rem3)
     const checks=[],turns = [n.ref, ...part.turns], ops = [{ s: "inbox", k: env.id, v: { id: env.id, v: 3, control: true, from: env.from, fp: pin.fingerprint, kind: "message", sub: wire.SubClear, body: n.body,
       ref: n.ref, conv: n.conv, lid: n.lid, replica: true, own: true, person: this.me.person, fan: n.fan || null, at: this.now(), read: true } }];
     const prior = this.erased, next = new Set(prior);
@@ -10251,6 +10262,14 @@ export class Engine {
       next.add(k);
     }
     this.erased = next;
+    if (!n.conv) { // a device chat's topics: their names and marks go with them (deleteThread)
+      const ids = new Set(turns.map((t) => t.id));
+      for (const r of [...await this.store.all("inbox"), ...await this.store.all("outbox")]) {
+        if (r.conv || !ids.has(r.id)) continue;
+        const k = "topic/" + deviceHistoryPeer(r, r.to || r.from) + "/" + r.id;
+        if (await this.store.get("kv", k)) ops.push({ s: "kv", k, v: undefined });
+      }
+    }
     try { ops.push(...await this.eraseOps(n.conv, await this.store.all("inbox"), await this.store.all("outbox"),checks)); } finally { this.erased = prior; }
     // forwardClear: devices of this person the sender's fan roster did not have.
     const f = (n.fan || []).find((x) => x.person === this.me.person), old = f && f.roster !== this.me.hash && (this.me.steps || []).find((st) => st.hash === f.roster);
@@ -10286,7 +10305,7 @@ export class Engine {
     const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox"), ops = [], checks = [];
     for (const conv of new Set([...this.erased].map((k) => k.slice(0, k.indexOf("|"))))) ops.push(...await this.eraseOps(conv, inbox, outbox,checks));
     if (ops.length) { await this.store.write(ops,checks); this.changed(); }
-    if ((await this.store.all("erased")).some((r) => !r.shared && r.conv)) await this.shareErased();
+    if ((await this.store.all("erased")).some((r) => !r.shared)) await this.shareErased();
   }
 
   async dropCached(m, retraction, checks=[]) {

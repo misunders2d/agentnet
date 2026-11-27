@@ -43,6 +43,9 @@ export const CapDirectTopicSync="dts1", SubDirectTopicSync="direct-topic-sync";
 export const CapReminderSync = "rem1", SubReminderSync = "reminder-sync";
 // rem2 replaces rem1's capability slot: it reads reminders and blocks (protocol/blocksync.go).
 export const CapReminderSyncV2 = "rem2", SubBlockSync = "block-sync";
+// rem3 replaces rem2's slot (protocol/blocksync.go): it also reads device chat
+// deletions. A desktop lists it; this page still lists rem2 and reads it as rem2.
+export const CapReminderSyncV3 = "rem3";
 export const CapTopicStateSync = "tss1", CapTopicStateSyncV2 = "tss2", SubTopicStateSync = "topic-state-sync"; // tss2 also reads tss1; neither is implied by rm1
 export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", CapModelSyncV2 = "mdl2", SubModelSync = "model-sync";
@@ -625,19 +628,24 @@ function checkV3(n) {
     throw new Error("an assistant reaction names its executor or default responder (device thread) or its participation (conversation)");
   }
   if (n.sub === SubDecision && n.conv) throw new Error("a decision is device-scoped: it goes to the host that holds the request");
-  if (n.sub === SubClear && !n.conv) throw new Error("malformed conversation deletion"); // a device thread is never deleted on the wire
-  if (!n.conv) {
+  const fanOK = (fan) => {
+    if (fan.length > 2) throw new Error("a conversation message names at most its two member persons");
+    fan.forEach((f, i) => {
+      if (!validID(f.person) || !validHash(f.roster) || (i > 0 && f.person === fan[0].person)) throw new Error("invalid fan");
+    });
+  };
+  if (!n.conv && n.sub === SubClear) {
+    // A device chat deletion (rem3): this person's own replica to their own
+    // devices, named and fanned as a conversation deletion is (envelope.go).
+    if (!validID(n.lid) || !n.replica) throw new Error("a device chat deletion names its own logical id and is a replica");
+    if (n.fan) fanOK(n.fan);
+  } else if (!n.conv) {
     if (n.lid || n.replica || (n.fan && n.fan.length)) throw new Error("a device-thread control has no logical id, no fan and is no replica");
   } else {
     if (!validHash(n.conv) || !validID(n.lid)) throw new Error("a conversation control names its conversation and its own logical id");
     // A conversation control may name the member rosters its copies went
     // to (as a turn does), so a device that knows a newer roster forwards it.
-    if (n.fan) {
-      if (n.fan.length > 2) throw new Error("a conversation message names at most its two member persons");
-      n.fan.forEach((f, i) => {
-        if (!validID(f.person) || !validHash(f.roster) || (i > 0 && f.person === n.fan[0].person)) throw new Error("invalid fan");
-      });
-    }
+    if (n.fan) fanOK(n.fan);
   }
   parseControl(n.sub, n.body);
 }
@@ -2015,7 +2023,7 @@ export async function verifyCaps(c, signKey) {
 // capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
 // rm1 implies it.
 export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
-export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicStateSync&&(c.caps||[]).includes(CapTopicStateSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapReminderSync&&(c.caps||[]).includes(CapReminderSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicStateSync&&(c.caps||[]).includes(CapTopicStateSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapReminderSync&&((c.caps||[]).includes(CapReminderSyncV2)||(c.caps||[]).includes(CapReminderSyncV3)) || name===CapReminderSyncV2&&(c.caps||[]).includes(CapReminderSyncV3) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
 
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each

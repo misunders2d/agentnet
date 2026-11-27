@@ -39,6 +39,9 @@ func TestBrowserConversationDeletionMatchesGo(t *testing.T) {
 		{Name: "exact part", Inner: base},
 		{Name: "single part no turns", Inner: with(func(in *envelope.Inner) { in.Body = body(envelope.Clear{Deletion: id("1"), Part: 1, Parts: 1}) })},
 		{Name: "device thread", Inner: with(func(in *envelope.Inner) { in.Conv, in.LID, in.Replica, in.Fan = "", "", false, nil })},
+		{Name: "device chat (rem3)", Inner: with(func(in *envelope.Inner) { in.Conv = "" })},
+		{Name: "device chat without logical id", Inner: with(func(in *envelope.Inner) { in.Conv, in.LID = "", "" })},
+		{Name: "device chat not a replica", Inner: with(func(in *envelope.Inner) { in.Conv, in.Replica = "", false })},
 		{Name: "a cut", Inner: with(func(in *envelope.Inner) { in.Body = strings.TrimSuffix(in.Body, "}") + `,"cut":true}` })},
 		{Name: "anchors", Inner: with(func(in *envelope.Inner) { in.Body = strings.TrimSuffix(in.Body, "}") + `,"anchors":[]}` })},
 		{Name: "part beyond parts", Inner: with(func(in *envelope.Inner) { in.Body = body(envelope.Clear{Deletion: id("1"), Part: 3, Parts: 2}) })},
@@ -56,8 +59,8 @@ func TestBrowserConversationDeletionMatchesGo(t *testing.T) {
 	for i := range vectors {
 		vectors[i].Valid = envelope.ValidateControl(vectors[i].Inner) == nil
 	}
-	if !vectors[0].Valid || !vectors[1].Valid || vectors[2].Valid {
-		t.Fatalf("Go judgement of the base vectors changed: %+v", vectors[:3])
+	if !vectors[0].Valid || !vectors[1].Valid || vectors[2].Valid || !vectors[3].Valid || vectors[4].Valid || vectors[5].Valid {
+		t.Fatalf("Go judgement of the base vectors changed: %+v", vectors[:6])
 	}
 	input, _ := json.Marshal(map[string]any{"vectors": vectors, "body": body(ok)})
 	cmd := exec.Command(node, "testdata/convclear_engine_check.mjs")
