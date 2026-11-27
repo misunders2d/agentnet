@@ -491,6 +491,42 @@ func agyACPBridgeLifetime(t *testing.T) {
 			t.Fatalf("steer %q, want unknown", got)
 		}
 	})
+	t.Run("a late correction's cancel agy never reads does not hold the answer", func(t *testing.T) {
+		in := &acpRecordInput{}
+		b := attachAgyACPBridge(t.Context(), in, t.TempDir(), "Original request", "s1", false, true, 0)
+		stuck := make(chan struct{})
+		oldWrite, oldDrain := agyACPBeforeWrite, agyACPDrain
+		agyACPDrain = 200 * time.Millisecond
+		agyACPBeforeWrite = func(v any) {
+			if m, _ := v.(map[string]any); m["method"] == "session/cancel" {
+				<-stuck // agy stopped reading: the write never returns
+			}
+		}
+		b.begin()
+		steered := make(chan string, 1)
+		go func() { steered <- b.steer(t.Context(), "edit-1", "Use Moscow instead") }()
+		eventually(t, "the correction written", func() bool { return in.wrote("Moscow") })
+		_, _ = b.Write([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Answer for: Kyiv"}}}}` + "\n"))
+		_, _ = b.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"totalTokens":3}}}` + "\n"))
+		select {
+		case <-b.settledCh():
+		case <-time.After(2 * time.Second):
+			t.Fatal("a cancel agy never read held the answered request")
+		}
+		b.close()
+		out, failure, _ := b.outcome()
+		if failure != "" || !out.complete || out.response != "Answer for: Kyiv" || !b.lateCorrection() {
+			t.Fatalf("outcome %+v failure %q late %t, want the request's own answer and its process ended", out, failure, b.lateCorrection())
+		}
+		if got := <-steered; got != steerUnknown {
+			t.Fatalf("steer %q, want unknown", got)
+		}
+		close(stuck) // as ending the process does
+		if !b.drained(2 * time.Second) {
+			t.Fatal("writes did not end")
+		}
+		agyACPBeforeWrite, agyACPDrain = oldWrite, oldDrain
+	})
 	t.Run("a result given before the wait ended stands", func(t *testing.T) {
 		var mu sync.Mutex
 		var b *agyACPBridge

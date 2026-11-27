@@ -1051,6 +1051,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		stopNativeFollowups()
 		acp.finish()
 		acp.close()
+		if acp.lateCorrection() {
+			endWarm(false) // agy may still be on the cancelled correction
+		}
 		if !acp.drained(agyACPDrain) {
 			// agy stopped reading during a write: end its process, which
 			// releases the write, rather than wait on it.
@@ -1058,9 +1061,6 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		// Its outcome is read in the stream transport's terms (agy.result).
 		out, failure, auth := acp.outcome()
-		if acp.lateCorrection() {
-			endWarm(false) // agy may still be on the cancelled correction
-		}
 		if failure != "" {
 			nativeFailure = failure
 		} else {

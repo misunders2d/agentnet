@@ -784,13 +784,19 @@ func (b *agyACPBridge) completeLocked(stop string) {
 		_ = b.send(turn, cancel, nil)
 		_ = b.input.Close()
 	}()
-	// Settled only once the cancel is out: the worker closes this turn's
-	// input when it settles, and an unsent cancel would leave agy running.
+	// Settled once the cancel is out: the worker closes this turn's input
+	// when it settles, and an unsent cancel would leave agy running. A
+	// cancel agy does not read within agyACPDrain is given up: the answer
+	// stands and the worker ends the process (lateCorrection).
 	b.stopLocked()
 	go func() {
+		t := time.NewTimer(agyACPDrain)
+		defer t.Stop()
 		select {
 		case <-cancelled:
 		case <-b.ctx.Done():
+		case <-t.C:
+			_ = b.input.Close()
 		}
 		b.settleOnce.Do(func() { close(b.settled) })
 	}()
