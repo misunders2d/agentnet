@@ -197,8 +197,14 @@ func (b *agyACPBridge) begin() {
 	}()
 }
 
-// agyACPBeforeWrite is a test hook: it runs before each message is written.
-var agyACPBeforeWrite = func(any) {}
+// agyACPDrain bounds the wait for the bridge's writes after its request.
+var agyACPDrain = 5 * time.Second
+
+// Test hooks: before each message is written, and before steer waits.
+var (
+	agyACPBeforeWrite = func(any) {}
+	agyACPSteerWait   = func() {}
+)
 
 func acpCall(id int64, method string, params any) map[string]any {
 	return map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}
@@ -322,6 +328,7 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 			b.settleIfOpenLocked()
 		}
 	}()
+	agyACPSteerWait()
 	select {
 	case result := <-s.result:
 		return result
@@ -329,6 +336,12 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 	case <-b.ctx.Done():
 	}
 	b.mu.Lock()
+	select {
+	case result := <-s.result:
+		b.mu.Unlock()
+		return result // given before the wait ended: it stands
+	default:
+	}
 	if b.steers[rpc] == s && !s.writing {
 		delete(b.steers, rpc) // never written: it is not part of the turn
 		b.dropPromptLocked(rpc)
@@ -356,9 +369,26 @@ func (b *agyACPBridge) close() {
 		b.endLocked()
 		b.mu.Unlock()
 		_ = b.input.Close() // not behind writeMu: a blocked write must not hold it
-		b.writes.Wait()
-		close(b.closed)
+		// Not joined here: a write agy stopped reading may block until its
+		// process ends (drained).
+		go func() {
+			b.writes.Wait()
+			close(b.closed)
+		}()
 	})
+}
+
+// drained waits up to d for the writes to end after close; false: one is
+// still blocked, and only ending the process releases it.
+func (b *agyACPBridge) drained(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-b.closed:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 // finish ends a request whose process ended before its turn did.
@@ -694,8 +724,9 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 }
 
 // completeLocked ends the request with its own answer. A correction still
-// open was not taken: it returns queued, to run as the linked follow-up, and
-// one agy already received is cancelled so it does not run here unseen.
+// open was not taken: one never written returns queued, to run as the
+// linked follow-up; one whose write began may have run, so its outcome is
+// unknown (never repeated) and agy is asked to cancel it.
 func (b *agyACPBridge) completeLocked(stop string) {
 	if strings.TrimSpace(b.run) != "" {
 		b.answer = b.run
@@ -711,8 +742,14 @@ func (b *agyACPBridge) completeLocked(stop string) {
 			}
 			continue
 		}
-		b.late = b.late || s.writing
-		s.resolveLocked(steerQueued)
+		if s.writing {
+			// agy may have read it and begun work on it: it is never run
+			// again automatically.
+			b.late = true
+			s.resolveLocked(steerUnknown)
+			continue
+		}
+		s.resolveLocked(steerQueued) // never written: the linked follow-up
 	}
 	b.prompts = nil
 	if !b.late {
