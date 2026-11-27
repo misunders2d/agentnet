@@ -391,6 +391,12 @@ func TestHistoryArchiveDoesNotBlockExactReadSync(t *testing.T) {
 }
 
 func TestHistoryArchiveTenThousandSourcesBoundedNewestFirst(t *testing.T) {
+	if raceOn {
+		// Its size is the protocol's part bound, so it cannot be scaled down:
+		// one full 5000-entry part takes about ten minutes under the race
+		// detector. The smaller archive tests run the same paths under race.
+		t.Skip("one full archive part exceeds the race shard's bound")
+	}
 	_, a, phone, conv := archiveFixture(t, 1)
 	// This test drives every source send synchronously. Join and disable the
 	// fixture's leftover coalesced sender before installing its recorder;

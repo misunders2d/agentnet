@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync/atomic"
@@ -211,7 +212,7 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 	var imported int
 	phone.store.db.QueryRow(`SELECT count(*) FROM history_archive_children`).Scan(&imported)
 	want := min(rows, historyArchiveStage) // one archive part bounds unpacked staging
-	for range want/historyPage + 2 { // paced pages reach the bound, then stop
+	for range want/historyPage + 2 {       // paced pages reach the bound, then stop
 		if err = pageFor(phone, third); err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +270,11 @@ func importedTailRemainsBounded(t *testing.T, direct bool) {
 		if err = third.storeReceived(tctx(t), desc); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = third.archiveImportStep(tctx(t)); err != nil {
+		// One step admits a whole part (up to the full tail at once).
+		importCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		_, err = third.archiveImportStep(importCtx)
+		cancel()
+		if err != nil {
 			t.Fatal(err)
 		}
 		state, e := third.store.disposition(desc.ID)
