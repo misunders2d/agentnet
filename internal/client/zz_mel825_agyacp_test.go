@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,6 +47,9 @@ func TestAgyACPProcessHelper(t *testing.T) {
 		}
 		json.NewEncoder(f).Encode(v)
 		f.Close()
+	}
+	if prior, _ := os.ReadFile(log); mode == "steer-race" && bytes.Contains(prior, []byte(`"process"`)) {
+		mode = "answer" // the race happens once; the follow-up runs plainly
 	}
 	record(map[string]any{"process": args})
 	in := make(chan map[string]any, 16)
@@ -143,12 +147,17 @@ func TestAgyACPProcessHelper(t *testing.T) {
 					chunk("Answer for: the original request")
 					reply(first, map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
 				case "steer-race":
-					// The original finished just as the correction was written:
-					// agy runs the correction as the next turn.
+					// The original finished with its own answer just as the
+					// correction was written: agy would run the correction as
+					// the next turn, so AgentNet cancels it there.
 					chunk("Answer for: the original request")
 					reply(first, map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
-					chunk("Answer for: " + promptText(correction))
-					reply(correction["id"], map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
+					if cancel := next(); cancel["method"] == "session/cancel" {
+						reply(correction["id"], map[string]any{"stopReason": "cancelled"})
+					} else {
+						chunk("Answer for: " + promptText(correction))
+						reply(correction["id"], map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
+					}
 				default:
 					reply(first, map[string]any{"stopReason": "end_turn"}) // the handover
 					chunk("Answer for: " + promptText(correction))
@@ -306,6 +315,49 @@ func agyACPLive(t *testing.T) {
 	}
 }
 
+// agy answered the original before it read the correction: the original's
+// answer stands, the correction was cancelled in that process, and the edit
+// is the linked follow-up with its own answer.
+func agyACPEditRanAsFollowup(t *testing.T, a, alice *Agent, log agyACPFixtureLog, dir, conv, id, editID string, ref ControlRef) {
+	t.Helper()
+	waitState(t, a, id, stateAnswered)
+	if m := replyAt(t, alice, conv, id); !strings.Contains(m.Body, "Answer for: the original request") {
+		t.Fatalf("the original's own answer was not kept: %q", m.Body)
+	}
+	if n := log.count(t, "method", "session/cancel"); n != 1 {
+		t.Fatalf("%d session/cancel for the correction agy read too late", n)
+	}
+	eventually(t, "requester sees the edit queued as a follow-up", func() bool {
+		controls, err := alice.controlsOf(ref)
+		return err == nil && controls.EditExecution == "queued"
+	})
+	next, found, _, _, err := a.store.claimAgentPage("agy", a.Address, a.Self().Fingerprint(), 0, agentPage)
+	if err != nil || !found || next.ID != editID {
+		t.Fatalf("the edit is not the next turn: %+v %t %v", next, found, err)
+	}
+	next.nativeAttempt = 1
+	a.runJob(tctx(t), next, &Responder{Harness: "agy", Dir: dir, Timeout: time.Minute}, nil)
+	if n := log.count(t, "process", ""); n != 2 {
+		t.Fatalf("%d processes, want the original's and the follow-up's", n)
+	}
+	if prompts := log.prompts(t); len(prompts) != 3 || !strings.Contains(prompts[2], "Moscow") {
+		t.Fatalf("the follow-up did not carry the edit: %q", prompts)
+	}
+	eventually(t, "requester sees the follow-up answered", func() bool {
+		controls, err := alice.controlsOf(ref)
+		return err == nil && controls.EditExecution == "answered"
+	})
+	if state := jobState(t, a, id); state != stateAnswered {
+		t.Fatalf("the follow-up changed the answered original to %q", state)
+	}
+	eventually(t, "the follow-up's own answer", func() bool {
+		_, n := convMsg(t, alice, conv, func(m ConvMessage) bool {
+			return (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && strings.Contains(m.Body, "Answer for: Give me tomorrow's weather forecast in Moscow")
+		})
+		return n == 1
+	})
+}
+
 // agyACPCommand is the harness's own launch, selected for ACP.
 func agyACPCommand(t *testing.T, ctx context.Context, dir string, extra ...string) *exec.Cmd {
 	t.Helper()
@@ -339,7 +391,9 @@ func agyACPLaunchSelection(t *testing.T) {
 func agyACPBridgeCases(t *testing.T) {
 	for _, tc := range []struct{ mode, steer, answer, attention string }{
 		{mode: "steer", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
-		{mode: "steer-race", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
+		// The original answered before agy read the correction: that answer
+		// stands and the correction stays queued as the follow-up.
+		{mode: "steer-race", steer: steerQueued, answer: "Answer for: the original request"},
 		// The live failure: the correction follows the request at once and
 		// the request's own write is slow; agy must still see them in order.
 		{mode: "steer-early", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
@@ -435,6 +489,9 @@ func agyACPBridgeCases(t *testing.T) {
 					t.Fatalf("permission answer %v, want only the one-time rejection", choice)
 				}
 			}
+			if n, want := log.count(t, "method", "session/cancel"), map[bool]int{true: 1}[tc.mode == "steer-race"]; n != want {
+				t.Fatalf("%d session/cancel, want %d", n, want)
+			}
 			if n := log.count(t, "process", ""); n != 1 {
 				t.Fatalf("%d processes", n)
 			}
@@ -445,7 +502,7 @@ func agyACPBridgeCases(t *testing.T) {
 // The owner's report: an edit of a request agy is still working on reaches
 // the running turn. One process, one answer to the edited text, no follow-up.
 func agyACPEditSteersRunningRequest(t *testing.T) {
-	for _, mode := range []string{"steer", "crash"} {
+	for _, mode := range []string{"steer", "crash", "steer-race"} {
 		t.Run(mode, func(t *testing.T) {
 			log, dir := agyACPFixture(t, mode)
 			w, _, packet, _ := groupTurnsFixture(t)
@@ -495,6 +552,10 @@ func agyACPEditSteersRunningRequest(t *testing.T) {
 					t.Fatalf("a lost process left the request %q", state)
 				}
 				noReply(t, w.alice, packet.State.Conv, id)
+				return
+			}
+			if mode == "steer-race" {
+				agyACPEditRanAsFollowup(t, a, w.alice, log, dir, packet.State.Conv, id, editID, ref)
 				return
 			}
 			waitState(t, a, id, stateAnswered)

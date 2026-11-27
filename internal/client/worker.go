@@ -1053,6 +1053,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		acp.close()
 		// Its outcome is read in the stream transport's terms (agy.result).
 		out, failure, auth := acp.outcome()
+		if acp.lateCorrection() {
+			endWarm(false) // agy may still be on the cancelled correction
+		}
 		if failure != "" {
 			nativeFailure = failure
 		} else {

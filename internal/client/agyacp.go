@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,12 +60,18 @@ type agyACPBridge struct {
 	denied, waiting, auth, bad bool
 	failure                    string
 	answering                  bool
+	said                       int  // answer text bytes read this request
+	late                       bool // a correction went to agy after its request ended
 }
 
 type acpSteer struct {
 	id, text string
 	result   chan string
+	said     int  // the request's said when this correction was made
+	writing  bool // its write has begun
 }
+
+var errACPSkipped = errors.New("not written: the request already ended")
 
 // agyACPSupported reports whether the selected agy launch has the ACP
 // server: `agy acp --help` on the same launcher and environment. A refusal
@@ -196,7 +203,7 @@ func (b *agyACPBridge) writeLocked(v any, why string) {
 	go func() {
 		defer b.writes.Done()
 		agyACPBeforeWrite(v)
-		if b.send(turn, v) != nil && why != "" {
+		if b.send(turn, v, nil) != nil && why != "" {
 			b.mu.Lock()
 			b.failLocked(why)
 			b.mu.Unlock()
@@ -204,7 +211,9 @@ func (b *agyACPBridge) writeLocked(v any, why string) {
 	}()
 }
 
-func (b *agyACPBridge) send(turn uint64, v any) error {
+// send writes v in its turn; keep, when set, decides at that turn whether
+// it is still to be written.
+func (b *agyACPBridge) send(turn uint64, v any, keep func() bool) error {
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
 	for b.sentWrites != turn {
@@ -214,6 +223,9 @@ func (b *agyACPBridge) send(turn uint64, v any) error {
 		b.sentWrites++
 		b.writeTurn.Broadcast()
 	}()
+	if keep != nil && !keep() {
+		return errACPSkipped
+	}
 	if b.ctx.Err() != nil {
 		return b.ctx.Err()
 	}
@@ -253,7 +265,7 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 			return steerUnknown
 		}
 	}
-	s := &acpSteer{id: id, text: text, result: make(chan string, 1)}
+	s := &acpSteer{id: id, text: text, result: make(chan string, 1), said: b.said}
 	rpc := b.idLocked()
 	b.steers[rpc] = s
 	b.prompts = append(b.prompts, rpc) // before the write: the handover can come first
@@ -265,7 +277,16 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 	go func() {
 		defer b.writes.Done()
 		agyACPBeforeWrite(call)
-		if b.send(turn, call) != nil {
+		keep := func() bool {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			if b.steers[rpc] != s {
+				return false // the request ended first: it is a follow-up
+			}
+			s.writing = true
+			return true
+		}
+		if b.send(turn, call, keep) != nil {
 			b.mu.Lock()
 			if b.steers[rpc] == s {
 				delete(b.steers, rpc)
@@ -448,6 +469,7 @@ func (b *agyACPBridge) updateLocked(raw json.RawMessage) {
 	switch p.Update.Kind {
 	case "agent_message_chunk":
 		if p.Update.Content.Type == "text" {
+			b.said += len(p.Update.Content.Text)
 			if len(b.run) <= maxOutput {
 				b.run += p.Update.Content.Text
 				b.run = b.run[:min(len(b.run), maxOutput+1)] // the worker marks it cut off
@@ -584,7 +606,8 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 		}
 	}
 	var r struct {
-		Stop string `json:"stopReason"`
+		Stop  string          `json:"stopReason"`
+		Usage json.RawMessage `json:"usage"`
 	}
 	if json.Unmarshal(result, &r) != nil || r.Stop == "" {
 		b.bad = true
@@ -602,10 +625,19 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 		// Not the turn's end while a prompt is still open: the request
 		// settles only on its last outstanding prompt's reply.
 		if i := slices.IndexFunc(b.prompts, func(p int64) bool { return p > id }); i >= 0 {
-			// The handover: agy ended this prompt because a newer one joined
-			// the turn. The newer prompt is taken; what was said before is not
-			// its answer.
-			if s := b.steers[b.prompts[i]]; s != nil {
+			next := b.steers[b.prompts[i]]
+			if len(r.Usage) > 0 || next != nil && b.said != next.said {
+				// agy finished this prompt with its own answer before it read
+				// the correction: the request is answered, and the correction
+				// is the person's next turn.
+				b.completeLocked(r.Stop)
+				return
+			}
+			// The handover, as agy 1.5.18 does it: a bare end_turn (no usage,
+			// no answer text since the correction) because a newer prompt
+			// joined the turn. The newer prompt is taken; what was said before
+			// is not its answer.
+			if s := next; s != nil {
 				delete(b.steers, b.prompts[i])
 				b.seen[s.id] = s.text
 				s.result <- steerAccepted
@@ -621,12 +653,45 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 		b.run, b.answering = "", false
 		return
 	}
+	b.completeLocked(r.Stop)
+}
+
+// completeLocked ends the request with its own answer. A correction still
+// open was not taken: it returns queued, to run as the linked follow-up, and
+// one agy already received is cancelled so it does not run here unseen.
+func (b *agyACPBridge) completeLocked(stop string) {
 	if strings.TrimSpace(b.run) != "" {
 		b.answer = b.run
 	}
-	b.stop, b.complete = r.Stop, true
+	b.stop, b.complete = stop, true
+	for rpc, s := range b.steers {
+		b.late = b.late || s.writing
+		delete(b.steers, rpc)
+		s.result <- steerQueued
+	}
+	b.prompts = nil
+	if !b.late {
+		b.endLocked()
+		_ = b.input.Close()
+		return
+	}
+	turn := b.madeWrites
+	b.madeWrites++
+	b.writes.Add(1)
+	go func() {
+		defer b.writes.Done()
+		_ = b.send(turn, map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": b.session}}, nil)
+		_ = b.input.Close()
+	}()
 	b.endLocked()
-	_ = b.input.Close()
+}
+
+// lateCorrection reports a correction agy received after the request ended:
+// its process may still be working on it, so it is not kept warm.
+func (b *agyACPBridge) lateCorrection() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.late
 }
 
 // outcome is the request's terminal view in the stream transport's terms, so
