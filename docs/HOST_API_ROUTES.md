@@ -137,6 +137,7 @@ and catch the error. Failures differ by platform.
 | `needs_you`, `held` | D B | `ConvItem`s that wait for this person: decisions, and held person turns. See Request states. |
 | `review`, `quarantine` | D B | Received device items and review notices, and held envelopes with `code` and `action`. |
 | `directory`, `agent_devices`, `model_reports` | D B | The relay's member list, the devices that say they run an agent (a hint), and private model reports. Each report carries exact `host`, `host_key`, `agent_id`, `model`, optional `reasoning`, `harness`, `executor`, `at` (Unix seconds), and `revision`. Reports are historical observations for current own-human readers, not current settings; match the exact agent/host/key and show absent reasoning honestly. |
+| `removed_devices` | D | This person's own devices removed from their signed roster (exact key). Their device threads are searchable history, not active chats. Display only. |
 | `link`, `links`, `history`, `group_invitations` | D B | This device's own join request, new devices asking to join, history copying, and group invitations. |
 | `reminders` | DB | Pending personal reminders, soonest first, resolving exact stored originals on this device. |
 | `blocked` | DB | The persons you blocked. Their direct messages, questions, tasks and controls outside groups are held quietly on every own device, and unblocking does not release them. Private: never sent to anyone else. |

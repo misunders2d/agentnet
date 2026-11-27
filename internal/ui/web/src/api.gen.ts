@@ -915,6 +915,7 @@ export interface Overview {
   history?: HistoryCopy[];
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
+  removed_devices?: string[];
   model_reports?: PrivateModelReport[];
   update_required?: UpdateRequiredView;
   transport_error?: string;

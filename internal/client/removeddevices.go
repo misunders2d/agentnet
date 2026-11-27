@@ -12,11 +12,19 @@ import (
 // key appeared in verified roster history and is no longer a current member.
 // Address reuse, a pending replacement key and standalone services are not
 // inferred to be removed. Saved grants and historical messages stay intact.
-func (a *Agent) RemovedDevices() ([]string, error) {
+func (a *Agent) RemovedDevices() ([]string, error) { return a.removedDevices("('self','pinned')") }
+
+// OwnRemovedDevices is RemovedDevices for this installation's own person
+// only: devices the person removed from their own signed roster. Their
+// device threads are history, never active chats (AGENTS.md: retired
+// configurations stay searchable history). Display only, never authority.
+func (a *Agent) OwnRemovedDevices() ([]string, error) { return a.removedDevices("('self')") }
+
+func (a *Agent) removedDevices(states string) ([]string, error) {
 	rows, err := a.store.db.Query(`SELECT p.address,p.public,c.record,n.record,coalesce(d.fingerprint,'')
  FROM peers p JOIN person_chain c ON EXISTS
  (SELECT 1 FROM json_each(c.record,'$.devices') h WHERE json_extract(h.value,'$.address')=p.address)
- JOIN persons n ON n.person=c.person AND n.state IN ('self','pinned')
+ JOIN persons n ON n.person=c.person AND n.state IN ` + states + `
  LEFT JOIN person_devices d ON d.address=p.address
  WHERE p.pending IS NULL ORDER BY p.address`)
 	if err != nil {

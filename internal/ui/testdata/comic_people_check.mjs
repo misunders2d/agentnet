@@ -50,6 +50,31 @@ assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Bezos", "Agent · not
 const list = m.chatList({ ...o, threads: [{ id: "t1", peer: "admin/pixel", title: "x", last: "hi", last_at: "2026-10-05T10:00:00Z", count: 1, review: 0, unread: 0, running: 0, waiting: false, key_changed: false, notices: 0 }] }, {});
 assert.equal(list.length, 0, "unbound agent history is not an active recipient");
 
+// A device you removed from your roster (admin/phone-3 replaced) is history,
+// not a "Not linked to a person" chat: its unbound device thread leaves the
+// active list, on a computer with or without an agent; its name stays yours.
+const phoneThread = { id: "old1", peer: "admin/phone-3", agent_host: "admin/phone-3", title: "x", last: "hi", last_at: "2026-10-18T10:00:00Z", count: 1, review: 0, unread: 0, running: 0, waiting: false, key_changed: false, notices: 0, state: "archived" };
+for (const agent of [true, false]) {
+  const seen = laptop(agent);
+  assert.equal(m.chatList({ ...seen, threads: [phoneThread] }, {}).length, 1, "before: the unlinked device thread was listed (agent=" + agent + ")");
+  const gone = { ...seen, removed_devices: ["admin/phone-3"] };
+  assert.equal(m.chatList({ ...gone, threads: [phoneThread] }, {}).length, 0, "a removed own device's thread is not an active chat (agent=" + agent + ")");
+  assert.equal(m.chatList({ ...gone, threads: [], topics: [{ peer: "admin/phone-3", total: 3, archived: 3, archived_unread: 0, latest: phoneThread }] }, {}).length, 0, "nor its archived topics (agent=" + agent + ")");
+  r = m.threadRow("admin/phone-3", gone, {});
+  assert.notEqual(r.subtitle, "Not linked to a person", "history keeps it yours");
+  assert.deepEqual(m.deviceWho("admin/phone-3", gone).relation, "own");
+}
+r = m.threadRow("admin/phone-3", { ...laptop(false), removed_devices: ["admin/phone-3"] }, {});
+assert.deepEqual([r.kind, r.title, r.subtitle], ["person", "Your Phone 3", "Removed device"]);
+// This computer's current agent, once asked from the removed phone, keeps its row.
+const aid = "0123456789abcdef0123456789abcdef";
+const bound = { ...phoneThread, id: "old2", agent_host: "admin/laptop", agent_key: "11111111-a", agent_id: aid };
+const agentNames = { [aid]: "Claude", [aid + "#current"]: "true", [aid + "#host"]: "admin/laptop", [aid + "#host_key"]: "11111111-a" };
+assert.equal(m.chatList({ ...o, removed_devices: ["admin/phone-3"], threads: [bound] }, agentNames).length, 1, "a current agent's topic asked from it stays listed");
+// Another person's device is never taken for yours by this list.
+assert.equal(m.deviceWho("vitalii/phone", { ...o, removed_devices: ["vitalii/phone"] }).relation, "person");
+assert.equal(m.removedOwnDevice("admin/phone-3", { ...o, person: undefined, removed_devices: ["admin/phone-3"] }), false, "no person here: nothing is yours");
+
 // Message authors in the laptop↔Pixel thread.
 const q = { id: "q1", dir: "in", from: "admin/pixel", kind: "question", body: "?", state: "answered" };
 const a = { id: "a1", dir: "out", from: "admin/laptop", kind: "answer", reply_to: "q1", body: "!" };

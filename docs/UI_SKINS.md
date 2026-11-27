@@ -1032,6 +1032,11 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Ask, Do it or Bring in toward it, only when it says so: a phone or a
   browser never does, and its messages are its person's. Both are hints for
   display and offers; nothing a skin does with them grants anything.
+- Removed devices: `overview.removed_devices` (desktop) lists this person's
+  own devices removed from their roster. Their unbound device threads are
+  history: leave them out of the active chat list, keep them findable by
+  topic search, and name them as yours ("Your Phone 3 · Removed device"),
+  never as a device not linked to a person.
 - People, not addresses: name a device by its person and device
   ("Vitalii · Phone", "You · Pixel"; the device in words, dashes as spaces);
   keep addresses for verified-detail panels. When a person's name is also

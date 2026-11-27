@@ -4452,3 +4452,32 @@ without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
 161 px desktop), and the inline "saw N messages" control opens What it saw and
 closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
 
+
+## A removed own device is history, not a chat (v0.11.13)
+
+Owner, 2026-11-27: after removing admin/android-phone-3 (replaced by
+android-phone-4), "Android phone 3 · Not linked to a person" appeared among
+the active chats; deleting it brought it back twice. Cause: while the phone
+was on the roster its unbound device threads were "Agent history" rows,
+already left out of the active list (MEL-529); once removed, no current
+roster named it, so the same threads fell through to an unknown-device person
+row. The three returns were three one-message archived topics in that one
+row: each "Delete topic" erased exactly one (the store's last three device
+erasures, in order: Oct 28, Oct 24, Oct 18), and the row showed the next.
+Device-history replicas and the history copy skip erased turns already
+(devicehistory.go, devicehistoryqueue.go) and re-created nothing.
+
+Rule followed: AGENTS.md "One active agent per harness per device"
+(retired configurations and unbound legacy conversations remain searchable
+history). The overview now names this person's own removed devices
+(`removed_devices`, from `OwnRemovedDevices`: the exact pinned key appeared in
+the person's verified roster history and is no longer current). Their
+unbound device threads leave the active list; a current agent's topic once
+asked from them keeps its agent row; the threads stay reachable through
+topic search (`GET /api/topics`) and read as yours ("Your Phone 3 · Removed
+device", or Agent history on a computer running an agent). No control
+changed: there is no new interaction to time. Evidence:
+`comic_people_check.mjs` (fails on the old model with "a removed own
+device's thread is not an active chat"), `TestRemovedDevicesExactCurrentKey`
+(own list), `TestOwnPermissionInventory` (overview field after a real
+removal).

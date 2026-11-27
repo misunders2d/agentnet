@@ -22,6 +22,11 @@ func TestRemovedDevicesExactCurrentKey(t *testing.T) {
 		if err != nil || slices.Contains(got, phone.Address) != want || slices.Contains(got, w.bob.Address) {
 			t.Fatalf("removed peers: %v %v; want removed=%v", got, err, want)
 		}
+		// The phone is this person's own: the own list agrees exactly.
+		own, err := w.alice.OwnRemovedDevices()
+		if err != nil || slices.Contains(own, phone.Address) != want || slices.Contains(own, w.bob.Address) {
+			t.Fatalf("own removed devices: %v %v; want removed=%v", own, err, want)
+		}
 	}
 	check(false)
 	if err = w.alice.RemoveDevice(tctx(t), phone.Address); err != nil {
