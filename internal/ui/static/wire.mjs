@@ -44,7 +44,8 @@ export const CapReminderSync = "rem1", SubReminderSync = "reminder-sync";
 // rem2 replaces rem1's capability slot: it reads reminders and blocks (protocol/blocksync.go).
 export const CapReminderSyncV2 = "rem2", SubBlockSync = "block-sync";
 // rem3 replaces rem2's slot (protocol/blocksync.go): it also reads device chat
-// deletions. A desktop lists it; this page still lists rem2 and reads it as rem2.
+// deletions. Desktop and this page list it in rem2's place; a peer listing rem3
+// reads as rem2 and rem1 too, and one listing only rem2 is treated as before.
 export const CapReminderSyncV3 = "rem3";
 export const CapTopicStateSync = "tss1", CapTopicStateSyncV2 = "tss2", SubTopicStateSync = "topic-state-sync"; // tss2 also reads tss1; neither is implied by rm1
 export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";

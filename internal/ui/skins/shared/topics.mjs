@@ -31,7 +31,7 @@ export function topicControls(root,{api,choose,chooseRoot,fresh,changed,announce
   const filters=node('div','',{className:'topics-actions'}),names=node('div','',{className:'topics-actions'}),renamePanel=node('form'),rows=node('ul','',{className:'topics-rows'}),actions=node('div','',{className:'topics-actions'}),status=node('p','',{className:'hint'}),retry=control('Try again',()=>page.retry()),more=control('Show more',()=>page.more());
   renamePanel.hidden=true;
   status.setAttribute('role','status');rows.setAttribute('aria-label','Active topics');
-  popup.append(node('h2','All topics'),control('Close',finish),search,clear,filters,names,renamePanel,actions,status,retry,rows,more,node('p',scope.conv?'Done and Reopen are shared. Conversation topic names change for everyone with access. Main and device names, Archive and Delete for me stay personal.':'Names, Done and Archive sync across your linked devices. Delete for me leaves others’ copies.',{className:'hint'}));
+  popup.append(node('h2','All topics'),control('Close',finish),search,clear,filters,names,renamePanel,actions,status,retry,rows,more,node('p',scope.conv?'Done and Reopen are shared. Conversation topic names change for everyone with access. Main and device names and Archive stay personal.':'Names, Done and Archive sync across your linked devices.',{className:'hint'}));
   root.append(popup);for(const n of siblings)n.inert=true;bar.inert=true;
   const flat=!!person;let filter='active',selected=new Set(),counts=new Map(),busy=false,confirming=false,note='',cards=new Map(),queryScope='',editing=null;
   const stable=holdChoices(rows,{key:t=>t.id,onChange:()=>render()});
@@ -67,7 +67,7 @@ export function topicControls(root,{api,choose,chooseRoot,fresh,changed,announce
   function renderActions(){
    if(confirming)return;actions.replaceChildren();if(!selected.size)return;
    actions.append(node('span',selected.size+' selected'),control('Cancel selection',()=>{selected.clear();counts.clear();stable.release();render();}));
-   for(const [what,label]of [['delete','Delete for me'],['done','Mark done'],['archive','Archive']]){const b=control(label,()=>confirm(what,label));b.disabled=busy;actions.append(b);}
+   for(const [what,label]of [['done','Mark done'],['archive','Archive']]){const b=control(label,()=>confirm(what,label));b.disabled=busy;actions.append(b);}
   }
   function render(){
    if(dead||all!==popup)return;
@@ -92,7 +92,7 @@ export function topicControls(root,{api,choose,chooseRoot,fresh,changed,announce
    for(const id of cards.keys())if(!keep.has(id))cards.delete(id);placeChoices(rows,nodes);renderActions();
   }
   function confirm(what,label){
-   confirming=true;const ids=[...selected],covered=Object.fromEntries(ids.map(id=>[id,counts.get(id)]));actions.replaceChildren(node('p',label+' '+ids.length+' topics? '+(what==='delete'?'Other people keep their copies. People chats: your devices; agent chats: this device.':what==='done'&&scope.conv?'Shared with everyone.':'On your linked devices.')));
+   confirming=true;const ids=[...selected],covered=Object.fromEntries(ids.map(id=>[id,counts.get(id)]));actions.replaceChildren(node('p',label+' '+ids.length+' topics? '+(what==='done'&&scope.conv?'Shared with everyone.':'On your linked devices.')));
    const cancel=()=>{if(timer)win.clearTimeout(timer);timer=null;confirming=false;note='Cancelled; nothing changed.';render();};
    actions.append(control('Cancel',cancel),control('Confirm',()=>{
     actions.replaceChildren(control('Undo',cancel));note='Will apply in six seconds.';status.textContent=note;

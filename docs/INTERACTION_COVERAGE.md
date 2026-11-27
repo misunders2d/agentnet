@@ -4495,8 +4495,8 @@ people's removed devices go "same as mine".
 
 Delete chat. A device chat's row (one peer, or one agent by host, key and id:
 `directChatKey` / `topicAgentKey`) holds every topic with it. The header menu
-keeps "Delete topic…" (exactly that topic) and adds "Delete chat…", which
-posts `{peer, thread, chat: true}`: `DeleteDeviceChat` erases every topic of
+adds "Delete chat…" ("Delete topic…" was then removed: a topic is archived,
+never deleted; see the next section), which posts `{peer, thread, chat: true}`: `DeleteDeviceChat` erases every topic of
 that row in one transaction (`eraseDeviceThreads`). The row leaves the list
 at once (`store.deletingRows`, by `directChatKey` and its newest `last_at`,
 as tdlib removes a chat locally first); a refusal brings it back, and a
@@ -4506,9 +4506,13 @@ engines): a clear with no conversation naming the erased turns, held for
 each own device until it reads `rem3`, which took `rem2`'s capability slot
 (owner decision; no 33rd name). The note reads "Deleted on all your devices:
 here now; your N other device(s) remove it once each is connected and runs an
-AgentNet version that applies it, and until then still show it. The other
-person keeps their copy." The dialog: "deleted here and, once they connect,
-on your other linked devices". Evidence for sync:
+AgentNet version that applies it, and until then still show it.", then who
+keeps a copy as far as it is known (`DeviceChatKeeper`, engine
+`deviceChatKeeper`: nothing for another current device of yours, "Your
+removed device is not told.", "<name> keeps their copy.", "That device keeps
+its copy.", or "Others keep their copies." when the chat spans several
+peers). The dialog: "deleted here and, once they connect and update, on your
+other linked devices", with the topic count. Evidence for sync:
 `TestDeviceChatDeletionOnAllOwnDevices` (a v0.11.13-style phone listing rem2
 holds the deletion while still getting block sync; updated to rem3 it
 erases all three topics; re-delivered and fresh history stay erased; the
@@ -4522,7 +4526,8 @@ three, the chat delete leaves none; fails before with "delete chat: 400");
 `TestDeleteDeviceChatTakesArchivedTopics` (two of three topics archived by the
 clock: one delete leaves no row, not even an archived count);
 `convclear_engine_check.mjs` (the browser engine: three topics, one chat
-delete, no row left, nothing sent).
+delete, no row left; clears queued for this person's own devices only,
+nothing told to the other person).
 
 Others' removed devices. `removed_devices` is now `[{address, person}]` for
 any verified person (`RemovedDeviceOwners`; it replaces `OwnRemovedDevices`),
@@ -4538,3 +4543,32 @@ it with Bob; its thread found by topic search; the overview's former source,
 (engine list for Bob's dropped phone and for this person's own dropped
 tablet, kept in kv "person"; a reused address with another key is not
 removed; fails on the old engine with `removed_devices` undefined).
+
+
+## A topic is archived, a chat is deleted (v0.11.14)
+
+Owner, 2026-11-27: a single topic offers only Archive and Mark done (and
+Reopen); erasing for good is only "Delete chat…" for the whole chat
+(docs/DECISIONS.md). Removed controls: the conversation header's "Delete
+topic…" (device chats), the All topics bulk "Delete for me" (Comic, Office,
+and the shared `skins/shared/topics.mjs` source). The routes stay for skins
+that call them. Evidence the controls are gone: `latency_fixture.mjs` topics
+suite (`topics.bulk-*`: Archive is still timed; no Delete control is offered
+in All topics; the device chat menu offers "Delete chat…" and no "Delete
+topic…"), `chattopics_rendered.cjs` (no Delete button in All topics, no
+`/api/topic/delete` request), `review_topics_ui_check.mjs` (Comic bulk
+confirm for Archive and Mark done only; no Delete button),
+`shared_review_topics_check.mjs` (shared popup: Archive route kept, no
+Delete), `skin_contract_check.cjs` (Comic and Office header menus: no "Delete
+topic…"; "Delete chat…" still confirms). The removed timings `topics.bulk-delete-review` and
+`topics.bulk-delete-confirm` no longer exist.
+
+Delete chat stays timed: `topics.direct-chat-delete-refused` (the row leaves
+before the refusal, then returns with the reason) and
+`topics.direct-chat-delete` (the row stays gone with the answer held; the
+other agent's row on the same device stays). An agent chat whose topics span
+several peers says "Others keep their copies." (Go `DeviceChatNote`, engine
+`eraseDeviceThreads` with the clicked peer). A device with no person record
+marks its deletions told (no other device exists to tell; a device linked
+later gets them from `replayErased`), so a content change no longer
+re-sweeps them.

@@ -116,16 +116,16 @@ nodes(c.host.get()).find(n=>n.tag==='input'&&n.props.type==='search').props.onCh
 c.host.stop();
 // An explicit bulk confirmation dispatches immediately with its captured IDs.
 // Panel lifetime and repeated input cannot cancel or repeat that request.
-for(const what of ['archive','done','delete'])for(const leave of ['stay','close','scope','unmount','cancel']){
+for(const what of ['archive','done'])for(const leave of ['stay','close','scope','unmount','cancel']){
  const f=component(),calls=[],notices=[],gate=deferred();
  let p={...props,open:true,flat:{...props.flat,topics:[row('exact',2),{...row('second'),count:3}],change:(...args)=>{calls.push(args);return gate.promise;}}};
  f.store.toast=(...args)=>notices.push(args);
  f.host.start(()=>f.exports.AllTopics(p));await drain();
  const button=label=>nodes(f.host.get()).find(n=>n.tag==='Button'&&n.props.children[0]===label);
  for(const id of ['exact','second']){nodes(f.host.get()).find(n=>n.tag==='input'&&n.props['aria-label']==='Select needle '+id).props.onChange();await drain();}
- button(what==='delete'?'Delete for me':what==='done'?'Mark done':'Archive').props.onClick();await drain();
+ assert(!nodes(f.host.get()).some(n=>n.tag==='Button'&&String(n.props.children?.[0]??n.props.children).includes('Delete')),'one topic is never deleted: no bulk delete offered (owner, 2026-11-27)');
+ button(what==='done'?'Mark done':'Archive').props.onClick();await drain();
  assert.equal(calls.length,0,'review alone makes no change');
- if(what==='delete')assert(nodes(f.host.get()).some(n=>n.tag==='p'&&n.props.children.join('').includes("can't be undone")),'delete review states irreversibility');
  if(leave==='cancel'){
   button('Cancel').props.onClick();await drain();assert.equal(calls.length,0,'Cancel before confirmation makes no change');f.host.stop();continue;
  }

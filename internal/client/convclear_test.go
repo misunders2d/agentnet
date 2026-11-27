@@ -652,3 +652,42 @@ func TestEraseSweepOnlyWhenWorkMayExist(t *testing.T) {
 		return body == ""
 	})
 }
+
+// A device with no person has no other device to tell: its untold
+// deletions do not hold the sweeper, which would otherwise re-sweep on
+// every content change (review of 189a5371). They stay untold, so a person
+// made here later still shares them.
+func TestEraseSweepNoPersonUntoldDoesNotRepeat(t *testing.T) {
+	w := newWorld(t, "")
+	a := w.alice
+	if _, ok, err := a.store.selfPerson(a.Address); err != nil || ok {
+		t.Fatalf("this device has a person: %v %v", ok, err)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion, shared) VALUES('', ?, 'gone', 'd1', 0)`, a.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, a)
+	eventually(t, "the startup sweep", func() bool { return a.eraseSweeps.Load() > 0 })
+	settled := func() int64 {
+		for {
+			n := a.eraseSweeps.Load()
+			time.Sleep(300 * time.Millisecond)
+			if a.eraseSweeps.Load() == n {
+				return n
+			}
+		}
+	}
+	swept := settled()
+	for i := 0; i < 10; i++ {
+		a.NoteChange()
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("an untold deletion with no person started %d sweeps", got-swept)
+	}
+	var shared int
+	if err := a.store.db.QueryRow(`SELECT shared FROM conv_erased WHERE lid = 'gone'`).Scan(&shared); err != nil || shared != 0 {
+		t.Fatalf("the deletion was marked told with nobody told: %d %v", shared, err)
+	}
+}

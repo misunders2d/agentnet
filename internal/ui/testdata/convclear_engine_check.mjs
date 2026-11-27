@@ -208,6 +208,15 @@ check((await rowOf()).length === 0 && !((await a.overview()).topics || []).some(
 check((await deviceClears()).length === 4, 'queued for both own devices again');
 check((await b.store.all('inbox')).every((r) => r.sub !== wire.SubClear), 'nothing is told to the other person');
 
+// Threads of several peers (an agent's chat several devices talked to): the
+// note names no one keeper (client DeviceChatNote); one peer's names that peer.
+const v1From = async (s, bodyText) => { const raw = await wire.seal({ v: 1, id: id(), from: s.address, to: a.address, ts: Math.floor(now / 1000), kind: 'message', body: bodyText }, s.keys, a.pub); await w.receive(raw, a); return wire.parseEnvelope(raw).id; };
+const t5 = await v1('THREAD FIVE'), t6 = await v1From(phone, 'PHONE THREAD');
+const many = await a.eraseDeviceThreads([[phone.address, t6], [b.address, t5]], b.address);
+check(/ Others keep their copies\.$/.test(many.note) && !/keeps (their|its) copy/.test(many.note), "several peers' threads name no one keeper: " + many.note);
+const t7 = await v1('THREAD SEVEN'), one = await a.deleteDeviceChat(b.address, t7);
+check(/ bob keeps their copy\.$/.test(one.note), 'the clicked peer names the keeper: ' + one.note);
+
 // The phone updates (rem3): it applies exactly the named device-chat turns.
 await w.caps(phone, [...defaults, wire.CapConvClear, wire.CapReminderSyncV3]);
 await a.flushOutbox(); await w.drain(phone); await w.settle(phone);
@@ -239,5 +248,16 @@ check((await a.overview()).removed_devices === undefined, 'a re-enrolled address
 const prevA = await wire.parseRoster(a.me.json), nextA = await wire.nextRoster(a.keys, a.address, prevA, prevA.devices.filter((d) => d.address !== tablet.address), null);
 a.me = { ...(await a.personRecord([prevA, nextA], 'self', a.me)), published: true }; await a.store.write([{ s: 'kv', k: 'person', v: a.me }]); a.changed();
 assert.deepEqual((await a.overview()).removed_devices, [{ address: tablet.address, person: a.me.person }]); checks++;
+
+// A device with no person has nobody to tell yet: its untold deletions do not
+// start a share on every change (client sweepErased), and stay untold.
+{
+  const lone = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', fetch: async () => { throw Error('offline'); } });
+  await lone.store.write([{ s: 'erased', k: '|fp|gone', v: { conv: '', key: 'fp', lid: 'gone', deletion: id(), shared: false } }]);
+  let shares = 0; const share = lone.shareErased.bind(lone); lone.shareErased = async () => { shares++; return share(); };
+  for (let i = 0; i < 3; i++) await lone.sweepErased();
+  check(!lone.me && shares === 0 && (await lone.store.all('erased')).every((r) => !r.shared), 'no person: untold deletions start no share per change and stay untold (' + shares + ')');
+  lone.stop();
+}
 
 console.log(JSON.stringify({ shapes, checks }));

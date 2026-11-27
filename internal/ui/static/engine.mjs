@@ -10068,8 +10068,9 @@ export class Engine {
   // (forwardClear). The names stay here, so a late, retried or history copy
   // of an erased turn stays a skeleton nothing shows. Text that unfinished
   // work needs is hidden at once and erased by the local change that ends
-  // that work (sweepErased, on this engine's change feed). A device thread
-  // exists on this device only: deleting it tells no one.
+  // that work (sweepErased, on this engine's change feed). A device thread's
+  // deletion is told the same way, to this person's other devices only,
+  // each holding it until it reads rem3; the other person is told nothing.
 
   async loadErased() {
     this.erased = new Set((await this.store.all("erased")).map((r) => erasedKey(r.conv, r.key, r.lid)));
@@ -10115,9 +10116,11 @@ export class Engine {
   }
 
   // deleteConversation is POST /api/conversation/delete (ui livedelete.go):
-  // a conversation by id (all of this person's devices), a device thread
-  // by its peer and earliest message, or with chat the whole device chat
-  // (every topic of its row) — the last two on this device only.
+  // a conversation by id, a device thread by its peer and earliest message,
+  // or with chat the whole device chat (every topic of its row). Each is
+  // deleted here and told to this person's other devices (clr1; rem3 for the
+  // last two), never to anyone else. The bundled UI offers only the first
+  // and the last (owner, 2026-11-27: a topic is archived, a chat deleted).
   async deleteConversation(body) {
     if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["conv", "peer", "thread", "chat"].includes(k))) throw new Error("Name one conversation, or one thread and its peer.");
     if (body.peer || body.thread || body.chat) {
@@ -10146,8 +10149,9 @@ export class Engine {
   }
 
   // deleteThread erases exactly the device thread with peer whose earliest
-  // message is id, and the controls on its messages, here only.
-  async deleteThread(peer, id) { return this.eraseDeviceThreads([[peer, id]]); }
+  // message is id, and the controls on its messages, here and (rem3) on
+  // this person's other devices.
+  async deleteThread(peer, id) { return this.eraseDeviceThreads([[peer, id]], peer); }
 
   // deleteDeviceChat erases every topic of the chat row the device thread
   // (peer, id) is in (client DeleteDeviceChat: one row, topicPeerKey).
@@ -10155,7 +10159,7 @@ export class Engine {
     const all = (await this.threadSummaries()).filter((t) => !t.notice_only), at = all.find((t) => t.id === id && t.peer === peer);
     if (!at) throw new Error("No such conversation here.");
     const key = this.topicPeerKey(at);
-    return this.eraseDeviceThreads(all.filter((t) => this.topicPeerKey(t) === key).map((t) => [t.peer, t.id]));
+    return this.eraseDeviceThreads(all.filter((t) => this.topicPeerKey(t) === key).map((t) => [t.peer, t.id]), peer);
   }
 
   // deviceChatKeeper is client DeviceChatKeeper: who still keeps a copy of a
@@ -10168,7 +10172,9 @@ export class Engine {
     return owner && (owner.label || "").trim() ? owner.label.trim() + " keeps their copy." : "That device keeps its copy.";
   }
 
-  async eraseDeviceThreads(pairs) {
+  // peer is the one asked for: it names who keeps a copy, unless the threads
+  // span several peers (an agent's chat), which keep theirs (client DeviceChatNote).
+  async eraseDeviceThreads(pairs, peer) {
     const groups = await this.v1Threads(), threads = [];
     for (const [peer, id] of pairs) {
       const g = groups.find((g) => (g[0].display_topic||g[0].id) === id && g[0].peer === peer);
@@ -10191,11 +10197,12 @@ export class Engine {
       await this.store.write(ops,checks);
     } finally { await this.loadErased(); }
     this.changed();
-    return { note: deletionNote(true, await this.shareErased(), kept, await this.deviceChatKeeper(pairs[0][0])) };
+    const keeper = new Set(pairs.map(([p]) => p)).size > 1 ? "Others keep their copies." : await this.deviceChatKeeper(peer);
+    return { note: deletionNote(true, await this.shareErased(), kept, keeper) };
   }
 
   // clearCopies seals the parts of one deletion for devs (this person's other
-  // devices), each waiting until that device reads clr1. The fan names this
+  // devices), each waiting until that device reads clr1 (rem3 for a device chat). The fan names this
   // person's roster: the copies go to its devices only.
   async clearCopies(devs, conv, deletion, turns, admission = null) {
     const parts = [];
@@ -10315,7 +10322,7 @@ export class Engine {
     const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox"), ops = [], checks = [];
     for (const conv of new Set([...this.erased].map((k) => k.slice(0, k.indexOf("|"))))) ops.push(...await this.eraseOps(conv, inbox, outbox,checks));
     if (ops.length) { await this.store.write(ops,checks); this.changed(); }
-    if ((await this.store.all("erased")).some((r) => !r.shared)) await this.shareErased();
+    if (this.me && (await this.store.all("erased")).some((r) => !r.shared)) await this.shareErased(); // with no person there is nobody to tell yet: no sweep per change (client sweepErased)
   }
 
   async dropCached(m, retraction, checks=[]) {

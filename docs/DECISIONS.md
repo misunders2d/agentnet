@@ -1161,3 +1161,19 @@ All were read on November 25.
 **Implementation note (not an owner decision):** the first build gates only
 the app's first-run page, which Play reviews. The browser landing page and
 Comic's add-workspace sheet are not gated yet.
+
+## November 27, 2026 — a topic is archived, a chat is deleted
+
+**Owner decision (Sergey, November 27):** a single topic offers only Archive
+and Mark done (and Reopen); it never offers delete. Erasing for good is only
+"Delete chat…", for the whole chat (every topic of its row, archived ones
+too).
+
+- The bundled Comic UI and the built-in Office skin drop every entry point
+  that erases one topic: the header "Delete topic…", the All topics bulk
+  "Delete for me", and any topic menu item. The shared skin source
+  (`skins/shared/topics.mjs`) drops its "Delete for me" too.
+- `POST /api/topic/delete`, the one-topic form of
+  `POST /api/conversation/delete` (`{peer, thread}` without `chat`), and the
+  Go `DeleteThread` stay for compatibility: external skins may call them.
+  The route docs mark them "no longer offered by the bundled UI".

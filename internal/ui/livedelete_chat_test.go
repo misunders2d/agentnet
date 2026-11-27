@@ -45,7 +45,8 @@ func TestDeleteDeviceChatRemovesEveryTopic(t *testing.T) {
 	ts.Start()
 	t.Cleanup(ts.Close)
 	s = New(live, strings.TrimPrefix(ts.URL, "http://"), testToken)
-	// Delete topic stays what it was: that one topic only.
+	// The one-topic form stays for compatibility (no longer offered by the
+	// bundled UI, owner 2026-11-27): that one topic only.
 	body, _ := json.Marshal(map[string]any{"peer": alice.Address, "thread": latest})
 	if code := postJSON(t, ts, "/api/conversation/delete", string(body), nil); code != 200 {
 		t.Fatalf("delete topic: %d", code)

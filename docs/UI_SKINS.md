@@ -864,10 +864,12 @@ types are the Go structs in `internal/ui/*.go`, generated into
   are shared and attributed (`done_by: person`, `concluded_by`); any member
   may reopen. Send/ask accepts `topic` (`new` starts a topic), and
   `/api/topic/create` `{conv,id}` promotes a held logical message and replies.
-  Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive/Delete uses
+  Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive uses
   `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation before calling the host; never claim the change
-  before the host result. Delete for me in people chats
-  affects only this person's devices; others keep their copies. Archive
+  before the host result. Never offer deleting a topic (owner, 2026-11-27):
+  a topic is archived or marked done (and reopened); only a whole chat is
+  deleted. `/api/topic/delete` stays for skins that call it, but is no
+  longer offered by the bundled UI. Archive
   follows this person's own linked devices only; new messages/shared actions
   clear an archive. A named people-topic rename is shared with everyone who
   has access, including authorized topic guests. Say that before submitting;
@@ -1043,8 +1045,9 @@ types are the Go structs in `internal/ui/*.go`, generated into
   now another person's device) is never listed here.
   (`GET /api/approvals` keeps its own `removed_devices` as addresses.)
 - Deleting a device chat: `POST /api/conversation/delete` with
-  `{peer, thread}` deletes one topic; with `chat: true` it deletes every topic
-  of that chat's row. Offer both ("Delete topic…", "Delete chat…"); hide the
+  `{peer, thread, chat: true}` deletes every topic of that chat's row. Offer
+  "Delete chat…" only; `{peer, thread}` without `chat` (one topic) stays for
+  skins that call it, but is no longer offered by the bundled UI. Hide the
   whole row at once and bring it back if the host refuses. A row is one peer
   and one agent: an agent-history chat with unknown original agent is still
   per peer, never every peer's history on that host. Say how many topics go
