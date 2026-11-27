@@ -13,6 +13,10 @@ import (
 // Tests never show real desktop notifications or open terminals; the
 // tests of notification clicks set their own stand-in launcher.
 func TestMain(m *testing.M) {
+	if os.Getenv("AN_FAKE_CODEX_APP_SERVER") == "1" {
+		fakeCodexAppServer() // Codex Desktop's engine as an app server (codexchat_test.go)
+		os.Exit(0)
+	}
 	if os.Getenv("AGENTNET_TEST_CODEX_DRAIN") == "1" {
 		if err := runCodexDrainCLI(); err != nil {
 			fmt.Fprintln(os.Stderr, err)

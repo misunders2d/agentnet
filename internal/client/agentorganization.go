@@ -24,6 +24,9 @@ type admittedAgentContext struct {
 }
 
 func (a *Agent) captureAgentContext(j job, c ParticipationContext) error {
+	if j.editOf != "" {
+		return nil // the correction has no independently signed request to attest
+	}
 	var captured admittedAgentContext
 	err := a.store.db.QueryRow(`SELECT attempts,content_hash FROM inbox WHERE id=? AND state=? AND replica=0 AND conv=? AND pid=?`, j.ID, stateRunning, j.Conv, j.PID).Scan(&captured.Attempt, &captured.Hash)
 	if errors.Is(err, sql.ErrNoRows) {

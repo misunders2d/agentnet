@@ -1,0 +1,26 @@
+{
+  "api": 1,
+  "id": "office",
+  "name": "Office",
+  "entry": "entry.mjs",
+  "style": "style.css",
+  "document": "document.css",
+  "files": [
+    "entry.mjs",
+    "style.css",
+    "document.css",
+    "m/chunks/Composer.video-AAKLROU5.mjs",
+    "m/chunks/chunk-QSFGMLXL.mjs",
+    "m/emoji/en/data.json",
+    "m/emoji/en/messages.json",
+    "m/fonts/onest-cyrillic-ext-wght-normal.woff2",
+    "m/fonts/onest-cyrillic-wght-normal.woff2",
+    "m/fonts/onest-latin-ext-wght-normal.woff2",
+    "m/fonts/onest-latin-wght-normal.woff2",
+    "m/fonts/rubik-cyrillic-ext-wght-normal.woff2",
+    "m/fonts/rubik-cyrillic-wght-normal.woff2",
+    "m/fonts/rubik-latin-ext-wght-normal.woff2",
+    "m/fonts/rubik-latin-wght-normal.woff2",
+    "m/fonts/twemoji.woff2"
+  ]
+}

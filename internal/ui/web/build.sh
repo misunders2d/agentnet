@@ -25,7 +25,8 @@
 #   SKIN_OUT       where the package goes, SKIN_MANIFEST where skin.json goes
 #   SKIN_ID, SKIN_NAME, SKIN_AGENTNET   the manifest's id, name and agentnet
 #   SKIN_LICENSES, SKIN_SUMS            where LICENSES.txt and SHA256SUMS go
-# Unset, it builds Comic into static/skins/comic exactly as before.
+# Unset, it builds Comic into static/skins/comic exactly as before, then
+# Office (built in, skins/office/) into static/skins/office.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 out="${SKIN_OUT:-$here/../static/skins/comic}"
@@ -116,3 +117,16 @@ const fs = require("node:fs"), {execFileSync} = require("node:child_process");
 const files = fs.readdirSync(".", {recursive:true}).filter(file => fs.statSync(file).isFile()).sort();
 process.stdout.write(execFileSync("sha256sum", ["--", ...files]));
 ' > "$sums"
+# Office, built in (skins/office/README.md): the same build with its skin
+# layer, after Comic, so the two never drift apart.
+if [ -z "$overlay" ] && [ -z "${SKIN_OUT:-}" ]; then
+	office="$here/../skins/office"
+	SKIN_OVERLAY="$office/overlay" SKIN_OUT="$here/../static/skins/office" SKIN_ID=office SKIN_NAME=Office SKIN_AGENTNET= \
+		SKIN_LICENSES="$office/LICENSES.txt" SKIN_SUMS="$office/SHA256SUMS" SKIN_MANIFEST= sh "$here/build.sh"
+	# Files byte-identical to Comic's (emoji data, fonts, shared chunks) are
+	# embedded once: the program serves Comic's copy (static/skins.go
+	# builtinSkin); SHA256SUMS above still lists every file Office serves.
+	(cd "$here/../static/skins/office" && find . -type f ! -name skin.json | sort | while read -r f; do
+		if cmp -s "$f" "../comic/$f"; then rm "$f"; fi
+	done && find . -type d -empty -delete)
+fi

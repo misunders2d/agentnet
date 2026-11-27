@@ -29,7 +29,7 @@ run_partition() {
 		/^Test/ {
 			part=i++%n
 			if (client && n==24) {
-				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=15
+				if ($0=="TestTopicTransferWholeSnapshotCapacityAndRetry") part=0
 				if ($0=="TestGroupHistoryWitnessGuestDerivedParent") part=12
 				if ($0=="TestGroupInteractionVisitorLargeCurrentContext") part=16
 				if ($0=="TestTopicGuestInvitesOwnAgent") part=20
@@ -40,7 +40,14 @@ run_partition() {
 				if ($0=="TestWorkerStartupTimingAndLaunchFailure") part=23
 				if ($0=="TestNativeCursorSuppliesDeferredParentAttachments") part=2
 				if ($0=="TestRoomReciprocalRootQuestions") part=19
+				if ($0=="TestRoomBusyAncestorCallback") part=7
 				if ($0=="TestGroupParticipationHistoryInvalidUpgradeRecovery") part=21
+				if ($0=="TestOwnPersonTasksDirectAndGroup") part=11
+				if ($0=="TestConversationResourcesDoNotConsumeSelectedHistorySlots") part=13
+				if ($0=="TestGroupParticipationHistoryLinkedRestartReorder") part=1
+				if ($0=="TestHistoryWindowOfflineReceiptRestartAndCompletion") part=18
+				if ($0=="TestReadSyncOlderReaderRestartAndKeyFence") part=3
+				if ($0=="TestProactiveAgentMessageAdmission") part=8
 			}
 			if (client && n==12) {
 				if ($0=="TestGroupInteractionNamedMemberAndVisitor") part=1

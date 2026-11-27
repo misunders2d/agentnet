@@ -124,6 +124,11 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
   if (u.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>'); return; }
   if (u.pathname === '/boot.mjs') { res.setHeader('Content-Type', 'text/javascript'); res.end(boot); return; }
+  if (u.pathname === '/send-journal.mjs' && process.env.P11_DRAFTS_ONLY) {
+    res.setHeader('Content-Type', 'text/javascript');
+    res.end(fs.readFileSync(path.join(__dirname, '../web/src/send-journal.mjs')));
+    return;
+  }
   if (u.pathname.startsWith('/assets/')) {
     const file = path.resolve(assets, '.' + u.pathname.slice(7));
     if (file.startsWith(assets + path.sep) && fs.existsSync(file) && fs.statSync(file).isFile()) {
@@ -326,7 +331,11 @@ const server = http.createServer((req, res) => {
           await reopen();assert.equal(await field().inputValue(),'Unsent existing-topic draft');
           await page.locator('[role=log] [data-mid="'+ '1'.repeat(32)+'"]').waitFor();
           // Restore a real reply draft and verify the rendered quote and target.
-          await page.evaluate(({key,conv})=>{const d=JSON.parse(localStorage.getItem(key));d[conv].replyTo='1'.repeat(32);localStorage.setItem(key,JSON.stringify(d));},{key,conv});
+          await page.evaluate(async({key,conv})=>{
+            const {savedSendDrafts}=await import('/send-journal.mjs');
+            const saved=savedSendDrafts(localStorage,key);
+            saved.write(conv,{...saved.read(conv).draft,replyTo:'1'.repeat(32)});
+          },{key,conv});
           await reopen();await composer().getByRole('button',{name:'Cancel reply',exact:true}).waitFor();
           assert.equal((await draft()).replyTo,'1'.repeat(32));await shot('reply-draft-restored');
           await composer().getByRole('button',{name:'Cancel reply',exact:true}).click();
@@ -334,7 +343,10 @@ const server = http.createServer((req, res) => {
           await reopen();assert.equal(await field().inputValue(),'Unsent new-topic draft');assert.equal((await draft()).newTopic,true);
           await composer().getByRole('button',{name:'Keep this conversation',exact:true}).waitFor();
           // Missing destination never silently sends to Main or drops a reply.
-          await page.evaluate(({key,conv})=>localStorage.setItem(key,JSON.stringify({[conv]:{text:'Keep this draft',topic:'e'.repeat(32),replyTo:'f'.repeat(32)}})),{key,conv});
+          await page.evaluate(async({key,conv})=>{
+            const {savedSendDrafts}=await import('/send-journal.mjs');
+            savedSendDrafts(localStorage,key).write(conv,{text:'Keep this draft',topic:'e'.repeat(32),replyTo:'f'.repeat(32)});
+          },{key,conv});
           await reopen();await composer().getByText('Topic unavailable',{exact:true}).waitFor();await composer().getByText('Reply unavailable',{exact:true}).waitFor();
           assert(await composer().getByRole('button',{name:/^Send/}).isDisabled());await shot('missing-draft-target');
           await composer().getByRole('button',{name:'Cancel unavailable reply',exact:true}).click();await composer().getByRole('button',{name:'Move draft to Main',exact:true}).click();

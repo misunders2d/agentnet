@@ -363,6 +363,69 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
         const fitted = await image.boundingBox();
         const box = await stage.boundingBox();
         assert(fitted.width <= box.width + 1 && fitted.height <= box.height + 1, 'whole image fits initially');
+        if (index === 2) {
+          const popup = await dialog.elementHandle();
+          const next = dialog.getByRole('button', {name: 'Next image', exact: true});
+          const prev = dialog.getByRole('button', {name: 'Previous image', exact: true});
+          assert(await prev.isDisabled(), 'navigation stops at the first attachment');
+          const switchedAt = Date.now();
+          if (phone) await next.tap();
+          else await next.click();
+          const second = p.getByRole('dialog', {name: 'tall.png', exact: true});
+          await second.waitFor();
+          assert(Date.now() - switchedAt < 1100, 'switch gives immediate local feedback');
+          assert(await popup.evaluate(el => el.isConnected && el.getAttribute('role') === 'dialog'), 'same dialog stays mounted');
+          assert(await second.getByRole('button', {name: 'Next image', exact: true}).isEnabled(), 'third attachment follows the second');
+          assert.deepEqual(await second.getByRole('img', {name: 'tall.png', exact: true}).evaluate(async im => {
+            await im.decode();
+            return [im.naturalWidth, im.naturalHeight];
+          }), [1000, 2000], 'switched picture is the original second attachment');
+          await p.screenshot({path: path.join(process.env.AGENTNET_SCREENSHOTS, 'image-gallery-' + (phone ? 390 : 1440) + '.png')});
+          if (phone) {
+            const cdp = await ctx.newCDPSession(p);
+            const bounds = await second.getByRole('region').boundingBox();
+            const at = x => [{x: bounds.x + x, y: bounds.y + bounds.height / 2}];
+            await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: at(bounds.width * 0.25)});
+            await cdp.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: at(bounds.width * 0.75)});
+            await cdp.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+          } else await second.getByRole('region').press('ArrowLeft');
+          await dialog.waitFor();
+          await image.evaluate(im => im.decode());
+          await stage.evaluate(el => {
+            for (let i = 0; i < 2; i++) {
+              el.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', bubbles: true}));
+            }
+          });
+          const last = p.getByRole('dialog', {name: 'last.png', exact: true});
+          await last.waitFor();
+          assert(await last.getByRole('button', {name: 'Next image', exact: true}).isDisabled(), 'navigation stops at the last attachment');
+          await last.getByRole('region').press('ArrowLeft');
+          await second.getByRole('region').press('ArrowLeft');
+          await dialog.waitFor();
+
+          if (!phone) {
+            let releaseOpen;
+            const openGate = new Promise(resolve => { releaseOpen = resolve; });
+            await p.route('**/api/file/open-image', async route => {
+              await openGate;
+              await route.fulfill({json: {ok: true}});
+            }, {times: 1});
+            try {
+              await dialog.getByRole('button', {name: 'Open in default app', exact: true}).click();
+              await dialog.getByRole('button', {name: 'Opening…', exact: true}).waitFor();
+              await next.click();
+              await second.waitFor();
+              const otherOpen = second.getByRole('button', {name: 'Open in default app', exact: true});
+              await otherOpen.waitFor();
+              assert(await otherOpen.isEnabled(), 'the displayed photo is actionable while another photo opens');
+              assert.equal(await second.getByText('Asked your default image app to open it.').count(), 0);
+            } finally {
+              releaseOpen();
+            }
+            await second.getByRole('region').press('ArrowLeft');
+            await dialog.getByRole('status').filter({hasText: 'Asked your default image app to open it.'}).waitFor();
+          }
+        }
         await dialog.getByRole('button', { name: '100%', exact: true }).click();
         assert.equal(await dialog.getByLabel('Zoom level').textContent(), '100%');
         assert.deepEqual(await image.evaluate(im => [im.getBoundingClientRect().width, im.getBoundingClientRect().height]), [width, height], '100% displays original pixels');

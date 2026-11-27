@@ -44,7 +44,7 @@ func TestAssistantSetupSelectedInstallPreservesConfigAndRerun(t *testing.T) {
 	}
 	ctx := context.Background()
 	first, err := c.run(ctx, ui.AssistantSetupRequest{})
-	if err != nil || len(first.Harnesses) != 4 {
+	if err != nil || len(first.Harnesses) != len(setupHarnesses) {
 		t.Fatalf("detection %v", err)
 	}
 	request := ui.AssistantSetupRequest{Action: "review", Harnesses: []string{"claude", "omp"}}
@@ -62,7 +62,7 @@ func TestAssistantSetupSelectedInstallPreservesConfigAndRerun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Harnesses) != 4 {
+	if len(result.Harnesses) != len(setupHarnesses) {
 		t.Fatal("lost catalog")
 	}
 	after, _ := os.ReadFile(file)
@@ -216,5 +216,44 @@ func TestAssistantSetupJSONFormattingDoesNotLoseConfiguredHooks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// MEL-828: Antigravity (agy) is offered in the normal agent setup as an
+// AgentNet agent, never as a native session integration AgentNet lacks.
+func TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks(t *testing.T) {
+	c := isolatedSetup(t)
+	ctx := context.Background()
+	view, err := c.run(ctx, ui.AssistantSetupRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agy *ui.AssistantSetupHarness
+	for i := range view.Harnesses {
+		if view.Harnesses[i].ID == "agy" {
+			agy = &view.Harnesses[i]
+		}
+	}
+	if agy == nil || agy.Label != "Antigravity" || !agy.Detected || agy.Supported || agy.State != "unsupported" || agy.Target != "" || agy.Configured || !strings.Contains(agy.Note, "does not connect open Antigravity") {
+		t.Fatalf("agy setup row = %+v", agy)
+	}
+	if _, err = c.run(ctx, ui.AssistantSetupRequest{Action: "review", Harnesses: []string{"agy"}}); err == nil {
+		t.Fatal("native setup accepted for agy")
+	}
+	home, _ := os.UserHomeDir()
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("agy setup wrote native files: %v", entries)
+	}
+	if err = os.Remove(filepath.Join(os.Getenv("PATH"), "agy")); err != nil {
+		t.Fatal(err)
+	}
+	view, err = c.run(ctx, ui.AssistantSetupRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range view.Harnesses {
+		if h.ID == "agy" && (h.Detected || h.State != "not_detected") {
+			t.Fatalf("missing agy shown found: %+v", h)
+		}
 	}
 }

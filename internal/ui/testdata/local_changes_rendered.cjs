@@ -37,6 +37,7 @@ f.finish=(index,fail=false)=>{const w=f.writes[index];if(fail){w.reject(Error('I
 };
 f.release=()=>{f.holdReads=false;for(const resolve of f.reads.splice(0))resolve()};
 f.newer=async()=>{view.messages.at(-1).text='Newer linked-device edit';view.messages.at(-1).edited=true;view.messages.at(-1).revision+=10;view.seq++;await store.refreshOpen()};
+f.editPhase=async(phase)=>{const m=view.messages.at(-1);m.kind='question';m.edit_execution=phase;view.seq++;await store.refreshOpen()};
 function App(){const dm=useStore(store,s=>s.dm),tab=useStore(store,s=>s.tab),o=useStore(store,s=>s.overview);if(!dm)return <p>Opening…</p>;
  const ctx={conv,dm,thread:null,overview:o,names:{},canReply:true};
  return <div className="flex h-full flex-col"><nav><button onClick={()=>store.showTab(tab==='settings'?'chats':'settings')}>Toggle settings</button><span data-current-tab>{tab}</span></nav>
@@ -281,6 +282,11 @@ function measureEdit(page, id, event, selector, condition = 'visible', key) {
   await menu('Edit');await page.getByRole('textbox',{name:'New text'}).fill('Older local attempt');await page.getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.writes.length===4);await page.evaluate(()=>fixture.newer());await row.getByText('Newer linked-device edit',{exact:false}).waitFor();await page.evaluate(()=>fixture.finish(3,true));await row.getByText('Newer linked-device edit',{exact:false}).waitFor();
   await row.getByRole('button',{name:'Edit again'}).click();assert.equal(await page.getByRole('textbox',{name:'New text'}).inputValue(),'Older local attempt','newer linked content must not lose failed local text');
   await page.getByRole('button',{name:'Cancel',exact:true}).click();await row.getByText('Newer linked-device edit',{exact:false}).waitFor();assert.equal(await row.locator('[data-message-change]').count(),0);
+  for (const [phase, status] of Object.entries({queued:'Edit queued for the agent',running:'Agent processing the edit',steered:'Edit reached the running agent',answered:'Agent replied to the edit',failed:'Edit could not be applied to the agent’s work'})) {
+    await page.evaluate(phase=>fixture.editPhase(phase),phase);
+    await row.getByRole('status').getByText(status,{exact:true}).waitFor();
+    assert.equal(await row.getByRole('status').count(),1,'the edit exposes one current execution status');
+  }
   assert.equal(await page.getByRole('textbox',{name:'Unrelated draft'}).inputValue(),'Keep typing during write');assert.deepEqual(errors,[]);
   const topicMenu=async(name)=>{await page.locator('[data-topic]').click();await page.getByRole('menuitem',{name,exact:true}).click();};
   await topicMenu('Mark done');await page.getByRole('region',{name:'Topic state'}).getByText('Done',{exact:true}).waitFor();await page.getByText('Saving change…',{exact:true}).waitFor();

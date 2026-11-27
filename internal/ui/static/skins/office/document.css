@@ -1,0 +1,59 @@
+/* Office bundles no text fonts: it uses the system interface font of the
+   device. Only emoji come from Comic's Twemoji (m/fonts/twemoji.woff2), so
+   they look the same on every device. Digits, #, *, ©, ®, ™ and the
+   black-glyph marks (✔ ✖ ➕ ➖ ➗ ➰ ➿) keep the text font. */
+@font-face { font-family: "Twemoji"; font-style: normal; font-display: swap; src: url(m/fonts/twemoji.woff2) format("woff2"); unicode-range: U+200D, U+20E3, U+2194-2199, U+21A9-21AA, U+231A-231B, U+2328, U+23CF, U+23E9-23F3, U+23F8-23FA, U+24C2, U+25AA-25AB, U+25B6, U+25C0, U+25FB-25FE, U+2600-2713, U+2715, U+2717-2794, U+2798-27AF, U+27B1-27BE, U+2934-2935, U+2B05-2B07, U+2B1B-2B1C, U+2B50, U+2B55, U+3030, U+303D, U+3297, U+3299, U+FE0F, U+1F000-1FAFF, U+E0020-E007F; }
+@property --tw-translate-x{syntax:"*";inherits:false;initial-value:0}
+@property --tw-translate-y{syntax:"*";inherits:false;initial-value:0}
+@property --tw-translate-z{syntax:"*";inherits:false;initial-value:0}
+@property --tw-rotate-x{syntax:"*";inherits:false}
+@property --tw-rotate-y{syntax:"*";inherits:false}
+@property --tw-rotate-z{syntax:"*";inherits:false}
+@property --tw-skew-x{syntax:"*";inherits:false}
+@property --tw-skew-y{syntax:"*";inherits:false}
+@property --tw-space-y-reverse{syntax:"*";inherits:false;initial-value:0}
+@property --tw-space-x-reverse{syntax:"*";inherits:false;initial-value:0}
+@property --tw-divide-y-reverse{syntax:"*";inherits:false;initial-value:0}
+@property --tw-border-style{syntax:"*";inherits:false;initial-value:solid}
+@property --tw-leading{syntax:"*";inherits:false}
+@property --tw-font-weight{syntax:"*";inherits:false}
+@property --tw-tracking{syntax:"*";inherits:false}
+@property --tw-ordinal{syntax:"*";inherits:false}
+@property --tw-slashed-zero{syntax:"*";inherits:false}
+@property --tw-numeric-figure{syntax:"*";inherits:false}
+@property --tw-numeric-spacing{syntax:"*";inherits:false}
+@property --tw-numeric-fraction{syntax:"*";inherits:false}
+@property --tw-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
+@property --tw-shadow-color{syntax:"*";inherits:false}
+@property --tw-shadow-alpha{syntax:"<percentage>";inherits:false;initial-value:100%}
+@property --tw-inset-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
+@property --tw-inset-shadow-color{syntax:"*";inherits:false}
+@property --tw-inset-shadow-alpha{syntax:"<percentage>";inherits:false;initial-value:100%}
+@property --tw-ring-color{syntax:"*";inherits:false}
+@property --tw-ring-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
+@property --tw-inset-ring-color{syntax:"*";inherits:false}
+@property --tw-inset-ring-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
+@property --tw-ring-inset{syntax:"*";inherits:false}
+@property --tw-ring-offset-width{syntax:"<length>";inherits:false;initial-value:0}
+@property --tw-ring-offset-color{syntax:"*";inherits:false;initial-value:#fff}
+@property --tw-ring-offset-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
+@property --tw-outline-style{syntax:"*";inherits:false;initial-value:solid}
+@property --tw-blur{syntax:"*";inherits:false}
+@property --tw-brightness{syntax:"*";inherits:false}
+@property --tw-contrast{syntax:"*";inherits:false}
+@property --tw-grayscale{syntax:"*";inherits:false}
+@property --tw-hue-rotate{syntax:"*";inherits:false}
+@property --tw-invert{syntax:"*";inherits:false}
+@property --tw-opacity{syntax:"*";inherits:false}
+@property --tw-saturate{syntax:"*";inherits:false}
+@property --tw-sepia{syntax:"*";inherits:false}
+@property --tw-drop-shadow{syntax:"*";inherits:false}
+@property --tw-drop-shadow-color{syntax:"*";inherits:false}
+@property --tw-drop-shadow-alpha{syntax:"<percentage>";inherits:false;initial-value:100%}
+@property --tw-drop-shadow-size{syntax:"*";inherits:false}
+@property --tw-duration{syntax:"*";inherits:false}
+@property --tw-ease{syntax:"*";inherits:false}
+@property --tw-scale-x{syntax:"*";inherits:false;initial-value:1}
+@property --tw-scale-y{syntax:"*";inherits:false;initial-value:1}
+@property --tw-scale-z{syntax:"*";inherits:false;initial-value:1}
+@property --tw-content{syntax:"*";inherits:false;initial-value:""}

@@ -19,7 +19,7 @@ import (
 // started after the chat was read is "fetching" on the next page, though
 // starting it wrote nothing that moves the chat's mark.
 func TestDMPageFilesAsTheyStandNow(t *testing.T) {
-	alice, bob, live, hub := liveWorldHub(t)
+	alice, bob, live, hub, stopBob := liveWorldHubAtWithStop(t, filepath.Join(t.TempDir(), "bob"))
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	for _, a := range []*client.Agent{alice, bob} {
@@ -30,7 +30,8 @@ func TestDMPageFilesAsTheyStandNow(t *testing.T) {
 	run, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { alice.Run(run, client.RunOptions{}); close(done) }()
-	defer func() { stop(); <-done }()
+	stopAlice := func() { stop(); <-done }
+	defer stopAlice()
 	var conv string
 	for deadline := time.Now().Add(20 * time.Second); conv == ""; time.Sleep(50 * time.Millisecond) {
 		c, err := bob.CreateDM(ctx, alice.Address)
@@ -80,11 +81,19 @@ func TestDMPageFilesAsTheyStandNow(t *testing.T) {
 	}
 	var m DMMessage
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		if m = received(); m.ID != "" && m.Attachments[0].Fetch == "wait" && projected.Load() == 0 {
+		if m = received(); m.ID != "" && m.Attachments[0].Fetch == "wait" {
 			break
 		} else if time.Now().After(deadline) {
 			t.Fatalf("bob has no waiting file: %+v", m)
 		}
+	}
+	// Once the file has arrived, isolate the cache read from daemon writes.
+	// The on-demand transfer still uses the real Hub and stays blocked below.
+	stopAlice()
+	stopBob()
+	m = received()
+	if m.ID == "" || m.Attachments[0].Fetch != "wait" {
+		t.Fatalf("the kept page needs a waiting file: %+v", m)
 	}
 	release := make(chan struct{})
 	var once sync.Once

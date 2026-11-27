@@ -15,3 +15,4 @@
 /internal/ui/web/src/** text eol=lf
 /internal/ui/web/SHA256SUMS text eol=lf
 /internal/ui/web/LICENSES.txt -text
+/internal/ui/skins/office/LICENSES.txt -text

@@ -24,6 +24,15 @@ type Filter = "all" | ChatItem["kind"];
 const filters: { id: Filter; label: string }[] = [
   { id: "all", label: "All" }, { id: "person", label: "People" }, { id: "agent", label: "Agents" }, { id: "group", label: "Groups" },
 ];
+const sections: { kind: ChatItem["kind"]; label: string }[] = [
+  { kind: "group", label: "Groups" }, { kind: "person", label: "DMs" }, { kind: "agent", label: "Agents" },
+];
+const listModeKey = "agentnet.chat-list-mode";
+
+function readListMode() {
+  try { return localStorage.getItem(listModeKey) === "recent" ? "recent" : "grouped"; }
+  catch { return "grouped"; }
+}
 
 // The title's highlighter stripe: saturated yellow in light; in dark the same
 // yellow at about a third, so the light letters stay readable where they cross it.
@@ -66,6 +75,8 @@ export function ChatList() {
   const leave = (o: Open) => { clearTimeout(hover.current); if (wanted.current?.id === o?.id) wanted.current = null; };
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [mode, setMode] = useState(readListMode);
+  const [collapsed, setCollapsed] = useState<Partial<Record<ChatItem["kind"], boolean>>>({});
   const [searching, setSearching] = useState(false);
   const [topicHits, setTopicHits] = useState(0); // topics the search found (ChatList.topics.tsx)
   const search = useRef<HTMLInputElement>(null);
@@ -76,8 +87,9 @@ export function ChatList() {
   const summaries = useMemo(() => new Map((overview?.dms || []).map((d) => [d.id, d])), [overview]);
   const kinds = new Set(items.map((i) => i.kind));
   const shownFilters = kinds.size > 1 ? filters.filter((f) => f.id === "all" || kinds.has(f.id)) : [];
-  const active: Filter = filter !== "all" && kinds.has(filter) ? filter : "all";
   const q = query.trim();
+  const grouped = wide && mode === "grouped" && !q && kinds.size > 1;
+  const active: Filter = wide && mode === "grouped" || filter === "all" || !kinds.has(filter) ? "all" : filter;
   const shown = items.filter((i) => (active === "all" || i.kind === active)
     && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title, ...(i.topics || []).map((t) => t.title), ...(i.conversations || []).flatMap((d) => [d.title, d.last])));
   const unread = items.reduce((n, i) => n + i.unread, 0);
@@ -98,12 +110,24 @@ export function ChatList() {
   }, []);
 
   const closeSearch = () => { setQuery(""); setSearching(false); };
-  const title = <h1 className={"font-display text-[34px] font-extrabold leading-none tracking-[-.03em] lg:text-[28px] " + stripe} data-part="list-title">{words.chats}</h1>;
+  const title = <h1 className={"font-display text-[34px] font-extrabold leading-none tracking-[-.03em] lg:text-[24px] " + stripe} data-part="list-title">{words.chats}</h1>;
+  const chooseMode = (next: typeof mode) => {
+    setMode(next);
+    if (next === "grouped") setFilter("all");
+    try { localStorage.setItem(listModeKey, next); } catch { /* keep the current choice */ }
+  };
+  const row = (i: ChatItem, overview: T.Overview) => (
+    <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => leave(i.open)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
+      <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}
+        selected={!!lit && (lit.id === i.open.id || !!i.conversations?.some((c) => c.id === lit.id))}
+        onOpen={() => void store.openChat(i.open)} />
+    </li>
+  );
 
   return (
     <section aria-label="Chats" data-part="list" className="pb-8 lg:pb-4">
       {wide ? (
-        <div className="flex items-center justify-between gap-3 px-4 pt-5">{title}<NewChatButton /></div>
+        <div className="flex items-center justify-between gap-3 px-3 pt-3.5">{title}<NewChatButton /></div>
       ) : (
         <>
           <div className="flex items-center gap-2 px-4 pt-3">
@@ -121,7 +145,7 @@ export function ChatList() {
       )}
 
       {showSearch && (
-        <div className="flex items-center gap-1 px-4 pt-3">
+        <div className="flex items-center gap-1 px-4 pt-3 lg:px-3 lg:pt-2.5">
           <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-xl bg-surface pl-3 stroke has-[input:focus-visible]:outline-3 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-agent-ink">
             <IconSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />
             <span className="sr-only">Search chats</span>
@@ -139,7 +163,7 @@ export function ChatList() {
               placeholder="Search people, agents, groups" autoComplete="off"
               className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted focus-visible:outline-none lg:text-[15px] [&::-webkit-search-cancel-button]:hidden" />
             {query ? <IconButton label="Clear search" onClick={() => { setQuery(""); search.current?.focus(); }} className="shrink-0"><IconX size={18} /></IconButton>
-              : wide && <kbd className="mr-2.5 shrink-0 rounded-md border border-hairline px-1.5 py-0.5 font-sans text-[12px] font-bold text-text-2">{isMac ? "⌘ K" : "Ctrl K"}</kbd>}
+              : wide && <kbd className="mr-2.5 shrink-0 rounded-md @max-[22rem]:hidden border border-hairline px-1.5 py-0.5 font-sans text-[12px] font-bold text-text-2">{isMac ? "⌘ K" : "Ctrl K"}</kbd>}
           </label>
           {!wide && <button type="button" onClick={closeSearch} className="min-h-11 shrink-0 rounded-full px-3 font-semibold text-text-2 hover:bg-sunken">Cancel</button>}
         </div>
@@ -152,8 +176,19 @@ export function ChatList() {
           {!q && <GroupChanges />}
           {!q&&savedAgentHistory&&<p className="px-4 pt-3 text-[13px] text-muted">Saved agent history is available in Search chats.</p>}
           {overview.persons && !overview.person && <NoName />}
-          {shownFilters.length > 0 && (
-            <div role="group" aria-label="Show" className="flex gap-2 overflow-x-auto px-4 pt-4 [scrollbar-width:none] lg:px-3">
+          {wide && !q && kinds.size > 1 && (
+            <div role="group" aria-label="Chat list layout" className="mx-3 mt-2.5 flex gap-1 rounded-lg bg-sunken p-0.5">
+              {(["grouped", "recent"] as const).map((option) => (
+                <button key={option} type="button" aria-pressed={mode === option} onClick={() => chooseMode(option)}
+                  className={"min-h-8 flex-1 rounded-md px-2 text-[14px] font-semibold focus-visible:outline-2 focus-visible:outline-agent-ink "
+                    + (mode === option ? "bg-surface text-ink stroke" : "text-text-2 hover:text-ink")}>
+                  {option === "grouped" ? "Grouped" : "Recent"}
+                </button>
+              ))}
+            </div>
+          )}
+          {shownFilters.length > 0 && !(wide && mode === "grouped") && (
+            <div role="group" aria-label="Show" className="flex gap-2 overflow-x-auto px-4 pt-4 [scrollbar-width:none] lg:px-3 lg:pt-2.5">
               {shownFilters.map((f) => (
                 <button key={f.id} type="button" aria-pressed={active === f.id} onClick={() => setFilter(f.id)} className="group min-w-11 shrink-0 py-1 lg:py-1.5">
                   <span className={"flex h-9 min-w-11 items-center justify-center gap-1.5 rounded-full px-3.5 text-[14px] font-extrabold stroke transition-colors duration-200 ease-out-soft lg:h-8 lg:px-3 lg:text-[13px] "
@@ -165,7 +200,7 @@ export function ChatList() {
             </div>
           )}
           {shown.length > 0 && (
-            <ul ref={results} className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-2" : "")} aria-label={q ? "Matching chats" : "Chats"}
+            <ul ref={results} className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-1.5" : "")} aria-label={q ? "Matching chats" : "Chats"}
               onKeyDown={e => {
                 if (!q || e.defaultPrevented || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
                 const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[data-part="chat-row"]')];
@@ -175,13 +210,24 @@ export function ChatList() {
                 const next = index + (e.key === "ArrowDown" ? 1 : -1);
                 if (next < 0) search.current?.focus(); else rows[Math.min(next, rows.length - 1)]?.focus();
               }}>
-              {shown.map((i) => (
-                <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => leave(i.open)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
-                  <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}
-                    selected={!!lit && (lit.id === i.open.id || !!i.conversations?.some((c) => c.id === lit.id))}
-                    onOpen={() => void store.openChat(i.open)} />
-                </li>
-              ))}
+              {grouped ? sections.map(({ kind, label }) => {
+                const chats = shown.filter((i) => i.kind === kind);
+                if (!chats.length) return null;
+                const closed = !!collapsed[kind];
+                const unreadCount = chats.reduce((count, i) => count + i.unread, 0);
+                const sectionId = "chat-section-" + kind;
+                return (
+                  <li key={kind} className="border-t border-hairline first:border-t-0">
+                    <button type="button" aria-expanded={!closed} aria-controls={sectionId} onClick={() => setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))}
+                      className="flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-[14px] font-bold text-text-2 hover:bg-sunken focus-visible:outline-2 focus-visible:outline-agent-ink">
+                      <IconChevronRight size={14} aria-hidden="true" className={closed ? "" : "rotate-90"} />
+                      {label}
+                      {unreadCount > 0 && <span className="ml-auto tabular-nums">{unreadCount}<span className="sr-only"> unread</span></span>}
+                    </button>
+                    <ul id={sectionId} aria-label={label} hidden={closed} className="space-y-0.5">{chats.map((i) => row(i, overview))}</ul>
+                  </li>
+                );
+              }) : shown.map((i) => row(i, overview))}
             </ul>
           )}
           {!q && !items.length && overview.person && <NoChats />}

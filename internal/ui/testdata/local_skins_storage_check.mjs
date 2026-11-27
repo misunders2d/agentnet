@@ -76,6 +76,35 @@ async function seed() {
   return { ...w, healthy, damaged, before: await snapshot(w.store, prefix + healthy.digest) };
 }
 
+{ // Installed bytes keep their identity until a matching stage is committed.
+  const w=world(), old=await local.install(pkg('staged'));
+  await assert.rejects(local.install(pkg('staged',2),{stageFrom:''}),/version is invalid/);
+  const stage=()=>local.install(pkg('staged',2),{stageFrom:old.digest});
+  const next=await stage();
+  assert.deepEqual(await local.catalog(),[old]);
+  assert.equal(await local.hasUpdate(old.id,old.digest,next.digest),true);
+  await local.discardUpdate(old.id,next.digest,next.digest);
+  assert.ok(w.store.has(prefix+next.digest),'a stale cleanup leaves the active stage in place');
+  await local.discardUpdate(old.id,old.digest,next.digest);
+  assert.equal(w.store.has(prefix+next.digest),false);
+  assert.deepEqual(await local.catalog(),[old]);
+
+  await stage();
+  const cache=w.store.get(cat), key=origin+'/local-skin-catalog/'+encodeURIComponent(old.id);
+  const stored=await (await cache.match(key)).json();
+  await cache.put(key,Response.json({...stored,stagedAt:0}));
+  await local.prune();
+  assert.equal(w.store.has(prefix+next.digest),false,'a later open reclaims an abandoned stage');
+  assert.deepEqual(await local.catalog(),[old]);
+
+  await stage();
+  w.store.get(prefix+next.digest).damaged=true;
+  await local.remove(old.id);
+  assert.equal(w.store.has(prefix+next.digest),false,'the exact staged snapshot is removed even if unreadable');
+  assert.equal(await local.commitUpdate(old.id,old.digest,next.digest,()=>true),false);
+  assert.deepEqual(await local.catalog(),[]);
+}
+
 { // The observed Chromium failure no longer blocks a verified gallery update.
   const w = await seed(); w.store.get(prefix + w.damaged.digest).damaged = true;
   const files = pkg('damaged', 2), prepared = await local.prepare(files), published = {};

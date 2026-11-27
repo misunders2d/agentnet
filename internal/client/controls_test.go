@@ -140,10 +140,9 @@ func TestControlsInDeviceChat(t *testing.T) {
 	}
 }
 
-// Editing a question never changes what the recipient's agent runs: the
-// job takes the admitted text even when the edit arrived before the job
-// ran, the edit is shown beside it, and nothing runs twice.
-func TestEditNeverChangesAdmittedRequest(t *testing.T) {
+// The completed request remains an immutable record. Its edit reaches the
+// same agent as a new correction, without replaying the original.
+func TestEditFollowsUpCompletedRequest(t *testing.T) {
 	st := installStub(t, "answer")
 	w := newWorld(t, "")
 	setResponder(t, w.bob, "stub", st.dir, time.Minute)
@@ -151,13 +150,12 @@ func TestEditNeverChangesAdmittedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	runAgent(t, w.alice)
-	stopBob := runAgent(t, w.bob) // publishes bob's capabilities
+	runAgent(t, w.bob)
 	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "what is the ORIGINAL question", Kind: envelope.KindQuestion})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, w.bob, q.ID, stateAnswered)
-	stopBob()
 	ref, err := w.alice.RefOf("", q.ID, "out")
 	if err != nil {
 		t.Fatal(err)
@@ -165,34 +163,22 @@ func TestEditNeverChangesAdmittedRequest(t *testing.T) {
 	if _, err := w.alice.Revise(tctx(t), ref, "what is the EDITED question"); err != nil {
 		t.Fatal(err)
 	}
-	// A second question, edited while bob is offline: the edit is queued
-	// behind it and both arrive together when bob returns.
-	q2, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "second ORIGINAL", Kind: envelope.KindQuestion})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref2, _ := w.alice.RefOf("", q2.ID, "out")
-	if _, err := w.alice.Revise(tctx(t), ref2, "second EDITED"); err != nil {
-		t.Fatal(err)
-	}
-	runAgent(t, w.bob)
-	waitState(t, w.bob, q2.ID, stateAnswered)
-	eventually(t, "bob shows both edits", func() bool {
-		return legacyView(t, w.bob, q.ID).Edited && legacyView(t, w.bob, q2.ID).Edited
+	eventually(t, "edit follow-up replies", func() bool {
+		var state string
+		err := w.bob.store.db.QueryRow(`SELECT state FROM inbox WHERE sub=? AND reply_to=?`, requestEditJob, q.ID).Scan(&state)
+		return err == nil && state == stateAnswered
 	})
-	for _, id := range []string{q.ID, q2.ID} {
-		if row := inboxRow(t, w.bob, id); !strings.Contains(row.Body, "ORIGINAL") || row.State != stateAnswered {
-			t.Fatalf("the admitted request changed: %+v", row)
-		}
+	if row := inboxRow(t, w.bob, q.ID); !strings.Contains(row.Body, "ORIGINAL") || row.State != stateAnswered {
+		t.Fatalf("the admitted request changed: %+v", row)
 	}
-	if stdin, _ := os.ReadFile(st.log + ".stdin"); !strings.Contains(string(stdin), "second ORIGINAL") || strings.Contains(string(stdin), "EDITED") {
+	if stdin, _ := os.ReadFile(st.log + ".stdin"); !strings.Contains(string(stdin), "what is the EDITED question") || !strings.Contains(string(stdin), "Do not rerun completed effects") {
 		t.Fatalf("the agent ran on: %q", stdin)
 	}
 	if st.count() != 2 {
 		t.Fatalf("the agent ran %d time(s)", st.count())
 	}
-	m := legacyView(t, w.bob, q2.ID)
-	if m.Text != "second EDITED" || m.Body != "second ORIGINAL" || m.Kind != envelope.KindQuestion {
+	m := legacyView(t, w.bob, q.ID)
+	if m.Text != "what is the EDITED question" || m.Body != "what is the ORIGINAL question" || m.Kind != envelope.KindQuestion {
 		t.Fatalf("bob's view: %+v", m)
 	}
 }

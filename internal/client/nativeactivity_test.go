@@ -278,7 +278,15 @@ func TestNativeThinkingCompleteLinesAndTokenPrefixes(t *testing.T) {
 			}
 			publish := func(summary string) {
 				activity.reportThinking(summary)
-				store.markNativeProgress(t.Context(), j, *activity.native.Load())
+				p := *activity.native.Load()
+				if _, err := store.markNativeProgressOutcome(t.Context(), j, p); err != nil {
+					// The store bounds optional telemetry writes. Retry an unknown
+					// outcome once, retaining the same snapshot, for this assertion.
+					t.Logf("retrying the fixture's native progress write: %v", err)
+					if _, err = store.markNativeProgressOutcome(t.Context(), j, p); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			stored := func() string {
 				var detail string

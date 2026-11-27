@@ -1,7 +1,8 @@
 package client
 
 // Warm native workers (MEL-746 Part B). A conversation agent's native
-// process (Pi/OMP RPC, Claude stream-json, Codex app-server) stays alive
+// process (Pi/OMP RPC, Claude stream-json, Codex app-server, agy
+// stream-json) stays alive
 // after a clean answer, so the same person's next turn in the same saved
 // session goes into the running process instead of a cold start.
 //
@@ -65,7 +66,7 @@ var warmGrace = 5 * time.Second
 // warmHarness reports the harnesses whose native transport keeps a session
 // open across turns over one process.
 func warmHarness(name string) bool {
-	return name == "pi" || name == "omp" || name == "claude" || name == "codex"
+	return name == "pi" || name == "omp" || name == "claude" || name == "codex" || name == "agy"
 }
 
 // warmKey: the exact saved native session (planSession scopes it to one
@@ -75,8 +76,9 @@ type warmKey struct{ session, person, harness string }
 
 // warmSink routes a retained process's output to the current turn only.
 type warmSink struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu    sync.Mutex
+	w     io.Writer
+	stray atomic.Bool // output arrived with no turn attached
 }
 
 func (s *warmSink) Write(p []byte) (int, error) {
@@ -84,6 +86,8 @@ func (s *warmSink) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	if s.w != nil {
 		_, _ = s.w.Write(p)
+	} else if len(p) > 0 {
+		s.stray.Store(true)
 	}
 	return len(p), nil
 }
@@ -198,6 +202,10 @@ func (p *warmPool) fits(w *warmProc, fp string, timeout time.Duration) (bool, st
 		return false, "its native process had exited"
 	case w.fp != fp:
 		return false, "its launch or native settings changed"
+	case w.harness == "agy" && w.out.stray.Load():
+		// agy answers only a message it was sent: an event between turns
+		// could be taken for the next turn's answer.
+		return false, "it wrote output between turns"
 	case time.Since(w.born)+timeout >= lifetime:
 		return false, "it reached its lifetime"
 	}
@@ -220,9 +228,14 @@ func (p *warmPool) spawn(cmd *exec.Cmd, harness, fp, handle string) (*warmProc, 
 		return nil, err
 	}
 	w := &warmProc{pool: p, harness: harness, fp: fp, handle: handle, cmd: cmd, stdin: stdin, exited: make(chan struct{})}
-	cmd.Stdout, cmd.Stderr = &w.out, &w.errOut
+	cmd.Stdout, cmd.Stderr = w.outputs()
 	return w, nil
 }
+
+// outputs are the process's stdout and stderr writers, kept apart: stream
+// events are read only from stdout. agy's soft denial is in its result
+// (denied_actions), so it does not depend on stderr's timing.
+func (w *warmProc) outputs() (stdout, stderr io.Writer) { return &w.out, &w.errOut }
 
 func (w *warmProc) start() error {
 	p := w.pool
@@ -340,6 +353,10 @@ func (w *warmProc) end(why string, interrupt any, grace time.Duration) {
 			w.wmu.Lock()
 			_ = json.NewEncoder(w.stdin).Encode(interrupt)
 			w.wmu.Unlock()
+		} else if w.harness == "agy" {
+			// agy finishes a running turn on end of input; its own stop
+			// request is a termination signal, which it handles itself.
+			terminate(w.cmd.Process)
 		}
 		_ = w.stdin.Close()
 	}
@@ -466,6 +483,8 @@ func nativeSettingsFiles(harness, home, dir string, env []string) []string {
 			codexHome = filepath.Join(home, ".codex")
 		}
 		return []string{filepath.Join(codexHome, "config.toml"), filepath.Join(dir, ".codex", "config.toml")}
+	case "agy":
+		return []string{filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), filepath.Join(home, ".gemini", "settings.json"), filepath.Join(home, ".gemini", "config", "mcp_config.json"), filepath.Join(dir, ".agents", "mcp_config.json")}
 	case "pi", "omp":
 		agentDir := filepath.Join(home, "."+harness, "agent")
 		if harness == "pi" && get("PI_CODING_AGENT_DIR") != "" {

@@ -43,6 +43,11 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	// Rendered checks written for Comic keep opening Comic now that a new
+	// profile opens Office (testdata/comic_preload.cjs).
+	if preload, err := filepath.Abs("testdata/comic_preload.cjs"); err == nil {
+		os.Setenv("NODE_OPTIONS", strings.TrimSpace(os.Getenv("NODE_OPTIONS")+" --require="+preload))
+	}
 	code := m.Run()
 	fmt.Fprintf(os.Stderr, "overview cache: %d kept lists equal a fresh read\n", overviewCompared.Load())
 	fmt.Fprintf(os.Stderr, "schema image: %d fixture stores started from a copy, not schema proof\n", schematest.Copies())

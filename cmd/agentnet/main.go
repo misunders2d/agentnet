@@ -293,6 +293,10 @@ func run(args []string) error {
 		return runDM(ctx, a, rest, os.Stdout)
 	case "receivers":
 		return runReceivers(a, rest, os.Stdout)
+	case "claude-chat":
+		return runClaudeChatCmd(a, rest, os.Stdout)
+	case "codex-chat":
+		return runCodexChatCmd(a, rest, os.Stdout)
 	case "sessions":
 		if len(rest) != 1 {
 			return errors.New("usage: sessions ADDRESS")
@@ -403,11 +407,13 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	fallback := fs.Bool("fallback", false, "if ADDRESS#SESSION has ended, deliver to the agent's inbox instead")
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
 	var replyTo, fromAgent *string
+	var remoteAgent string
 	var progress *bool
 	if !reply {
 		replyTo = fs.String("reply-to", "", "continue the conversation containing this message ID")
 		progress = fs.Bool("progress", false, "mark this correlated message as a nonterminal responder update")
 		fromAgent = fs.String("from-agent", "", "send as this agent hosted here, in your My agents room (default: this terminal's harness agent)")
+		fs.StringVar(&remoteAgent, "agent", "", "exact recipient agent ID on ADDRESS")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -434,7 +440,10 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 		if *fallback {
 			return errors.New("--fallback belonged to the old device messages")
 		}
-		return sendPlain(ctx, a, fs.Arg(0), fs.Arg(1), *replyTo, *fromAgent, files, *wait, os.Stdout, os.Stderr)
+		return sendPlain(ctx, a, fs.Arg(0), fs.Arg(1), *replyTo, *fromAgent, remoteAgent, files, *wait, os.Stdout, os.Stderr)
+	}
+	if remoteAgent != "" {
+		return errors.New("--agent is only available for ordinary sends in the My agents room")
 	}
 	if !reply && *replyTo != "" && !*progress { // progress binds its own exact stored request
 		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {

@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
+// Opens a rail section: on the desktop, clicking the item already open hides
+// its list (MEL-824), so an open section with its list showing is left as is.
+const openSection = async (b) => { if (await b.getAttribute('aria-current') === 'page' && await b.getAttribute('aria-expanded') === 'true') return; await b.click(); };
 const settle = page => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
 async function releaseChecks(browser) {
   const prominent = process.argv.includes('--prominent-update');
@@ -43,7 +46,7 @@ async function releaseChecks(browser) {
     const nav = () => page.getByRole('navigation',{name:'Main',exact:true});
     const about = async () => {
       if(skin==='comic'){
-        await nav().getByRole('button',{name:width===390?'You':'Settings',exact:true}).click();
+        await openSection(nav().getByRole('button',{name:width===390?'You':'Settings',exact:true}));
         await page.getByRole('button',{name:/^About/}).click();
       }
     };

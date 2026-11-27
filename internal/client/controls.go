@@ -35,9 +35,9 @@ import (
 //   - edit, delete: the target's author only: in a device thread the very
 //     key that sent it; in a conversation any device of the same person.
 //
-// What a control cannot do: it never becomes a job, a decision, a chat
-// turn or an alert; a revision never changes what was admitted for
-// execution (inbox.body stays the original, the worker reads only that); a
+// Controls stay out of chat history. An authorized revision of a request
+// can inform its first claim or queue a correction to its exact run. The
+// signed original text remains available as execution evidence. A
 // retraction never cancels or reruns anything and recalls nothing already
 // read, saved or given to an agent. It hides the text and files here and
 // drops this device's cached ciphertext of the target's files (saved
@@ -46,12 +46,13 @@ import (
 // Controls is what controls did to one message, as this device resolves
 // them now.
 type Controls struct {
-	Reactions []ReactionView `json:"reactions,omitempty"`
-	Edited    bool           `json:"edited,omitempty"`
-	Revision  int64          `json:"revision,omitempty"`
-	Text      string         `json:"text,omitempty"` // the current text when edited; Body keeps what was sent or admitted
-	Deleted   bool           `json:"deleted,omitempty"`
-	Can       []string       `json:"can,omitempty"` // of CanReact, CanEdit, CanDelete: what this device may do to it
+	Reactions     []ReactionView `json:"reactions,omitempty"`
+	Edited        bool           `json:"edited,omitempty"`
+	Revision      int64          `json:"revision,omitempty"`
+	EditExecution string         `json:"edit_execution,omitempty"`
+	Text          string         `json:"text,omitempty"` // the current text when edited; Body keeps what was sent or admitted
+	Deleted       bool           `json:"deleted,omitempty"`
+	Can           []string       `json:"can,omitempty"` // of CanReact, CanEdit, CanDelete: what this device may do to it
 }
 
 // What a device may do to a message.
@@ -210,8 +211,7 @@ func (a *Agent) React(ctx context.Context, ref ControlRef, emoji string, remove 
 }
 
 // Revise replaces the shown text of a message this device's person sent.
-// The message keeps what it was: a question or task already admitted runs
-// (or ran) with its original text, shown alongside the edit.
+// The verified host decides how to deliver a correction to its exact agent.
 func (a *Agent) Revise(ctx context.Context, ref ControlRef, text string) (ControlSent, error) {
 	if envelope.Blank(text) || len(text) > envelope.MaxRevisionBytes {
 		return ControlSent{}, fmt.Errorf("an edit is 1 to %d bytes of text", envelope.MaxRevisionBytes)
@@ -924,9 +924,10 @@ func (s *store) addRetractionInbox(in envelope.Inner, verifiedBy string, fromQua
 func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQuarantine bool) error {
 	in = tombstoned(tx, in, verifiedBy) // an edit of a deleted message keeps no text
 	now := time.Now()
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, received_at, state, verified_by, sub, received_ms, ref_id, ref_fp, read_at, agent_id, origin)
+	inserted, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, received_at, state, verified_by, sub, received_ms, ref_id, ref_fp, read_at, agent_id, origin)
 		VALUES(?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''))`,
-		in.ID, in.From, in.TS, in.Kind, in.Body, now.Unix(), verifiedBy, in.Sub, now.UnixMilli(), in.Ref.ID, in.Ref.Fingerprint, now.Unix(), in.AgentID, in.Origin); err != nil {
+		in.ID, in.From, in.TS, in.Kind, in.Body, now.Unix(), verifiedBy, in.Sub, now.UnixMilli(), in.Ref.ID, in.Ref.Fingerprint, now.Unix(), in.AgentID, in.Origin)
+	if err != nil {
 		return err
 	}
 	if fromQuarantine {
@@ -934,7 +935,10 @@ func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQua
 			return err
 		}
 	}
-	return nil
+	if n, err := inserted.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	return queueRunningRequestEdit(tx, in, verifiedBy)
 }
 
 // admitControl admits a verified version 3 control, or holds it: a
@@ -1218,7 +1222,7 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		if in.Sub == envelope.SubRetraction { // its text goes with it (applyRetraction does the rest)
 			return redactRetractedText(tx, ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}, a.Self().Fingerprint())
 		}
-		return nil
+		return queueRunningRequestEdit(tx, in, sender.Fingerprint())
 	}
 	res, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, also)
 	if err != nil {
@@ -1293,6 +1297,9 @@ func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in en
 			return err
 		}
 		if err = humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+		if err := queueRunningRequestEdit(tx, in, sender.Fingerprint()); err != nil {
 			return err
 		}
 		return redactRetractionIn(tx, in, a.Self().Fingerprint())
@@ -1524,7 +1531,11 @@ func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) 
 	if err != nil {
 		return nil, err
 	}
-	return scanControls(rows)
+	controls, err := scanControls(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.projectLocalEditStatuses(controls, "", peer)
 }
 
 // convControls loads the controls of conversation conv, once per logical
@@ -1538,7 +1549,11 @@ func (s *store) convControls(conv, self, selfFP string) ([]controlRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanControls(rows)
+	controls, err := scanControls(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.projectLocalEditStatuses(controls, conv, "")
 }
 
 func scanControls(rows *sql.Rows) ([]controlRow, error) {
@@ -1576,6 +1591,7 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 		revID     string
 		text      string
 		deleted   bool
+		edit      map[string]mark
 	}
 	targets := map[ControlRef]*target{}
 	for _, c := range rows {
@@ -1612,6 +1628,20 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 			if r.Rev > t.rev || (r.Rev == t.rev && c.id > t.revID) {
 				t.rev, t.revID, t.text = r.Rev, c.id, r.Text
 			}
+		case envelope.SubStatus:
+			var status envelope.Status
+			if json.Unmarshal([]byte(c.body), &status) != nil || status.Decision != "" {
+				continue
+			}
+			if id, phase := parseEditStatus(status.Detail); id != "" {
+				if t.edit == nil {
+					t.edit = map[string]mark{}
+				}
+				cur := t.edit[id]
+				if status.N > cur.n || status.N == cur.n && c.id > cur.id {
+					t.edit[id] = mark{phase, status.N, c.id}
+				}
+			}
 		case envelope.SubRetraction:
 			if mayAuthor {
 				t.deleted = true
@@ -1647,6 +1677,7 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 		}
 		if t.rev > 0 {
 			c.Edited, c.Revision, c.Text = true, t.rev, t.text
+			c.EditExecution = t.edit[t.revID].op
 		}
 		c.Deleted = t.deleted
 		out[ref] = c

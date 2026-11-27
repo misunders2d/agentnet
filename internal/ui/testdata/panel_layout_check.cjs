@@ -26,6 +26,7 @@ const globals = {...hooks, ...icons, outboxAttention,
   SettingsPane:'SettingsPane', ConnectionBanner:'ConnectionBanner', NativeRecovery:'NativeRecovery',
   WorkspaceCoin:'WorkspaceCoin', PersonAvatar:'PersonAvatar', Toasts:'Toasts',
   MOTION:{page:0,pane:0}, convKey:open => open.kind + ':' + open.id,
+  skin:{storage:'agentnet.test'}, localStorage:{getItem:() => null, setItem(){}}, window:{innerWidth:1280, addEventListener(){}, removeEventListener(){}},
 };
 const shell = load('App.tsx', globals, '\nexport {Desktop, PhoneTabs};');
 const file = {name:'original-file.txt', bytes:new Uint8Array([1,2,3])};
@@ -45,6 +46,8 @@ for (const tab of ['agents','oks','outbox','chats','settings']) {
     assert.equal(named(main, 'RoomPanel').length, 0, tab + ' does not show an unrelated guest panel');
   } else {
     assert.equal(aside.length, 1, tab + ' retains its navigation/list column');
+    assert.equal(aside[0].props['data-part'], 'list-panel');
+    assert.equal(named(aside[0], 'ListResizer').length + nodes(aside[0]).filter(n => typeof n.tag === 'function' && n.tag.name === 'ListResizer').length, 1, tab + ' list can be resized');
     assert.equal(named(aside[0], 'CurrentPage').length, 1);
     if (tab === 'chats') {
       assert.strictEqual(named(main, 'Conversation')[0].props.o, open, 'Chats restores the exact open conversation');

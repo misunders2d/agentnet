@@ -1,5 +1,200 @@
 # Next-release interaction coverage and responsiveness
 
+## Next release after v0.11.10 — MEL-825 and MEL-826
+
+MEL-825 keeps a revision on the original message. The first claim reads the
+latest verified revision in the same transaction. Once claimed, the target
+host binds the correction to the exact original agent and attempt. It uses
+the existing native input handover while the original runs, or the existing
+follow-up context and approval checks once it finishes. Only a handover
+known to be unsent can return to the queue. Revisions of ordinary chat,
+history copies, or stopped requests do not launch work. The original
+audience and signed author key still govern edits to addressed requests.
+Status selects the winning signed revision and leaves the original request's
+execution state independent.
+
+Reuse evidence. Telegram Web A at `f67a40879a7d78c2683ec5a296cf55bc22417d56`
+updates the existing editor and message locally in [`editMessage`](https://github.com/Ajaxy/telegram-tt/blob/f67a40879a7d78c2683ec5a296cf55bc22417d56/src/global/actions/api/messages.ts#L825).
+[Slack's message change event](https://docs.slack.dev/reference/events/message/message_changed/)
+updates the original history entry by identity. AgentNet keeps the existing
+optimistic edit and signed revision controls, and adapts the host's existing
+steering/follow-up lifecycle for agent execution. The owner-provided Slack
+desktop view demonstrates sectioned sidebar navigation. AgentNet uses its
+existing conversation kinds and rows for the Groups, DMs and Agents
+sections, with a chronological Recent view and a flat search.
+
+`TestEditQueuedRequestUsesNewestSignedTextOnce` checks the latest revision
+at claim, duplicate delivery and out-of-order revisions.
+`TestEditRemoteGroupRequestSteersOrFollowsUp` covers a signed edit crossing
+devices, acknowledged native input, an original finishing before handover,
+a follow-up with earlier result context, delivery after a transport outage,
+and the stopped-run boundary. The retry uses the exact edit job's stored
+result and checks participation again while quoting the original turn.
+`TestEditFollowsUpCompletedRequest` exercises the direct worker path.
+`TestLocalChangesRendered` checks immediate editing under a held write,
+failure, retry, concurrent linked-device text, and all five edit outcomes at
+desktop and phone sizes with 100 and 1000 messages. `TestListPanelCollapseResizeRendered`
+checks desktop Grouped/Recent selection, collapse, unread, restored layout,
+search and keyboard focus, and the existing phone list at 390 px.
+
+## Next release after v0.11.9: MEL-819–824 — unreleased, November 25, 2026
+
+### MEL-821 Office built in, the default for a new profile; MEL-823 Office gutters
+
+Owner decision (Q1, November 25): bundle Office and open it on a fresh or
+unset profile, keep every saved choice. Office's skin layer moved into core
+(`internal/ui/skins/office/overlay`, from agentnet-skins at 84adba27, one
+maintained copy); `web/build.sh` builds Comic and then Office, deterministic;
+files byte-identical to Comic's are embedded once (`builtinSkin` serves
+Comic's bytes, Office's `SHA256SUMS` still lists them): Office adds 1.61 MB
+(entry.mjs 1.52 MB, style.css, document.css, skin.json) instead of 3.52 MB.
+`skin-choice.mjs`: `BUILT_IN` comic, office; `HOME` stays Comic (way back,
+unknown ids, late-catalog fallback); `FRESH` Office for no choice; a saved
+`local:office` becomes `office` once; `remember` lets the loader record only
+a skin someone chose. Built-in skins carry their own skin choice in
+Settings, so Office gets no host switcher bar. The gallery hides reserved
+ids and names even from an older catalog, and never fetches them to update.
+MEL-822's darker Office list column (`--an-sidebar` #F4F5F7 light, #15181B
+dark; muted text 5.9:1 and 7.2:1) and MEL-823's gutters live in the in-core
+Office theme: Comic now reads `--an-timeline-max` (800px) and
+`--an-bubble-max` (70%) with fallbacks, Office sets 1040px and
+`min(70%, 34rem)`. Left/right space beside the messages at 1280×720 went
+from 102/62 px to 56/16 px, at 1366×768 from 145/105 to 56/16 (the 40 px
+avatar column stays); the longest rendered line is 79 characters (86 with a
+38rem cap, about 70 in Comic);
+1024 and phone unchanged; at 1920 the column stops at 1040 px.
+
+`TestOfficeDefaultRendered` (`office_default_rendered.cjs`, Chromium, every
+non-program request aborted): a new profile opens Office at 1280 light and
+390 dark touch in 355–458 ms with `agentnet.skin` still unset after a
+reload and no switcher bar; saved Comic, Office, `default`, a gallery Office
+with `office.theme` dark (opens built-in Office dark, rewritten to `office`),
+a saved gallery skin that is missing (opens Comic, choice kept), `?skin=comic`
+on a new profile (recorded), and a catalog without Office (Comic, nothing
+recorded); Office's message column equals its pane at 1280 and 390, is
+1040 px centred at 1920, Comic's stays 800 px. `TestSkinChoiceAndTrust`
+covers the same choices in node; `skin_gallery_check.mjs` an older catalog
+listing Office and a lookalike name; `TestBuiltinSkinCatalog` and
+`TestBuiltinSkinServedBytesMatchBuild` the embedded Office. Screenshots of
+Office at 1280, 1366 dark, 1024, 1920 and 390 inspected (scratch, not
+committed). Not yet run: WebKitGTK shell, the Android WebView, an upgrade
+from a browser that really holds a stored gallery Office package (simulated
+by its saved choice and theme; that stored package stays in the browser,
+unlisted, about 3.5 MB), and the late-catalog fallback on a new profile
+(opens Comic, records nothing).
+
+Rendered checks written for Comic keep testing Comic: `TestMain` puts a
+test-only Node preload in `NODE_OPTIONS` (`testdata/comic_preload.cjs`) that
+seeds `agentnet.skin = comic` in each Playwright context when nothing is
+saved, as the loader before MEL-821 did on first open;
+`TestOfficeDefaultRendered` opts out (`AGENTNET_TEST_FRESH_SKIN=1`). Older
+checks updated for this release's behaviour: re-clicking the open rail item
+now hides its list (appcontrols, skin contract: open a section only when it is
+not already open with its list showing), the invite's Date and Time fields
+(group parity, guest controls), a removed skin's fallback no longer rewrites
+the saved choice (skins), and Office's entry joins Comic's React DOM
+allowance in `TestPageInsertsTextOnly`.
+
+### MEL-824 and MEL-822 desktop list column: hide, resize, compact
+
+On desktop, clicking the active **Chats** or **Settings** rail item hides its
+list column and clicking again brings it back (`aria-expanded`,
+`aria-controls`); clicking the other one opens its list. Agents, Review and
+Outbox stay full-width workspaces with no list and no toggle. The column stays
+mounted while hidden (`inert`, `aria-hidden`, zero width, its content keeps
+its own width so nothing reflows); Ctrl K (⌘K) brings a hidden chat list
+back with search focused. The open
+conversation and composer stay in the same grid slot. A separator
+(`list-resize`, `role=separator`) on the column's edge takes a drag (pointer
+capture; the grid's `--an-list-width` follows the pointer without a React
+render, one state commit on release), arrow keys (16 px, Shift 48 px),
+Home/End and double-click (reset to 320). Width stays between 240 and 480 px
+and always leaves the conversation 440 px; width and hidden state are kept
+per skin on this device. The phone keeps its tabs and has no separator.
+MEL-822 compaction (Comic's source, so Office and Pulp inherit it): a 320 px
+default list (was 300–360 px), a 68 px rail (was 76), 40 px desktop
+avatars, tighter list padding,
+and the search hint hidden when the column is narrower than 22rem so the
+placeholder stays whole. `--an-sidebar` lets a skin shade the column.
+
+`TestListPanelCollapseResizeRendered` (`listpanel_rendered.cjs`, Chromium,
+1280×720 light, 1024×700 dark, 1920×1080 light, 390×844 touch): with a chat
+open, a draft and an attached file, hide/show, every key step, Home/End
+bounds (max = min(480, width − 508)), a mouse drag that tracks the pointer and
+stops at 240, double-click reset, Settings open/hide and Chats reopen,
+Ctrl K on a hidden list (search focused), each at
+the next frame in 13–63 ms; the same textarea element stays connected with its
+draft and file; Agents has no list column; width and hidden state survive a
+reload; no page error. `TestComicPanelLayout` checks the column's part and
+separator. Screenshots of each desktop size shown and hidden inspected
+(scratch, not committed). Not yet run: WebKitGTK shell, and Classic, Holonet
+and Zoom (standalone gallery skins; their own list needs the same change in
+the gallery repository).
+
+### MEL-820 invite history: Share messages since
+
+The combined `datetime-local` field became **Share messages since** with
+separate labelled **Date** (typed YYYY-MM-DD, a calendar only on request) and
+**Time** fields, the reminder sheet's existing pattern (`Reminders.tsx`), plus
+the local time zone ("Your time zone: Europe/Kiev (UTC+02:00)") and **Last
+hour**, **Today** and **Yesterday** shortcuts (`aria-pressed` while they match).
+The wall-clock value must round-trip exactly (`sinceAt`, as `scheduleDue`): an
+impossible day, a DST-gap time, a partial value or a future cutoff shares
+nothing, explains itself in the card and beside the invite action, and
+disables the invite (both the guest/agent and team-member branches). A live
+summary beside the invite action names the exact count (newest N of M when
+capped) and the first included message's date and time. Submission sends the
+same `shared` array the preview and summary are computed from; permissions,
+scope and caps are unchanged.
+
+`TestUIResponsivenessRendered` groups suite (Chromium, 1440×960 mouse and
+390×844 touch) taps the mode, each shortcut, a manual time edit, a future date,
+an impossible date (2026-02-30) and a fix: local feedback 3–11 ms each, every
+assertion on fields, summary, alert role and disabled invite. Desktop light
+1366 and phone dark 390 screenshots inspected (scratch, not committed); the
+error text inside the selected yellow card first used the danger colour and
+failed contrast in dark mode, so it now uses the card's ink in bold. Not yet
+run: the same fixture in the installed WebKitGTK shell
+(`AGENTNET_NATIVE_SHELL`), and a submitted invitation compared byte for byte
+with the preview (code shares one array).
+
+### MEL-819 gallery update of the skin on screen opens in place
+
+Owner report: after an update, the selected Office or Pulp still looked like
+the old version until a switch to Comic and back. The once-per-open gallery
+update stored the new package after the page had mounted the old digest.
+Reused: the host's own workspace remount (unmount, fresh root, mount over the
+same host), which Comic already uses to keep its open chat, drafts and File
+objects in `workspaces.state`; Comic's own "reload once nothing unsent would be
+lost" rule for new AgentNet versions, here as host-level event-driven waits.
+Trust, digest and version checks are the open's own (`skin-choice.mjs`
+`trusted`, `skin-gallery.mjs` `newer`).
+
+`TestGallerySkinUpdateActivatesRendered` (`skin_gallery_activate_rendered.cjs`,
+Chromium, WorkspaceHandler fixture, desktop light 1440 and Android-width dark
+412 with touch) installs Comic's real package as gallery "Pulp" v1, trusts and
+selects it, and holds the gallery's answer for v2 until a chat is open with a
+draft and an attached file and the field has focus:
+- v2 is staged while v1 stays installed and trusted; the field stays usable
+  during download and while v2 is ready;
+- leaving the field with a held `host.api` write keeps v1 until the write
+  settles and the open dialog closes. The wide case covers a dialog within
+  the skin and the narrow case covers the host's AgentNet controls. v2 then
+  opens with the same skin selected, only v2's stylesheet applied, the same
+  chat open, draft text and file kept, and the updated name in the host controls.
+  In the focused run the swap took 104 ms on desktop and 81 ms at phone width;
+- bad bytes, gallery offline (503), a version needing v99, a stored version
+  whose digest the person never trusted, and a version whose mount throws
+  each keep the running version with no failure card or leftover update cache.
+  A failed mount leaves the previous digest installed and trusted, including
+  after a reload with the gallery offline;
+- removing the running skin or importing a replacement while the update waits
+  cancels the pending mount. The storage check covers cleanup of abandoned or
+  unreadable update caches without changing the installed digest on discard.
+Before the change the same script fails at "v2 prepared beside v1" (the old
+loader never opens the stored version). Not yet run: the real Android
+WebView and the WebKitGTK app; Office/Pulp gallery builds need no change.
+
 ## MEL-612 Report a message or person — covered, November 25, 2026
 
 **Entry points.** "Report…" sits in a received message's More actions menu
@@ -3457,6 +3652,41 @@ No timeout or assertion was weakened. The complete control/platform/history
 inventory remains incomplete. The later explicit release authorization and
 final passing gallery gate are recorded in the current disposition above.
 
+### Paste of WPS Office cells in the desktop app — November 26 (v0.11.12)
+
+Report: copying SKU cells in WPS Office (Linux) and pressing Ctrl+V in the
+desktop app pasted nothing; pasting through Google Sheets first worked.
+Evidence: the clipboard (read with `wl-paste --list-types` after a WPS copy)
+holds `text/plain` (CRLF lines), `text/html` (an Excel-style table) and
+`image/bmp`. In the app nothing appeared, so the web event carried neither
+text nor a file and the native picture read found none (BMP). The WebKitGTK
+event itself could not be probed here (headless WebKitGTK aborted without a
+GL context); that part is inferred from the observed outcome.
+Fix: a paste whose event has no text and no file reads the native clipboard
+text first (`host.clipboardText`, `agentnet_clipboard_text`, same origin
+check as the picture read) and inserts it; only when there is none is the
+picture read, so a screenshot still attaches. Browser text keeps the earlier
+order (a browser image copy still attaches). Local feedback is the inserted
+text, immediately after the one native read. The native text read answers
+once per trusted paste event within 2 s (a script's synthetic paste gets
+`null`), and the native command requires a per-run key held only in the
+shell's own script, so a direct call from page code is refused; code that
+rewrites the page's native bridge is outside that. A text read that fails
+(too long, or text the clipboard could not convert) shows a notice and
+attaches no picture instead. The text goes where the person pasted: an edit
+made while the read is pending cancels it with "The text changed while
+pasting. Paste again." instead of replacing other text. A box that takes no files still
+recovers the text and reads no picture. One trailing row end is dropped,
+other line breaks kept. Checks:
+`internal/ui/testdata/picture_crop_paste_check.mjs` (WPS case, plain paste,
+screenshot, browser image copy, too-long text, no-file box, trailing line
+breaks), the rendered `picture_rendered_check.cjs` (WPS paste with no
+picture read; an edit during a pending paste keeps the newer text and shows
+the notice), agentnet-skins `tests/paste-native-text.test.mjs` (Classic,
+Holonet, Zoom) and the desktop `clipboard_text_replies` and
+`clipboard_only_from_current_main_page` origin test. Outstanding: a rendered
+paste in the installed app with real WPS cells.
+
 ### Plain-text paste of Excel cells — October 29 (MEL-714)
 
 Cause, from source: with no browser clipboard file, the desktop shell's
@@ -3734,6 +3964,13 @@ visible. That fixture adjustment and the navigation and notification-landing
 tests passed three consecutive runs. Physical phone, native webviews and
 integrated skin qualification remain open.
 
+The v0.11.10 fixture measures Working from the actual Save click to a visible
+frame in Chromium. This keeps the 600 ms product timer and the 1,100 ms bound,
+while excluding Playwright dispatch and return time from this measurement. On
+the Play-compliance merge candidate, Working took 646–681 ms across local
+runs of the four cases. A test-only 1,300 ms timer was rejected. macOS CI is
+still needed.
+
 ## MEL-811 — Full-width sent-message edits
 
 At base `aa58315f`, a short own reply with a quote opened a 384 px bubble
@@ -3873,6 +4110,20 @@ stay on screen (`TestCompactAudienceComposerRendered`, 1280 and 390 at 420
 px tall, failed before this). The emoji picker's grid keeps
 room for a sticky heading plus one full 44 px row (the taller composer left
 a 45 px grid at 390×400 where the heading covered the row).
+
+Office desktop density follows the owner’s annotated composer screenshot.
+At 1280×800 in Chromium with a mouse, the formatting strip went from 49 to
+37 px and the lower tools row from 46 to 36 px. At 390×844 with touch
+emulation, Aa still swaps tools in place with 44 px targets. The draft
+remains 16 px on a 24 px line. `TestOfficeDefaultWorkspaceRendered` checks both
+layouts. `TestMessageFormattingRendered` also passed on Office with 40 and
+400 messages, including Aa, selection, formatting and the Send menu.
+
+Office uses quieter tool colors, a plain arrow for Send, and one composer
+outline on desktop. The desktop and touch fixtures measure composited colors
+inside the skin's shadow tree. Lowest sampled text ratio: 5.15:1 (selected
+chat timestamp, dark). Lowest sampled icon ratio: 3.68:1 (inactive formatting,
+light). The draft and placeholder also pass in both themes.
 
 | Inventory | Intended local feedback | Completion/recovery | Executed evidence |
 |---|---|---|---|
@@ -4096,3 +4347,62 @@ mise x go@1.26.8 -- go test ./internal/client ./internal/ui ./internal/ui/static
 AGENTNET_FORMATTING_BASE="$base_comic_dir" taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
 taskset -c 11-13 mise x go@1.26.8 -- go test ./internal/ui -run '^TestMessageFormattingRendered$' -v -count=1
 ```
+
+## Browse photos in one message (November 26, 2026)
+
+Telegram Web A's [MediaViewerSlides](https://github.com/Ajaxy/telegram-tt/blob/4566a14adb6287867f21ed6c51449292581c8653/src/components/mediaViewer/MediaViewerSlides.tsx)
+uses adjacent slides, arrow keys at fit zoom, and separates swiping from
+zooming and panning. AgentNet reuses its current modal and verified image
+cache, limiting navigation to openable photos attached to the same message.
+Download and Open in default app still address the displayed attachment.
+
+`TestImageViewerRendered` exercised the navigation buttons, keyboard and
+touch swipe at 1440 and 390 CSS px in Chromium. Switching shows the next
+image title within 1100 ms, keeps the same dialog open, and preserves
+original bytes, zoom, pinch, Back, Escape and exact opener focus restoration.
+
+The same rendered fixture also sends two successive Right inputs in one
+browser dispatch and checks that the third image is selected. On desktop it
+holds the first image's native-open response while navigating to the second,
+checks that the second image's Open control is immediately usable, then
+releases the response and checks its result on the first image.
+
+## MEL-828 — Antigravity in Connect an agent (November 26, 2026)
+
+Sergey reported that agy was missing from his available agents. On base
+`517b86df` the Agents page's primary "Connect an agent" list (shown as
+"Choose your agents") came from a fixed server list of Codex, Claude, Pi and
+OMP (`cmd/agentnet/assistantsetup.go`), so Antigravity never appeared there.
+The agent runtime, the named-agent catalog and the secondary "New agent"
+sheet already detected `agy`. The fix adds Antigravity to that server list as
+an agent-only row: it is detected from the same PATH and has
+`supported=false`. Native-session setup for it is refused, so the review
+installs no hook and changes no Antigravity file. The existing row
+(`AssistantSetup.model.ts#selectable`/`canHaveAgent`) and the existing
+`Set up <tool>` control still create its named agent. No web bundle or skin
+changed, and the same screen serves Comic and the built-in Office overlay.
+
+Disposable rendered check: a local Hub with loopback TLS, an isolated
+AgentNet home with Codex/Claude/Pi/OMP agents enabled, the real `agy` 1.5.16
+on PATH, and the Office skin in Chromium.
+Base listed four tools; the candidate listed `Set up Antigravity`. Selecting
+only Antigravity created agent `Agy test` (agy, Ready). The route guard
+recorded no native setup POST. From the laptop, a request showed `Working…`
+within 2 s and the real agy reply in its topic at 38 s. From the linked phone
+device, a reply follow-up in that topic was answered by the same native agy
+conversation, which recalled the earlier answer. The phone's own
+"Chat with" start was held as "Not sent … joins when its computer connects":
+it asks before the laptop has admitted the new topic invite. A no-model
+Claude fixture showed the same hold. Retry about 8 s later sent the ask, and
+real agy answered in the phone's topic at 48 s. The first-attempt hold remains
+open. The opt-in native catalog browser test also failed on base while
+waiting for the removed “Set up harnesses” button. Focused regression:
+`TestAssistantSetupOffersAntigravityAgentWithoutNativeHooks`.
+
+Holonet and the legacy interface initially disabled agent-only rows on the
+same native-hook check. Both now use Classic's managed-agent selection and
+native-only review and apply flow from gallery revision `73fc2da`. The
+rendered regression exercised Antigravity alone at 1280 px and alongside
+Claude at 390 px in both interfaces. Antigravity was selectable, its agent
+was created in the chosen folder, and the mixed flow sent only Claude to
+native review and apply. A tool with neither route remained disabled.

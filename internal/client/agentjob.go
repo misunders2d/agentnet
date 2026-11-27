@@ -62,10 +62,11 @@ type agentReq struct {
 	ID, Sender, Key, Kind, Conv, PID, State string
 	Target                                  *envelope.Target
 	Local                                   bool
+	EditOf                                  string
 }
 
 func (j job) agentReq(state string) agentReq {
-	return agentReq{ID: j.ID, Sender: j.From, Key: j.Key, Kind: j.Kind, Conv: j.Conv, PID: j.PID, State: state, Target: j.Target, Local: j.Local}
+	return agentReq{ID: j.ID, Sender: j.From, Key: j.Key, Kind: j.Kind, Conv: j.Conv, PID: j.PID, State: state, Target: j.Target, Local: j.Local, EditOf: j.editOf}
 }
 
 // Verdicts on a request to this device's agent.
@@ -121,7 +122,11 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 		return verdictWait, fmt.Sprintf("the agent's participation is %s, with %d record(s) not counted here", info.State, info.Held), nil
 	}
 	if info.Topic != nil {
-		topic, err := topicReference(q, r.Conv, r.ID, r.Key)
+		ref := r.ID
+		if r.EditOf != "" {
+			ref = r.EditOf
+		}
+		topic, err := topicReference(q, r.Conv, ref, r.Key)
 		if errors.Is(err, errParticipationTopicPending) {
 			return verdictWait, err.Error(), nil
 		}
@@ -311,7 +316,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		return j, false, pos, false, nil, err
 	}
 	rows, err := tx.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(status, ''),
-		conv, pid, coalesce(target, ''), state, local, arrival, request_followup, queued_followup_parent IS NOT NULL
+		conv, pid, coalesce(target, ''), state, `+executionLocal+`, arrival, request_followup, queued_followup_parent IS NOT NULL,`+editJobParent+`
 		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND arrival > ?
 		  AND (? = '' OR (conv = ? AND json_extract(human,'$.author_pid') IS NOT NULL))
 		  AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
@@ -332,7 +337,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		var r row
 		var target string
 		if err := rows.Scan(&r.j.ID, &r.j.From, &r.j.Key, &r.j.Kind, &r.j.Body, &r.j.ReplyTo, &r.j.Status,
-			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival, &r.followup, &r.queuedFollowup); err != nil {
+			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival, &r.followup, &r.queuedFollowup, &r.j.editOf); err != nil {
 			rows.Close()
 			return j, false, pos, false, nil, err
 		}
@@ -361,6 +366,25 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 				continue
 			}
 		}
+		if r.j.editOf != "" {
+			if ready, err := queuedFollowupReadyIn(tx, r.j.ID); err != nil {
+				return j, false, pos, false, nil, err
+			} else if !ready {
+				continue
+			}
+			text, ok, err := editJobText(tx, r.j, false)
+			if err != nil {
+				return j, false, pos, false, nil, err
+			}
+			if !ok {
+				if err := closeUnrunEdit(tx, r.j.ID, r.state, "Edit did not run because the original attempt or revision changed"); err != nil {
+					return j, false, pos, false, nil, err
+				}
+				wrote = true
+				continue
+			}
+			r.j.Body = text
+		}
 		v, why, err := agentVerdict(tx, r.j.agentReq(r.state), self, selfFP, false, views)
 		if err != nil {
 			return j, false, pos, false, nil, err
@@ -368,7 +392,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		var res sql.Result
 		switch v {
 		case verdictRun:
-			if r.queuedFollowup {
+			if r.queuedFollowup && r.j.editOf == "" {
 				ready, err := queuedFollowupReadyIn(tx, r.j.ID)
 				if err != nil {
 					return j, false, pos, false, nil, err
@@ -448,6 +472,13 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 				}
 			}
 		case verdictAsk:
+			if r.j.editOf != "" {
+				if err := closeUnrunEdit(tx, r.j.ID, r.state, "Edit follow-up requires a new execution approval"); err != nil {
+					return j, false, pos, false, nil, err
+				}
+				wrote = true
+				continue
+			}
 			tx.Exec(`DELETE FROM reported WHERE item = ?`, r.j.ID) // back in review: reported afresh to each recipient
 			res, err = tx.Exec(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0 WHERE id = ? AND state = ?`,
 				stateAwaiting, why, r.j.ID, stateAgentWaiting)
@@ -475,6 +506,9 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		}
 	}
 	if found {
+		if j.Body, err = requestEditAtClaim(tx, j); err != nil {
+			return job{}, false, pos, false, nil, err
+		}
 		if err := tx.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, j.ID).Scan(&j.Attachments); err != nil {
 			return job{}, false, pos, false, nil, err
 		}
@@ -839,8 +873,9 @@ func (a *Agent) requestContextParticipation(j job) (ParticipationInfo, error) {
 }
 
 func (a *Agent) jobContextRef(j job) protocol.GrantRef {
-	ref := protocol.GrantRef{LID: j.ID, Fingerprint: j.Key}
-	_ = a.store.db.QueryRow(`SELECT coalesce(lid,id) FROM inbox WHERE id=?`, j.ID).Scan(&ref.LID)
+	id := editReplyTo(j)
+	ref := protocol.GrantRef{LID: id, Fingerprint: j.Key}
+	_ = a.store.db.QueryRow(`SELECT coalesce(lid,id) FROM inbox WHERE id=?`, id).Scan(&ref.LID)
 	return ref
 }
 
@@ -929,7 +964,8 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 	if mention := a.answerMention(j, text); mention != "" {
 		text = mention + "\n\n" + text // AgentNet tags the asker; the agent cannot forget it
 	}
-	topic, _ := a.outgoingTopic(j.Conv, "", j.ID)
+	replyTo := editReplyTo(j)
+	topic, _ := a.outgoingTopic(j.Conv, "", replyTo)
 	selfFP := a.id.Public(a.Address).Fingerprint()
 	claim := func(tx *sql.Tx, replyID string) error {
 		v, why, err := agentVerdict(tx, j.agentReq(stateRunning), a.Address, selfFP, true, map[string]*partView{})
@@ -948,7 +984,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		}
 		return nil
 	}
-	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: j.ID, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
+	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: replyTo, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
 		Emotion: emotion, PID: j.PID, Topic: topic, TopicDone: closed && topic != "", status: status, claim: claim})
 	var hb *heldBack
 	switch {
@@ -986,7 +1022,8 @@ func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, 
 	if mention := a.askerMention(j, text, true); mention != "" {
 		text = mention + "\n\n" + text
 	}
-	topic, _ := a.outgoingTopic(j.Conv, "", j.ID)
+	replyTo := editReplyTo(j)
+	topic, _ := a.outgoingTopic(j.Conv, "", replyTo)
 	selfFP := a.id.Public(a.Address).Fingerprint()
 	claim := func(tx *sql.Tx, replyID string) error {
 		v, why, err := agentVerdict(tx, j.agentReq(stateRunning), a.Address, selfFP, true, map[string]*partView{})
@@ -1009,7 +1046,7 @@ func (a *Agent) finishAgentNeedsHuman(ctx context.Context, j job, r *Responder, 
 		}
 		return settleSteeringIn(tx, j.ID)
 	}
-	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: j.ID, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
+	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: replyTo, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
 		Emotion: emotion, PID: j.PID, Topic: topic, status: envelope.StatusNeedsHuman, claim: claim}) // not final: the host's needs_human state stays the request's word (convAnswer)
 	var hb *heldBack
 	switch {
@@ -1079,10 +1116,21 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	// An edit's answer quotes the signed original. The locally created edit
+	// job still has to own this exact result, under the original participation.
 	rows, err := tx.Query(`SELECT o.id, o.conv, o.pid, coalesce(i.id, ''), coalesce(i.sender, ''), coalesce(i.verified_by, ''),
-		coalesce(i.kind, ''), coalesce(i.local, 0), coalesce(i.target, ''),
+		coalesce(i.kind, ''), CASE WHEN i.sub='`+requestEditJob+`' THEN
+		 coalesce((SELECT original.local FROM inbox original WHERE original.id=i.reply_to),0) ELSE coalesce(i.local,0) END,
+		coalesce(i.target, ''), CASE WHEN i.sub='`+requestEditJob+`' THEN i.reply_to ELSE '' END,
 		CASE WHEN coalesce(o.status,'') <> 'progress' THEN coalesce(i.state,'') ELSE '' END
-		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.kind IN ('answer','result') AND i.lid=o.reply_to AND i.conv=o.conv AND i.pid=o.pid) AND (coalesce(o.status,'') = 'progress' OR EXISTS (
+		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.kind IN ('answer','result') AND i.conv=o.conv AND i.pid=o.pid AND (
+		 i.lid=o.reply_to OR (i.sub='`+requestEditJob+`' AND i.replica=0 AND coalesce(o.status,'')<>'progress'
+		 AND i.queued_followup_parent=i.reply_to AND EXISTS (SELECT 1 FROM inbox original WHERE original.id=i.reply_to
+		 AND (original.id=o.reply_to OR original.lid=o.reply_to) AND original.conv=i.conv AND original.pid=i.pid
+		 AND original.ref_id IS NULL AND original.replica=0 AND original.verified_by=i.verified_by
+		 AND original.sender=i.sender AND original.attempts=i.queued_followup_attempt
+		 AND original.state IN ('answered','needs_human','resolved')))))
+		 AND (coalesce(o.status,'') = 'progress' OR EXISTS (
 		 SELECT 1 FROM outbox first WHERE first.id = i.result_id AND first.conv = o.conv AND first.pid = o.pid
 		 AND first.lid = o.lid AND first.reply_to = o.reply_to AND first.body = o.body
 		 AND coalesce(first.agent_id,'') = coalesce(o.agent_id,'')))
@@ -1098,7 +1146,7 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 	for rows.Next() {
 		var o out
 		var target string
-		if err := rows.Scan(&o.id, &o.req.Conv, &o.req.PID, &o.req.ID, &o.req.Sender, &o.req.Key, &o.req.Kind, &o.req.Local, &target, &o.req.State); err != nil {
+		if err := rows.Scan(&o.id, &o.req.Conv, &o.req.PID, &o.req.ID, &o.req.Sender, &o.req.Key, &o.req.Kind, &o.req.Local, &target, &o.req.EditOf, &o.req.State); err != nil {
 			rows.Close()
 			return 0, err
 		}

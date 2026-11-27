@@ -201,7 +201,7 @@ func TestNativeManifestAbsentAndIconsRequireSession(t *testing.T) {
 // Peer text reaches the page only as JSON strings and is inserted as text:
 // the page has no HTML sinks and no inline script or style.
 //
-// The Comic skin (skins/comic/entry.mjs) bundles React DOM, whose
+// The Comic skin (skins/comic/entry.mjs, and Office's build of it) bundles React DOM, whose
 // dangerouslySetInnerHTML support names innerHTML; React writes it only for
 // that prop, which the interface's own source never uses (checked below on
 // web/src). The bundle may name innerHTML exactly as often as React DOM
@@ -214,7 +214,7 @@ func TestPageInsertsTextOnly(t *testing.T) {
 			return err
 		}
 		data, _ := fs.ReadFile(static.Files, path)
-		if path == "skins/comic/entry.mjs" {
+		if path == "skins/comic/entry.mjs" || path == "skins/office/entry.mjs" { // Office is Comic's build with its skin layer
 			if n := strings.Count(string(data), "innerHTML"); n != reactDOMInnerHTML {
 				t.Errorf("Comic's entry.mjs names innerHTML %d times, React DOM alone %d: review what writes HTML", n, reactDOMInnerHTML)
 			}

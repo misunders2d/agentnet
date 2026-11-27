@@ -1,0 +1,182 @@
+/* Office's theme (Comic kit slot, skin/README.md): a plain workplace
+   messenger. White pages, thin grey hairlines, a dark neutral rail, one
+   green for things you can do and one blue for agents and focus. No
+   stickers, no hard shadows, no dotted paper, no bundled fonts: the device's
+   own interface font. Every token Comic defines keeps its name; only values
+   change. Text keeps at least 4.5:1 on its surface in both themes. Office
+   adds no motion of its own. */
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+.an-root {
+  --an-canvas: #FFFFFF;
+  --an-surface: #FFFFFF;
+  --an-sunken: #F3F4F6;
+  --an-ink: #1D1C1D;
+  --an-outline: #DADCE0;      /* Comic's sticker outline becomes a hairline */
+  --an-hairline: #E6E7EA;
+  --an-text-2: #454245;
+  --an-muted: #5E5E62;
+  --an-mine: #EDF3FB;         /* your own messages: a faint blue slip */
+  --an-mine-ink: #1D1C1D;
+  --an-theirs: #F3F4F6;
+  --an-agent: #F1F3F9;
+  --an-agent-ink: #3449B5;
+  --an-agent-fill: #AFBCEC;
+  --an-act: #007A5A;          /* the one green: what you can do */
+  --an-act-ink: #FFFFFF;
+  --an-approval-ink: #6B4A00;
+  --an-guest: #C2410C;
+  --an-guest-ink: #9A3412;
+  --an-guest-bg: #FDEEE4;
+  --an-ok-ink: #0B6E46;
+  --an-ok-bg: #E3F5EB;
+  --an-online: #2BAC76;
+  --an-danger: #B42318;
+  --an-danger-bg: #FDE8E6;
+  --an-dots: transparent;     /* no paper texture */
+  --an-shadow: rgb(0 0 0 / 0.06);
+  --an-on-fill: #1D1C1D;
+  --an-scrim: #1D1C1D;
+  --an-rail: #1F2024;
+  --an-rail-ink: #FFFFFF;
+  /* Office's own */
+  --office-selected: #E8F0FB; /* the open chat in the list */
+  --office-edge-act: #D97706; /* a request's edge: amber waits for you */
+  --office-edge-work: #3449B5;
+  --office-edge-quiet: #C4C7CC;
+  --office-selection: #BBD6FB;
+  --office-tool-inactive: #858589;
+  /* Layout (skin/README.md, optional layout tokens): a list column a shade
+     darker than the conversation; on a laptop the messages use the width
+     instead of leaving empty gutters. Leave room beside long bubbles for
+     the avatar and the desktop actions. */
+  --an-sidebar: #F4F5F7;
+  --an-timeline-max: 1040px;
+  --an-bubble-max: min(38rem, max(70%, calc(100% - 12rem)));
+  color-scheme: light;
+}
+.an-root[data-theme=dark] {
+  --an-canvas: #1A1D21; --an-surface: #222529; --an-sunken: #2A2D32; --an-ink: #E4E5E7; --an-outline: #3F4247; --an-hairline: #33363B;
+  --an-text-2: #C8CACD; --an-muted: #A2A5A9; --an-mine: #26303C; --an-mine-ink: #E4E5E7; --an-theirs: #262A2F; --an-agent: #262A34;
+  --an-agent-ink: #A7B4F5; --an-agent-fill: #3F4CA3; --an-act: #007A5A; --an-act-ink: #FFFFFF; --an-approval-ink: #F2C46B;
+  --an-guest: #F08A5B; --an-guest-ink: #F5A07A; --an-guest-bg: #3A2019; --an-ok-ink: #6FD9A3; --an-ok-bg: #11301F; --an-online: #34C77B;
+  --an-danger: #FF8A80; --an-danger-bg: #3A1614; --an-dots: transparent; --an-shadow: rgb(0 0 0 / 0.3);
+  --an-on-fill: #1D1C1D; --an-scrim: #000000; --an-rail: #121417; --an-rail-ink: #E4E5E7;
+  --office-selected: #2B3340; --office-edge-act: #F2C46B; --office-edge-work: #A7B4F5; --office-edge-quiet: #4A4D52; --office-selection: #3B5B8C;
+  --an-sidebar: #15181B;
+  --office-tool-inactive: #81858C;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Twemoji", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; /* Twemoji first: its unicode-range is emoji only */
+  --font-display: "Twemoji", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --radius-xs: 4px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 8px; --radius-2xl: 8px; --radius-3xl: 10px;
+  --color-canvas: var(--an-canvas);
+  --color-surface: var(--an-surface);
+  --color-sunken: var(--an-sunken);
+  --color-ink: var(--an-ink);
+  --color-outline: var(--an-outline);
+  --color-hairline: var(--an-hairline);
+  --color-text-2: var(--an-text-2);
+  --color-muted: var(--an-muted);
+  --color-mine: var(--an-mine);
+  --color-mine-ink: var(--an-mine-ink);
+  --color-theirs: var(--an-theirs);
+  --color-agent: var(--an-agent);
+  --color-agent-ink: var(--an-agent-ink);
+  --color-agent-fill: var(--an-agent-fill);
+  --color-act: var(--an-act);
+  --color-act-ink: var(--an-act-ink);
+  --color-approval-ink: var(--an-approval-ink);
+  --color-guest: var(--an-guest);
+  --color-guest-ink: var(--an-guest-ink);
+  --color-guest-bg: var(--an-guest-bg);
+  --color-ok-ink: var(--an-ok-ink);
+  --color-ok-bg: var(--an-ok-bg);
+  --color-online: var(--an-online);
+  --color-danger: var(--an-danger);
+  --color-danger-bg: var(--an-danger-bg);
+  --color-on-fill: var(--an-on-fill);
+  --color-scrim: var(--an-scrim);
+  --color-rail: var(--an-rail);
+  --color-rail-ink: var(--an-rail-ink);
+  --shadow-pop: 0 1px 2px 0 var(--an-shadow);
+  --shadow-pop-sm: 0 1px 1px 0 var(--an-shadow);
+  --ease-out-soft: cubic-bezier(.2, .8, .2, 1);
+  --ease-pop: cubic-bezier(.2, .8, .2, 1);
+}
+
+/* ---- parts (skin/README.md, Parts) ----------------------------------------
+   Unlayered on purpose: unlayered rules win over Comic's Tailwind layers, so
+   these restyle the parts without !important. */
+  /* Hairlines everywhere, 1px; nothing is pressed into the page. */
+  .an-root .stroke { border-width: 1px; }
+  .an-root .press:active { transform: none; }
+  .an-root ::selection { background: var(--office-selection); color: var(--an-ink); }
+  /* Rectangles with small corners instead of pills; avatars and badges keep their shape. */
+  .an-root button.rounded-full:not([data-part=send]), .an-root a.rounded-full, .an-root label.rounded-full,
+  .an-root [data-part=topic-bar] .rounded-full { border-radius: 6px; }
+
+  /* The rail: a dark strip with square tabs. */
+  [data-part=rail] { border-right-color: var(--an-rail); }
+  [data-part=rail] button { border-radius: 6px; font-weight: 500; }
+
+  /* The chat list: a plain heading, plain rows, the open chat tinted. */
+  [data-part=list-title] { font-size: 17px; font-weight: 600; letter-spacing: 0; line-height: 1.3; }
+  [data-part=list-title]::after { display: none; }
+  [data-part=chat-row] { border-radius: 6px; box-shadow: none; }
+  [data-part=chat-row][aria-current=true] { background: var(--office-selected); border-color: transparent; box-shadow: none; }
+  [data-part=chat-title] { font-weight: 600; font-size: 15px; letter-spacing: 0; }
+  [data-part=chat-row][data-unread] [data-part=chat-title] { font-weight: 700; }
+  [data-part=chat-preview] { font-size: 13.5px; }
+  [data-part=unread] { height: 18px; min-width: 18px; font-size: 11px; border-radius: 9px; }
+
+  /* The conversation: a shorter header, flat messages with small corners. */
+  [data-part=conversation-head] h1, [data-part=conversation-head] h2 { font-weight: 600; letter-spacing: 0; }
+  @media (min-width: 1024px) { [data-part=conversation-head] { height: 60px; } }
+  [data-part=bubble] { border-color: transparent; border-radius: 8px; box-shadow: none; }
+  [data-part=message][data-from=agent] [data-part=bubble] { border-color: var(--an-hairline); }
+  [data-part=composer-field] { border-radius: 8px; background: var(--an-surface); border-color: var(--an-outline); }
+  [data-part=composer] { border-top-color: var(--an-hairline); }
+
+  /* Quiet controls, with readable contrast on Aa and the toolbar glyphs.
+     Unavailable tools stay readable and use a separate, quieter ink. */
+  :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send]) {
+    color: var(--an-muted);
+  }
+  :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send])[aria-disabled=true] {
+    color: var(--office-tool-inactive);
+    opacity: 1;
+  }
+
+  /* Keep the draft roomy on desktop and retain the larger touch targets. */
+  @media (min-width: 64rem) and (pointer: fine) {
+    [data-part=composer] { border-top-width: 0; }
+    [data-part=composer-format] { padding-block: 2px; }
+    [data-part=composer-tools] { padding-bottom: 4px; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button { height: 2rem; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button:not([data-part=send]) { width: 2rem; }
+    :is([data-part=composer-format], [data-part=composer-tools]) button svg { width: 18px; height: 18px; }
+  }
+
+/* ---- Office's own pieces (overlay slots) ------------------------------------ */
+  /* The send button: a plain square. */
+  .office-send { border-radius: 6px; border: 1px solid transparent; }
+  .office-send-on { background: var(--an-act); color: var(--an-act-ink); }
+  .office-send-on:hover { filter: brightness(1.06); }
+  .office-send-off { background: var(--an-sunken); color: var(--an-muted); border-color: var(--an-hairline); }
+  @media (min-width: 64rem) and (pointer: fine) {
+    .office-send-off { background: transparent; border-color: transparent; }
+  }
+
+  /* Request cards: a hairline card with a coloured left edge by state. */
+  .office-request { border: 1px solid var(--an-hairline); border-left: 4px solid var(--office-edge-quiet); border-radius: 8px; }
+  .office-request-act { border-left-color: var(--office-edge-act); }
+  .office-request-work { border-left-color: var(--office-edge-work); }
+  .office-request-head { padding: 7px 14px 6px; border-bottom: 1px solid var(--an-hairline); background: var(--an-sunken); }
+  .office-request-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--an-text-2); }
+  .office-request-act .office-request-label { color: var(--an-approval-ink); }
+  .office-request-work .office-request-label { color: var(--an-agent-ink); }
+  .office-request-time { font-size: 12px; font-weight: 500; color: var(--an-muted); }

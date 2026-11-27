@@ -11,7 +11,7 @@ import { useApp } from "../context";
 import { usePortal } from "../owned";
 import { niceDevice, size as bytes } from "../model";
 import { Sheet } from "../ui/Sheet";
-import { ImageViewer } from "../ui/ImageViewer";
+import { ImageViewer, type ImageNavigation } from "../ui/ImageViewer";
 import { VideoViewer, type VideoPlace } from "../ui/VideoViewer";
 import { Button } from "../ui/Button";
 import { useLeaving } from "../ui/Motion";
@@ -57,13 +57,18 @@ function standing(m: AnyMsg, f: FileItem): "open" | "request" | "requested" | "g
 }
 
 export function MessageFiles({ m }: { m: AnyMsg }) {
+  const [viewer, setViewer] = useState<{ index: number; opener: HTMLButtonElement } | null>(null);
   const files = filesOf(m);
-  if (!files.length) return null;
   const items = files.map(f => {
     const open = standing(m, f) === "open";
     return { f, open, picture: open && pictureName.test(f.name) };
   });
-  const picturesInGroup = items.filter(item => item.picture).length;
+  const photos = items.filter(item => item.picture).map(item => item.f);
+  const picturesInGroup = photos.length;
+  const selected = viewer ? photos.findIndex(f => f.index === viewer.index) : -1;
+  // A removed or no longer openable attachment closes its viewer.
+  if (viewer && selected < 0) setViewer(null);
+  if (!files.length) return null;
   const grouped = picturesInGroup > 1;
   const pictureTrio = picturesInGroup === 3 && items.length === 3;
   const breaks = grouped ? new Set<number>() : undefined;
@@ -86,13 +91,25 @@ export function MessageFiles({ m }: { m: AnyMsg }) {
         return <Fragment key={pictureKey(m, f)}>
           {/* Keep picture keys and viewer state on the same level between rows. */}
           {breaks?.has(i) && <div aria-hidden="true" className="-my-1 basis-full" />}
-          {picture ? <Picture m={m} f={f} grouped={grouped} firstOfTrio={pictureTrio && i === 0} /> :
+          {picture ? <Picture m={m} f={f} grouped={grouped} firstOfTrio={pictureTrio && i === 0}
+            onOpen={opener => setViewer({ index: f.index, opener })} /> :
             <div className={"min-w-0 space-y-1 " + (grouped ? "basis-full" : "")}>
               {open && videoName.test(f.name) ? <VideoFile m={m} f={f} /> : <FileChip m={m} f={f} />}
               {open && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
             </div>}
         </Fragment>;
       })}
+      {viewer && selected >= 0 && <PictureGallery m={m} f={photos[selected]} grouped={grouped}
+        opener={viewer.opener} onClose={() => setViewer(null)}
+        navigation={grouped ? {
+          index: selected, total: photos.length,
+          step: delta => setViewer(current => {
+            if (!current) return current;
+            const position = photos.findIndex(photo => photo.index === current.index);
+            const next = position < 0 ? undefined : photos[position + delta];
+            return next ? { ...current, index: next.index } : current;
+          }),
+        } : undefined} />}
     </div>
   );
 }
@@ -226,10 +243,41 @@ export function warmPictures(api: Api, messages: AnyMsg[] | null | undefined, n 
   for (const [m, f] of want) fetchPicture(api, m, f).catch(() => {});
 }
 
-function Picture({ m, f, grouped = false, firstOfTrio = false }: { m: AnyMsg; f: FileItem; grouped?: boolean; firstOfTrio?: boolean }) {
+function PictureGallery({ m, f, grouped, opener, onClose, navigation }: {
+  m: AnyMsg; f: FileItem; grouped: boolean; opener: HTMLButtonElement; onClose: () => void;
+  navigation?: ImageNavigation;
+}) {
+  const store = useApp(), portal = usePortal();
+  const hasPerson = useStore(store, state => state.overview?.person?.state === "self");
+  const key = pictureKey(m, f);
+  const [loaded, setLoaded] = useState<{ key: string; picture: Pic | null } | null>(null);
+  const cached = pictures.get(key);
+  const result = loaded?.key === key ? loaded.picture : cached;
+  useEffect(() => {
+    if (pictures.has(key)) return;
+    let current = true;
+    fetchPicture(store.api, m, f).then(
+      picture => { if (current) setLoaded({ key, picture }); },
+      () => { if (current) setLoaded({ key, picture: null }); },
+    );
+    return () => { current = false; };
+  }, [key, store]);
+
+  const src = result?.picture ? result.url : undefined;
+  return <ImageViewer src={src} name={f.name} imageKey={key} loadFailed={result !== undefined && !src}
+    onClose={onClose} opener={opener} navigation={navigation}
+    openInApp={src && store.api.host.platform === "daemon" ? () => store.api.openImage(m.id, f.index, m.dir) : undefined}
+    actions={src && <><Button icon={<IconDownload size={20} />} onClick={() => save(src, f.name, portal)}>Download</Button>
+      {hasPerson && <Button onClick={async () => {
+        if (await openPictureEditor({ into: portal, src, save: png => store.api.setPersonPicture(png) })) await store.refetch();
+      }}>Use as my picture</Button>}
+      {grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}</>} />;
+}
+
+function Picture({ m, f, grouped = false, firstOfTrio = false, onOpen }: {
+  m: AnyMsg; f: FileItem; grouped?: boolean; firstOfTrio?: boolean; onOpen: (opener: HTMLButtonElement) => void;
+}) {
   const store = useApp();
-  const hasPerson = useStore(store, s => s.overview?.person?.state === "self");
-  const portal = usePortal();
   const box = useRef<HTMLButtonElement>(null);
   const key = pictureKey(m, f);
   const known = pictures.get(key);
@@ -237,7 +285,6 @@ function Picture({ m, f, grouped = false, firstOfTrio = false }: { m: AnyMsg; f:
   const [shown, setShown] = useState(!!url); // a picture seen before shows at once; a new one fades in
   const [ratio, setRatio] = useState(known?.ratio ?? 1);
   const [failed, setFailed] = useState(!!known && !known.picture);
-  const [big, setBig] = useState(false);
   useEffect(() => {
     inUse.set(key, (inUse.get(key) || 0) + 1);
     return () => { const n = (inUse.get(key) || 1) - 1; if (n) inUse.set(key, n); else inUse.delete(key); };
@@ -267,7 +314,7 @@ function Picture({ m, f, grouped = false, firstOfTrio = false }: { m: AnyMsg; f:
   // aspect ratio, bounded by the conversation and viewport.
   return (
     <div className="min-w-0 space-y-1" style={grouped ? { flex: wideLead ? "0 0 100%" : `${ratio} 1 0px`, minWidth: 44, maxWidth: wideLead ? "100%" : ratio * 200 } : undefined}>
-      <button ref={box} type="button" onClick={() => url && setBig(true)} aria-label={"Open picture " + f.name} title={"Open full image: " + f.name}
+      <button ref={box} type="button" onClick={e => { if (url) onOpen(e.currentTarget); }} aria-label={"Open picture " + f.name} title={"Open full image: " + f.name}
         className={"relative flex max-w-full items-center justify-center overflow-hidden rounded-xl border border-outline/30 bg-sunken " + (grouped ? "min-h-11 w-full" : "")}
         style={grouped ? { aspectRatio: ratio, maxHeight: wideLead ? 240 : 200 } : url ? { width: "fit-content" } : { width: "min(360px, 100%)", aspectRatio: "4 / 3" }}>
         {url && <img src={url} alt={f.name} onLoad={({ currentTarget: image }) => {
@@ -285,11 +332,7 @@ function Picture({ m, f, grouped = false, firstOfTrio = false }: { m: AnyMsg; f:
       </button>
       {grouped && <span className="block truncate text-[12px] text-muted" title={f.name}>{f.name}</span>}
       {!grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
-      {big && <ImageViewer src={url} name={f.name} onClose={() => setBig(false)}
-        openInApp={store.api.host.platform === "daemon" ? () => store.api.openImage(m.id, f.index, m.dir) : undefined}
-        actions={<><Button icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>
-          {hasPerson && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}
-          {grouped && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}</>} />}
+
     </div>
   );
 }

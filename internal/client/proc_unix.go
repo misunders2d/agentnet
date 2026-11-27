@@ -3,6 +3,7 @@
 package client
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -20,6 +21,9 @@ func ownProcessGroup(cmd *exec.Cmd) {
 
 // runGroup is the process group of a started cmd (ownProcessGroup).
 func runGroup(cmd *exec.Cmd) int { return cmd.Process.Pid }
+
+// terminate asks p to stop (SIGTERM), for a harness that handles it itself.
+func terminate(p *os.Process) { _ = p.Signal(syscall.SIGTERM) }
 
 // killGroup kills every process of group pgid.
 func killGroup(pgid int) error { return syscall.Kill(-pgid, syscall.SIGKILL) }

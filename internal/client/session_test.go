@@ -651,6 +651,9 @@ func TestEachHarnessResumesInAgentConversation(t *testing.T) {
 		if ref == nil || ref.Harness != "agy" || len(ref.ID) != 36 {
 			t.Fatalf("no saved agy session: %+v", ref)
 		}
+		// The cold path, as for the other harnesses: with no warm agy left,
+		// the next ask resumes the saved conversation in a new process.
+		warmPoolOf(t, w.bob).discardIdle("test: cold resume")
 		q2 := convAsk(t, w.alice, conv, pid, "second")
 		runs := agyRuns(t, log)
 		if len(runs) != 2 || slices.Contains(runs[0].Args, "--conversation") || !slices.Equal(runs[1].Args[len(runs[1].Args)-2:], []string{"--conversation", ref.ID}) {

@@ -82,13 +82,31 @@ async function checkStatusPopups({browser, origin, width, count, fixture, eviden
     await editor.fill('Keep this exact edit');
     const save = page.getByRole('button', {name: 'Save', exact: true});
     const saving = row.getByText('Saving edit…', {exact: true});
-    const firstSave = await feedback('editPending', () => click(save), () => saving.waitFor());
+    // Measure the delayed notice in the renderer from the actual Save click.
+    // Playwright can take time to dispatch the click or resume after a visible frame.
+    await save.evaluate(button => {
+      const root = button.getRootNode();
+      window.firstWorkingMs = null;
+      button.addEventListener('click', event => {
+        const checkFrame = () => {
+          const elapsed = performance.now() - event.timeStamp;
+          if (root.querySelector('[data-working]')?.checkVisibility()) {
+            requestAnimationFrame(() => { window.firstWorkingMs = performance.now() - event.timeStamp; });
+          } else if (elapsed >= 1100) {
+            window.firstWorkingMs = elapsed;
+          } else {
+            requestAnimationFrame(checkFrame);
+          }
+        };
+        requestAnimationFrame(checkFrame);
+      }, {capture: true, once: true});
+    });
+    await feedback('editPending', () => click(save), () => saving.waitFor());
     const attempt = await waitForEdit();
     assert.equal(attempt.body.text, 'Keep this exact edit');
     assert.equal(attempt.body.id, editable);
-    await page.waitForFunction(() => document.querySelector('#skin').shadowRoot.querySelector('[data-working]')?.checkVisibility());
-    const workingMs = await frame() - firstSave;
-    assert(workingMs < 1100, 'Working appears within the feedback bound with the edit held');
+    const workingMs = await (await page.waitForFunction(() => window.firstWorkingMs)).jsonValue();
+    assert(workingMs < 1100, `Working missed the 1100 ms deadline at ${width}px with ${count} history rows (${workingMs.toFixed(1)} ms)`);
     timings.workingShown = Math.ceil(workingMs);
 
     fixture.holdDM = true;

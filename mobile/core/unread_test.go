@@ -392,6 +392,20 @@ func TestAppUnreadRealWorkspacesMutesReadAndTyping(t *testing.T) {
 			}
 			ids = append(ids, sent.ID)
 		}
+		// Delivery receipts are content changes. Finish these setup writes
+		// before measuring whether the later typing pulse recomputes a view.
+		waitMobile(t, "fixture message delivery receipts", func() bool {
+			rows, err := s.a.ConversationMessages(convs[s])
+			if err != nil || len(rows) != len(ids) {
+				return false
+			}
+			for _, row := range rows {
+				if row.State != protocol.StateDelivered {
+					return false
+				}
+			}
+			return true
+		})
 		if e = s.a.MarkUnread(ids[0], ids); e != nil {
 			t.Fatal(e)
 		}

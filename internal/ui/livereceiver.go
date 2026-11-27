@@ -145,6 +145,9 @@ func (l *Live) selectedReplyReceiver(d *ReplyReceiverSelection) (*client.ReplyRe
 		}
 		for _, entry := range entries {
 			if entry.Record.ID == r.AgentID && entry.Responder != nil {
+				if entry.Responder.Chat != nil || entry.Responder.CodexChat != nil {
+					return nil, Refuse("A Claude or Codex Desktop chat cannot be the reply assistant. Nothing sent.")
+				}
 				if ready, why := responderReady(catalogHarnesses(), entry.Responder); !ready {
 					return nil, Refuse(why)
 				}

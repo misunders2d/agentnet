@@ -66,6 +66,8 @@ Questions and tasks sent to you:
   review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
   receivers  inspect local selected reply receiver obligations and input state
+  claude-chat  connect an open Claude Code or Claude Desktop chat as a named agent
+  codex-chat   connect a Codex Desktop chat as a named agent
 
 Identity and trust:
   join, whoami, fingerprint, trust
@@ -185,7 +187,7 @@ ask-count or depth limits; stopping the originating run or removing its membersh
 stops further asks and waits.
 Wait reads local stored replies only. Custody/delivery is never completion.`,
 
-	"send": `Usage: agentnet send [--file PATH]... [--wait 5s] [--reply-to ID] [--progress] [--from-agent ID] ADDRESS TEXT
+	"send": `Usage: agentnet send [--file PATH]... [--wait 5s] [--reply-to ID] [--progress] [--from-agent ID] [--agent ID] ADDRESS TEXT
 
 Send an end-to-end encrypted message. Where it goes depends on who sends:
   a person at a plain shell: in your DM with the person at ADDRESS (both
@@ -213,18 +215,21 @@ request, no polling). Answers arrive later in the same chat.
                   finish, accept, cancel or take over anything; the result
                   still arrives separately.
   --from-agent ID speak as this agent hosted here
+  --agent ID      select the recipient agent on ADDRESS when sending as an
+                  agent; use agentnet dm catalog ADDRESS to find its ID
 
 Examples:
   agentnet send bob/desk "build is green"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--answer-wait 90s] [--from-agent ID] [--reply-to ID] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--answer-wait 90s] [--from-agent ID] [--agent ID] [--reply-to ID] ADDRESS TEXT
 
 Ask an agent a question, as your agent: from its session (Claude Code,
 Codex, Pi or OMP), from a run serving a request, or with --from-agent ID.
 It is posted in your "My agents" room, in the topic of this session's or
 run's job. Your own agents answer there. Another person's agent joins that
 topic as a visitor once its person accepts the invitation (or approved you).
+Use --agent ID to select the recipient agent from agentnet dm catalog ADDRESS.
 A person at a plain shell asks in a chat instead: agentnet dm new ADDRESS,
 agentnet dm invite ID HOST, then agentnet dm ask-agent PID TEXT.
 
@@ -244,7 +249,7 @@ agentnet do ID.
 Example:
   agentnet ask bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--answer-wait D] [--from-agent ID] [--reply-to ID] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--answer-wait D] [--from-agent ID] [--agent ID] [--reply-to ID] ADDRESS TEXT
 
 Give an agent a task, as your agent, in your "My agents" room as for ask.
 Your own agents run it at once with their normal permissions. Another
@@ -427,6 +432,49 @@ custody (the Hub has it), delivered (the recipient stored it), quarantined
 path (relay or direct). For a conversation message, ID may be its logical
 id (the lid dm show prints): each copy, one per device, is shown with the
 device it went to.`,
+
+	"claude-chat": `Usage: agentnet claude-chat list
+       agentnet claude-chat connect SESSION_ID NAME
+
+Make one open Claude chat on this computer (Claude Code, or a Claude Desktop
+Code chat) a named agent of yours. list shows the open chats AgentNet's
+hooks registered here, with their folder and whether their inbox works.
+connect asks you to type yes in your own terminal; it refuses when it can
+tell it runs inside an agent session or an AgentNet run.
+
+Requests from your own devices that name this agent are delivered once into
+that chat as a cross-session message, the way another Claude session would
+send one; requests from other people are not sent. The chat answers with its
+own settings, tools and approvals; AgentNet sends no permission mode or
+bypass. Its answer is the chat turn that message starts, recorded by the
+chat's own Stop hook. A message the chat reads during a turn already
+running, a turn stopped or replaced first, a refused or expired message, or
+a chat that closes ends as "not captured", for you to look at; AgentNet does
+not send it again. Files are not passed, and agents named in its answer are
+not asked. The agent stops working when the chat closes or restarts; connect
+it again then. Disable it in Agents. Linux only; it needs AgentNet's Claude
+hooks (agentnet hooks install claude).`,
+
+	"codex-chat": `Usage: agentnet codex-chat list
+       agentnet codex-chat connect THREAD_ID NAME
+
+Make one Codex Desktop chat on this computer a named agent of yours. list
+shows the recent Codex Desktop chats in your Codex home, newest first.
+connect needs Codex Desktop running and asks you to type yes in your own
+terminal; it refuses when it can tell it runs inside an agent session or an
+AgentNet run.
+
+Requests from your own devices that name this agent are added once to that
+chat's own queue, as Codex Desktop's own queued messages are; requests from
+other people are not sent. Codex Desktop runs a queued request once it
+has opened that chat since it started, with the chat's own model, settings,
+tools and approvals; AgentNet sends no permission mode or bypass. Its answer is
+the turn that request starts. A request Codex Desktop has not started by the
+deadline, or when it closes, is taken out of the queue and not sent. A turn
+stopped or replaced first, or a Desktop that closes mid-turn, ends as "not
+captured", for you to look at; AgentNet does not send it again. Files are
+not passed, and agents named in its answer are not asked. Disable it in
+Agents. Linux only.`,
 
 	"sessions": `Usage: agentnet sessions ADDRESS
 

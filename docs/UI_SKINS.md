@@ -35,10 +35,15 @@ design. Keep those transitions fast, interruptible and optional through
 reduced-motion preferences; preserve readable content and familiar action
 labels. Passing compatibility tests does not establish a successful design.
 
-- **Comic** (`comic`) is AgentNet's own skin, the default and the only
-  built-in one: the messenger, built from `internal/ui/web` into the package
+- **Comic** (`comic`) is AgentNet's own skin and the way back from any
+  other: the messenger, built from `internal/ui/web` into the package
   `internal/ui/static/skins/comic/` and embedded in the program.
-- **Classic** and **Zoom** (`classic`, `zoom`) are packages in the
+- **Office** (`office`) is built in too, and is what a browser that never
+  chose a skin opens: Comic with its own skin layer
+  (`internal/ui/skins/office/overlay`), built by the same `web/build.sh` into
+  `internal/ui/static/skins/office/`. Files byte-identical to Comic's
+  (emoji data, fonts, shared chunks) are embedded once.
+- **Classic**, **Zoom**, **Pulp** and the others are packages in the
   [agentnet-skins](https://github.com/misunders2d/agentnet-skins) collection,
   installed like any other skin.
 - Installed skins: packages placed next to the program (below), and
@@ -65,7 +70,13 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
    then kept for the next load, and the catalog fills `host.skins` if it
    arrives later;
 2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
-   else Comic. A saved `default` or `classic` (the names before skins were
+   else Office (Comic when the catalog has no Office). Only a skin someone
+   chose is recorded: a browser that never chose keeps no saved skin, and a
+   saved skin whose package is missing for now opens Comic and stays saved.
+   A saved `agentnet.skin` from before Office was built in, Comic included,
+   is kept. A saved gallery Office (`local:office`) opens the built-in Office
+   and is rewritten once; its preferences (`office`, `office.theme`) carry
+   over. A saved `default` or `classic` (the names before skins were
    packages) opens Comic and is rewritten once; choices made through the package loader
    are marked separately so choosing an installed Classic package survives reload. `?skin=default` names Comic;
 3. asks for trust unless the skin is built in;
@@ -78,8 +89,9 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
    a rebind) it calls `unmount(root)` and mounts again on a fresh root over a
    host bound to the new membership.
 
-Comic draws its own way to switch (Settings → Appearance → Skin) and its
-own workspace menu. Every other skin gets the host's **switcher bar** above
+Comic and Office draw their own way to switch (Settings → Appearance →
+Skin) and their own workspace menu. Every other skin gets the host's
+**switcher bar** above
 it: one step back to Comic, the skin menu (Comic, then installed and
 browser-local skins, with import and removal), and the workspace control
 (switch, join, leave, reconnect). The bar sits in the page's flow above the
@@ -91,10 +103,11 @@ is a conformance expectation, not a security guarantee.
 
 ### Trust
 
-A built-in skin is trusted by the host's own fixed list of ids (`comic`),
-never by anything a manifest says. No installed or browser-local package may
-use those ids or `default`, or show as a built-in skin (the name Comic, in
-any case or spacing): the program
+A built-in skin is trusted by the host's own fixed list of ids (`comic`,
+`office`), never by anything a manifest says. No installed or browser-local
+package may use those ids or `default`, or show as a built-in skin (the
+names Comic and Office, in any case or spacing), and the gallery does not
+offer one even when an older catalog still lists it: the program
 skips such a directory and the browser refuses such a package. Every list of
 skins says where each one comes from (built in, installed on this computer,
 stored in this browser). The rules live in one browser module,
@@ -207,9 +220,20 @@ draw its own through `host.gallery`.
   update stores a new digest; trust given to the exact digest it replaces
   moves to it, otherwise choosing it asks again. Nothing is uploaded.
 - **Automatic updates.** Once a page has read its release from an overview,
-  it installs the newest compatible published version of every gallery skin
-  stored in that browser, once per open; the new version is used from the
-  next open. A package stored under a gallery skin's id is that skin: an
+  it checks for the newest compatible published version of every gallery skin
+  stored in that browser, once per open. With workspace state available, the
+  host stages the update for the skin on screen. If the exact version being
+  replaced is trusted, the host opens the update in place with the same skin
+  selected (MEL-819). It loads the new version first, then mounts it again
+  the way a workspace switch does, so the skin
+  keeps its open chat, drafts and attached files in its workspace state. It
+  waits, by events only, while a write or upload under way (`host.api` with
+  a body, `stage`, `prepareVideo`, `drive.driveUpload`), a pressed pointer,
+  an open dialog or menu, or a focused field on a visible page would be
+  interrupted. The installed digest and its trust advance after the new mount
+  succeeds. If the mount fails, the running version is restored and remains
+  installed on reopen. For skins off screen or without workspace state, the
+  verified update is used on the next open. A package stored under a gallery skin's id is that skin: an
   imported build of it is replaced too. A version that needs a newer
   AgentNet waits until AgentNet is updated; offline or busy, the next open
   tries again. Each open then removes versions that a newer one of the same
@@ -360,6 +384,7 @@ still runs with the page's full trust.
 | `host.onBack(fn)` | Optional on Android and browser pages. Registers Back handling: `fn()` returns `true` after closing the top sheet or going up a level; `false` lets Back leave the app. The browser host keeps one history guard, including across reload, and returns to an earlier document from the root. A directly opened tab with no earlier document stays usable. Returns an unsubscribe function; the latest registration wins. |
 | `host.appControlsAvailable` | Optional presentation hint. `false` means this page has no installed-app bridge; skip app status/update calls unless the current overview explicitly reports `app: true`. Omission preserves legacy host detection. This flag grants no authority. |
 | `host.clipboardImage()` | Optional, native shell only. Resolves `File` for a clipboard image or `null` when there is none. Call only for a user paste that contains no browser image file; ordinary text paste stays available. Capture this host callback for the paste operation; standalone skins never read native clipboard globals themselves. |
+| `host.clipboardText()` | Optional, native shell only (v0.11.12). Resolves the clipboard's text or `null`. Call it from the person's own paste handler, for a paste whose event carried no text and no file, before `host.clipboardImage()`: WebKitGTK offers no text for some spreadsheet copies (WPS Office cells) that hold it, so insert this text when present and read the picture only when there is none (a box that takes no files reads only the text). It answers once per trusted paste event, within 2 s, and `null` otherwise; the native command also requires a key that only the shell's own script holds, so a direct call from page code is refused (this is not a boundary against code that rewrites the page's native bridge). Insert where the person pasted: if the text changed while the read was pending, show a notice instead. Rejects for text too long or unreadable: show a notice and attach nothing. |
 | `host.savedReadOnly` | Optional, native shell only. `true` when this window could not take the one-window lock (no tab locks in its web view): read saved drafts, the send journal and send recovery, and write none of them; keep the message box off and offer no Retry or Discard of an unsent message (Stop stays). Absent elsewhere. Read it from the host; never read the loader's private globals. |
 | `host.appStatus()` | Desktop-app capability, present on every host: it rejects where there is no app (a browser rejects with "Open the AgentNet app for this computer's settings."; `agentnet ui` rejects with the message `404 page not found`, without `status`). Android answers status, check and update but rejects `appReplaceCommand`; an Android build updated through its app store rejects all four. Show app controls only after `appStatus()` resolved; never decide from the methods' presence. Resolves `{cli_path, cli_state:"installed"\|"custom"\|"error", cli_problem?, version, app_update_supported, problem?, update_result?}`. The location/state describe this computer's AgentNet command; `problem` explains unavailable app updates. Omit unavailable controls. |
 | `host.appCheckUpdate()` | Optional desktop-app action, called only from an explicit Check for updates choice. Resolves `{version, latest, state:"available"\|"current"\|"ahead"}` using the app's own version and the latest published stable release. Lookup/comparison errors reject; they never mean up to date. Checking does not install, pause work or change the server recommendation, and works even when this installation cannot update itself. Keep results separate from installation success; discard completions after leaving the view/workspace. Omit this control on browser hosts or when `appStatus()` rejected. |
@@ -1100,7 +1125,7 @@ What a skin can rely on:
   are marked in [HOST_API_ROUTES.md](HOST_API_ROUTES.md); a refused route
   rejects with a sentence, which a skin shows rather than retrying.
 - **Host members** that exist only somewhere (`host.android`,
-  `host.onBack`, `host.clipboardImage`, `host.reconnect`,
+  `host.onBack`, `host.clipboardImage`, `host.clipboardText`, `host.reconnect`,
   `host.workspaces.disconnected`/`reconnect`/`rename`,
   `host.drive.prepareGoogle`/`beginGoogleConsent`, browser only) are
   absent elsewhere: check before use. The

@@ -31,6 +31,19 @@
       return file;
     }) ?? null;
   }});
+  // Clipboard text is read only for the person's own paste: a trusted paste
+  // event (never a script's synthetic one), at most once, within 2 s. Page
+  // code that calls the native command itself lacks this closure's key, so
+  // the native side refuses it.
+  const pasteKey = '__AGENTNET_PASTE_KEY__'; // this run's key (clipboard.rs), only in this closure
+  let trustedPaste = 0;
+  window.addEventListener('paste', e => { if (e.isTrusted) trustedPaste = performance.now(); }, true);
+  Object.defineProperty(window, '__agentnetNativeClipboardText', { value: async () => {
+    const at = trustedPaste;
+    trustedPaste = 0;
+    if (!at || performance.now() - at > 2000) return null;
+    return (await invoke('agentnet_clipboard_text', { key: pasteKey })) || null;
+  }});
   Object.defineProperty(window, '__agentnetNativeClipboardImage', { value: async () => {
     const image = await invoke('agentnet_clipboard_image');
     if (!image) return null;

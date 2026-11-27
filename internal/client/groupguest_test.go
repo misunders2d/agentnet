@@ -359,13 +359,25 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	if e = member.store.db.QueryRow(`SELECT id,envelope FROM outbox WHERE conv=? AND ref_id=? AND recipient=? AND sub=? ORDER BY rowid DESC LIMIT 1`, conv, anchored.LID, guest.Address, envelope.SubRevision).Scan(&queuedID, &queuedRaw); e != nil {
 		t.Fatal(e)
 	}
-	oldCaps := slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapGroupHumanParticipation })
-	signCapsAfter(t, guest, oldCaps)
-	eventually(t, "member observes guest reader downgrade", func() bool {
-		p, err := member.peerProfile(tctx(t), guest.Address)
-		return err == nil && !p.Supports(guest.Address, guest.Self().SignKey, protocol.CapGroupHumanParticipation)
-	})
-	transport.blocked.Store(false)
+	func() {
+		// Drain any flush that checked the old reader with the transport still
+		// blocked. The next flush must start after the signed downgrade is seen.
+		ctx := tctx(t)
+		member.initFlushLanes()
+		select {
+		case member.flushLock <- struct{}{}:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		defer func() { <-member.flushLock }()
+		signCapsAfter(t, guest, without(ownCaps, protocol.CapGroupHumanParticipation))
+		eventually(t, "member observes guest reader downgrade", func() bool {
+			p, err := member.peerProfile(tctx(t), guest.Address)
+			return err == nil && p.Advertised(guest.Address, guest.Self().SignKey) &&
+				!p.Supports(guest.Address, guest.Self().SignKey, protocol.CapGroupHumanParticipation)
+		})
+		transport.blocked.Store(false)
+	}()
 	if e = member.FlushOutbox(tctx(t)); e != nil {
 		t.Fatal(e)
 	}
@@ -376,7 +388,7 @@ func TestGroupGuestCapturedMessageControls(t *testing.T) {
 	roomReader(t, guest)
 	eventually(t, "member observes guest reader update", func() bool {
 		p, err := member.peerProfile(tctx(t), guest.Address)
-		return err == nil && p.Supports(guest.Address, guest.Self().SignKey, protocol.CapRoom)
+		return err == nil && p.Supports(guest.Address, guest.Self().SignKey, protocol.CapGroupHumanParticipation)
 	})
 	if e = member.FlushOutbox(tctx(t)); e != nil {
 		t.Fatal(e)

@@ -44,10 +44,27 @@ async function check(kind, phone) {
     // The composer answers while the capture waits on its read.
     const box = p.getByRole('textbox', { name: /Message Bob/ });
     await box.click();
-    const typed = Date.now();
-    await box.press('x');
-    await p.waitForFunction(el => (el.value ?? el.textContent).includes('x'), await box.elementHandle());
-    const typingMs = Date.now() - typed;
+    // Measure from the browser's key event through a visible frame. Time
+    // spent dispatching the command or returning the result is Playwright's.
+    await box.evaluate(el => {
+      window.posterTypingMs = null;
+      el.addEventListener('keydown', event => {
+        if (!event.isTrusted || event.key !== 'x') return;
+        const checkFrame = () => {
+          const elapsed = performance.now() - event.timeStamp;
+          if (el.isConnected && el.getClientRects().length && (el.value ?? el.textContent).includes('x')) {
+            requestAnimationFrame(() => { window.posterTypingMs = performance.now() - event.timeStamp; });
+          } else if (elapsed >= 1100) {
+            window.posterTypingMs = elapsed;
+          } else {
+            requestAnimationFrame(checkFrame);
+          }
+        };
+        requestAnimationFrame(checkFrame);
+      }, { capture: true, once: true });
+    });
+    await p.keyboard.press('x');
+    const typingMs = await (await p.waitForFunction(() => window.posterTypingMs !== null && typeof window.posterTypingMs === 'number' && window.posterTypingMs)).jsonValue();
     assert(typingMs < 1100, label + ' typing while a poster waits: ' + typingMs + ' ms');
     release();
     const asked = Date.now();

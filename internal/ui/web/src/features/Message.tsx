@@ -212,7 +212,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
           <span className="absolute left-4 top-1/2 grid size-9 -translate-y-1/2 place-items-center rounded-full bg-surface stroke" aria-hidden="true"
             style={{ opacity: Math.min(1, touch.dx / 64) }}><IconArrowBackUp size={18} /></span>
         )}
-        <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "ml-10 items-start ") + (editing ? "w-full" : who.mine ? "max-w-[85%] lg:max-w-[70%]" : "max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[70%]")}
+        <div className={"flex min-w-0 flex-col " + (who.mine ? "items-end " : "ml-10 items-start ") + (editing ? "w-full" : who.mine ? "max-w-[85%] lg:max-w-[var(--an-bubble-max,70%)]" : "max-w-[calc(100%-3rem)] sm:max-w-[80%] lg:max-w-[var(--an-bubble-max,70%)]")}
           style={{ ...(touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : {}),
             ...(!editing && !wide && hoverPointer ? { maxWidth: "calc(100% - " + (who.mine ? "3rem" : "5.5rem") + ")" } : {}) }}>
           {first && !who.mine && <NameLine m={m} who={who} />}
@@ -287,7 +287,7 @@ export function AgentNeedsHumanTurn({m, ctx, detail}: {m:AnyMsg; ctx:Ctx; detail
   const pending = useStore(store, () => store.attentionReply(target_, version));
   const [answer, setAnswer] = useState(false);
   return <div data-agent-needs-you data-from="agent" className="mt-2 flex justify-start px-3 sm:px-4">
-    <div className="relative ml-10 flex min-w-0 max-w-[calc(100%-3rem)] flex-col items-start sm:max-w-[80%] lg:max-w-[70%]">
+    <div className="relative ml-10 flex min-w-0 max-w-[calc(100%-3rem)] flex-col items-start sm:max-w-[80%] lg:max-w-[var(--an-bubble-max,70%)]">
       <div className="mb-1 pl-1 text-[13px] font-bold leading-tight text-agent-ink">{name}</div>
       <div role="group" aria-label={name + " says"} className="relative min-w-0 max-w-full rounded-xl bg-agent px-3.5 py-2 text-ink stroke">
         <span className="absolute -left-10 bottom-0"><AgentAvatar seed={target?.agent_id || host || "agent"} size={32} /></span>
@@ -363,17 +363,19 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
   const label = exactRequestLabel(m, ctx);
   const rawDetail = isThreadMsg(m) ? m.detail : m.job_detail || m.detail;
   const detail = localRunningDetail(rawDetail || "", working(m, all, ctx));
-  if (label) {
+  const edit = m.edited && !m.deleted && editOutcome(m.edit_execution);
+  if (label || edit) {
     const st = requestState(m, all, ctx);
     const tone = st.tone === "ok" ? "text-ok-ink" : st.tone === "work" ? "text-agent-ink" : st.tone === "wait" ? "text-approval-ink" : st.tone === "bad" ? "text-danger" : "text-muted";
     return (
       <div className={"mt-1 flex max-w-full flex-col px-1 text-[13px] " + (who.mine ? "items-end text-right" : "items-start")}>
-        <button type="button" onClick={onDetails} className="relative inline-flex items-center gap-1.5 font-semibold text-text-2 before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-['']">
+        {label && <button type="button" onClick={onDetails} className="relative inline-flex items-center gap-1.5 font-semibold text-text-2 before:absolute before:inset-x-0 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-['']">
           {m.kind === "task" ? <IconBolt size={14} className="text-agent-ink" /> : <IconMessageQuestion size={14} className="text-agent-ink" />}
           <span>{label}</span>
           {st.text && <><span aria-hidden="true" className="text-muted">·</span><span className={tone}>{st.text}</span></>}
-        </button>
+        </button>}
         {detail && !(m.actions || []).length && <span className="mt-0.5 text-muted [overflow-wrap:anywhere]">{firstLine(requestResultText(detail), 140)}</span>}
+        {edit && <span className="mt-0.5 text-muted" role="status">{edit}</span>}
         {answer && onJump && <button type="button" className="min-h-11 underline" onClick={() => onJump(answer.id)}>View reply</button>}
       </div>
     );
@@ -393,6 +395,17 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
       {word}{bad && m.state_text ? " · " + m.state_text : ""}{pausedText}
     </button>
   );
+}
+
+function editOutcome(state?: string) {
+  switch (state) {
+    case "queued": return "Edit queued for the agent";
+    case "running": return "Agent processing the edit";
+    case "steered": return "Edit reached the running agent";
+    case "answered": return "Agent replied to the edit";
+    case "failed": return "Edit could not be applied to the agent’s work";
+    default: return "";
+  }
 }
 
 function exactRequestLabel(m: AnyMsg, ctx: Ctx) {

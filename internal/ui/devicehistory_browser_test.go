@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,7 +80,11 @@ func testOwnDeviceModuleIndexedDB(t *testing.T, module, resultField string) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	stop := sync.OnceFunc(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+	defer stop()
 	select {
 	case result := <-done:
 		if result["ok"] != true {
@@ -87,6 +92,7 @@ func testOwnDeviceModuleIndexedDB(t *testing.T, module, resultField string) {
 		}
 		t.Log(result)
 	case <-time.After(60 * time.Second):
+		stop()
 		t.Fatalf("actual IndexedDB timed out: %s", stderr.String())
 	}
 }

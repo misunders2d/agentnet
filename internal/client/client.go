@@ -53,68 +53,69 @@ type Agent struct {
 	readerAway    sync.WaitGroup                  // that work, waited for when the run ends
 	eraseSweeps   atomic.Int64                    // sweeps of erased turns started (convclear.go)
 
-	deliveryLocks    keyedLocks // envelope ID, shared by immediate sends and retry passes
-	flushOnce        sync.Once
-	flushLock        chan struct{} // readable turns serialize independently of replication
-	syncFlushLock    chan struct{} // one background replication pass at a time
-	flushWake        chan struct{} // durable queued arrivals fill free delivery slots
-	archiveOnce      sync.Once
-	archiveLock      chan struct{}
-	archivePosting   backgroundPosts
-	archiveImporting backgroundPosts
-	receiptOnce      sync.Once
-	receiptLock      chan struct{} // dispositions never wait for history upkeep
-	routeHints       sync.Map      // optional verified first-attempt direct route; never queue storage
-	posting          backgroundPosts
-	receipting       backgroundPosts // acknowledgements, beside posting, never in front of it
-	groupsSynced     sync.Map        // group → continuity token/context hash its recovered devices were complete under
-	queued           queuedSends
-	topicCache       topicCache
-	sendRetry        sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
-	humanMu          sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
-	statusLocks      keyedLocks    // one status of a request at a time (headless.go)
-	statusWake       chan struct{} // wakes this process's status sender (statusLoop)
-	statusLive       atomic.Bool   // statusLoop runs in this process
-	home             string
-	id               *identity.Identity
-	store            *store
-	teams            teamRuntime   // the relay's team directory as last seen (teams.go)
-	typing           typingRuntime // live typing signals, memory only (typing.go)
-	groupWork        groupWork     // group journal upkeep due on the next sync (convgroup.go)
-	hub              *hubConn
-	networkWake      chan struct{} // a platform network change interrupts reconnect backoff
-	heartbeat        time.Duration
-	adQuery          string                     // this run's signed session ad, for the push stream
-	kick             func()                     // wakes the current stream's retry worker
-	kickMu           sync.Mutex                 // guards kick for kickNow
-	paceClaimed      func()                     // optional deterministic after-claim test barrier
-	retryFiring      func(uint64)               // optional before-claim test barrier
-	retryClaimed     func(uint64)               // optional after-claim test barrier
-	readerFiring     func(string, uint64)       // optional before-mutation test barrier
-	kicksLive        atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
-	streamConnected  atomic.Bool                // the daemon currently holds an accepted Hub push stream
-	selfKicks        atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
-	statusAwaitsCaps atomic.Bool                // a status waits for its requester's capability record (tellStatus)
-	receiveFails     receiveFailures            // transient admission failures per pushed envelope (daemon.go)
-	prefetchFailed   map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
-	fetches          fileFetches                // received files a person chose to download (filewait.go)
-	wakeWorker       func()                     // sends a coalesced local wake; stable for this Agent handle
-	workerLanes      executionLanes             // local selected executors, through run cleanup
-	appUpdateMu      sync.RWMutex               // holds job claim/run against whole-app replacement
-	workerWakeFeed   *changeFeed                // broadcast kicks/pings to every active run
-	workerWake       chan struct{}              // pending local job wake survives worker startup
-	workerUrgent     chan struct{}              // a wake someone waits on: the worker's pace ends at once (changes.go)
-	changes          *changeFeed                // local state changed (changes.go)
-	listed           listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
-	members          memberState                // the Hub's member list from the push stream (members.go)
-	profiles         profileCache               // device profiles until the next member list (profilecache.go)
-	relay            relayCache                 // relay features and own publications while the stream is open (profilecache.go)
-	session          string                     // this run's session id (Run); "" outside Run
-	convWork         convWork                   // conversation upkeep due on the next sync (conv.go)
-	capsPub          capsPublisher              // this run's capability records (conv.go)
-	agentSweep       agentSweep                 // the worker's look at requests to its agent (agentjob.go)
-	alertWake        chan struct{}              // wakes the desktop alert loop (alerts.go)
-	openConv         func(conv string) []string // RunOptions.OpenConv
+	deliveryLocks     keyedLocks // envelope ID, shared by immediate sends and retry passes
+	flushOnce         sync.Once
+	flushLock         chan struct{} // readable turns serialize independently of replication
+	syncFlushLock     chan struct{} // one background replication pass at a time
+	flushWake         chan struct{} // durable queued arrivals fill free delivery slots
+	archiveOnce       sync.Once
+	archiveLock       chan struct{}
+	archivePosting    backgroundPosts
+	archiveImporting  backgroundPosts
+	receiptOnce       sync.Once
+	receiptLock       chan struct{} // dispositions never wait for history upkeep
+	routeHints        sync.Map      // optional verified first-attempt direct route; never queue storage
+	posting           backgroundPosts
+	receipting        backgroundPosts // acknowledgements, beside posting, never in front of it
+	groupsSynced      sync.Map        // group → continuity token/context hash its recovered devices were complete under
+	queued            queuedSends
+	topicCache        topicCache
+	sendRetry         sendRetry     // a transient send failure is tried again soon (backgroundsend.go)
+	humanMu           sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
+	statusLocks       keyedLocks    // one status of a request at a time (headless.go)
+	statusWake        chan struct{} // wakes this process's status sender (statusLoop)
+	statusLive        atomic.Bool   // statusLoop runs in this process
+	home              string
+	id                *identity.Identity
+	store             *store
+	teams             teamRuntime   // the relay's team directory as last seen (teams.go)
+	typing            typingRuntime // live typing signals, memory only (typing.go)
+	groupWork         groupWork     // group journal upkeep due on the next sync (convgroup.go)
+	hub               *hubConn
+	networkWake       chan struct{} // a platform network change interrupts reconnect backoff
+	heartbeat         time.Duration
+	adQuery           string                     // this run's signed session ad, for the push stream
+	kick              func()                     // wakes the current stream's retry worker
+	kickMu            sync.Mutex                 // guards kick for kickNow
+	paceClaimed       func()                     // optional deterministic after-claim test barrier
+	retryFiring       func(uint64)               // optional before-claim test barrier
+	retryClaimed      func(uint64)               // optional after-claim test barrier
+	readerFiring      func(string, uint64)       // optional before-mutation test barrier
+	kicksLive         atomic.Bool                // this Agent's daemon serves the local wake-up socket (startWorker)
+	streamConnected   atomic.Bool                // the daemon currently holds an accepted Hub push stream
+	selfKicks         atomic.Int64               // wakes in flight that this daemon sent itself (notifyOwnWork)
+	statusAwaitsCaps  atomic.Bool                // a status waits for its requester's capability record (tellStatus)
+	receiveFails      receiveFailures            // transient admission failures per pushed envelope (daemon.go)
+	prefetchFailed    map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
+	fetches           fileFetches                // received files a person chose to download (filewait.go)
+	wakeWorker        func()                     // sends a coalesced local wake; stable for this Agent handle
+	workerLanes       executionLanes             // local selected executors, through run cleanup
+	appUpdateMu       sync.RWMutex               // holds job claim/run against whole-app replacement
+	workerWakeFeed    *changeFeed                // broadcast kicks/pings to every active run
+	workerWake        chan struct{}              // pending local job wake survives worker startup
+	codexWithdrawKick chan struct{}              // another withdraw pass after a failed Codex queue delete
+	workerUrgent      chan struct{}              // a wake someone waits on: the worker's pace ends at once (changes.go)
+	changes           *changeFeed                // local state changed (changes.go)
+	listed            listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
+	members           memberState                // the Hub's member list from the push stream (members.go)
+	profiles          profileCache               // device profiles until the next member list (profilecache.go)
+	relay             relayCache                 // relay features and own publications while the stream is open (profilecache.go)
+	session           string                     // this run's session id (Run); "" outside Run
+	convWork          convWork                   // conversation upkeep due on the next sync (conv.go)
+	capsPub           capsPublisher              // this run's capability records (conv.go)
+	agentSweep        agentSweep                 // the worker's look at requests to its agent (agentjob.go)
+	alertWake         chan struct{}              // wakes the desktop alert loop (alerts.go)
+	openConv          func(conv string) []string // RunOptions.OpenConv
 
 	nativeNotify               func(fragment string)
 	nativeNotifyContent        func(NativeNotification)
@@ -298,7 +299,7 @@ func openAgent(home string, id *identity.Identity, st *store) (*Agent, error) {
 	}
 	wake := make(chan struct{}, 1)
 	wakeFeed := newChangeFeed()
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, workerUrgent: make(chan struct{}, 1), workerWakeFeed: wakeFeed, wakeWorker: func() {
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, codexWithdrawKick: make(chan struct{}, 1), workerUrgent: make(chan struct{}, 1), workerWakeFeed: wakeFeed, wakeWorker: func() {
 		wakeFeed.bump()
 		select {
 		case wake <- struct{}{}:

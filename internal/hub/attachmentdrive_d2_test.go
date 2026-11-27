@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,9 @@ func TestRelayAttachmentDriveMissingChecksumRetainsLocalUntilMove(t *testing.T) 
 }
 
 func TestRelayAttachmentDriveRateLimitsRetryButQuotaWaitsForMove(t *testing.T) {
+	old := attachmentDriveSlowDown
+	attachmentDriveSlowDown = 10 * time.Millisecond
+	t.Cleanup(func() { attachmentDriveSlowDown = old })
 	for _, reason := range []string{"rateLimitExceeded", "userRateLimitExceeded", "storageQuotaExceeded"} {
 		t.Run(reason, func(t *testing.T) {
 			p := newRelayDriveProvider(t)
@@ -105,6 +109,14 @@ func TestRelayAttachmentDriveRateLimitsRetryButQuotaWaitsForMove(t *testing.T) {
 			id := a.upload(t, h, b.addr, []byte("encrypted quota fixture"))
 			if reason != "storageQuotaExceeded" {
 				awaitAttachmentState(t, h, id, "retry")
+				// Drive's rate limit first slows the move (halving 32 → 1, one
+				// retry each), and pauses it only when it persists at a pace of one.
+				p.mu.Lock()
+				calls := p.uploadCalls
+				p.mu.Unlock()
+				if calls != 6 {
+					t.Fatalf("rate-limited uploads before the pause: %d, want 6 (32, 16, 8, 4, 2, 1)", calls)
+				}
 				awaitRelayDriveStatus(t, h, func(s drivecontract.RelayStorageStatus) bool { return s.State == "offline" })
 				p.mu.Lock()
 				p.uploadReason = ""
@@ -295,6 +307,85 @@ func TestRelayAttachmentDriveTransientResumeRetriesQueue(t *testing.T) {
 	var retained string
 	if err := h.store.db.QueryRow(`SELECT file_id FROM relay_drive_blobs WHERE blob_id=?`, resumed).Scan(&retained); err != nil || retained != fileID {
 		t.Fatal("retry changed the stable provider ID", retained, err)
+	}
+}
+
+// Transfers admitted together all wait for the pause their rate limit
+// causes, down to a pace of one: the move stops only when Drive refuses a
+// single transfer (MEL-836). Two files: 32, 16, 8, 4 and 2 each try both,
+// then one try alone, after the last pause.
+func TestRelayAttachmentDriveRateLimitStopsOnlyAtPaceOne(t *testing.T) {
+	old := attachmentDriveSlowDown
+	attachmentDriveSlowDown = 100 * time.Millisecond
+	t.Cleanup(func() { attachmentDriveSlowDown = old })
+	p := newRelayDriveProvider(t)
+	h, a, b, _ := attachmentDriveHub(t, p, false)
+	first := a.upload(t, h, b.addr, []byte("first rate-limited fixture"))
+	second := a.upload(t, h, b.addr, []byte("second rate-limited fixture"))
+	connectRelayDriveFixture(t, h, a)
+	p.mu.Lock()
+	p.uploadReason = "rateLimitExceeded"
+	before := p.uploadCalls // connecting created the folder
+	p.mu.Unlock()
+	h.attachmentDrive.mu.Lock()
+	_, err := h.store.db.Exec(`INSERT INTO relay_drive_blobs(blob_id,file_id,state,local_present) VALUES(?,'','pending',1),(?,'','pending',1)`, first, second)
+	h.attachmentDrive.signal()
+	h.attachmentDrive.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		var retry int
+		if err := h.store.db.QueryRow(`SELECT count(*) FROM relay_drive_blobs WHERE state='retry'`).Scan(&retry); err != nil {
+			t.Fatal(err)
+		}
+		if retry > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the move never stopped on Drive's rate limit")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	p.mu.Lock()
+	starts := slices.Clone(p.uploadStarts[before:])
+	p.mu.Unlock()
+	// Timing-proof: however late a reply, the last try ran alone.
+	if n := len(starts); n < 2 || starts[n-1].Sub(starts[n-2]) < attachmentDriveSlowDown/2 {
+		t.Fatalf("the move stopped without a try at a pace of one: %d tries", n)
+	}
+}
+
+// A resumed Drive copy whose check Drive rate-limits rejoins the same pass
+// after the pause: no later upload, reconnect or restart is needed (MEL-836).
+func TestRelayAttachmentDriveRateLimitedResumeRejoinsPass(t *testing.T) {
+	old := attachmentDriveSlowDown
+	attachmentDriveSlowDown = 10 * time.Millisecond
+	t.Cleanup(func() { attachmentDriveSlowDown = old })
+	p := newRelayDriveProvider(t)
+	h, a, b, _ := attachmentDriveHub(t, p, false)
+	data := []byte("verified local copy after crash before eviction")
+	resumed := a.upload(t, h, b.addr, data)
+	connectRelayDriveFixture(t, h, a)
+	const fileID = "rate-limited-resumed-file"
+	p.mu.Lock()
+	p.files[fileID] = relayFakeFile{data: data, meta: map[string]any{"id": fileID, "size": strconv.Itoa(len(data)), "mimeType": "application/octet-stream", "sha256Checksum": digest(data), "appProperties": map[string]string{"agentnet_realm": h.realmID, "agentnet_blob": resumed, "agentnet_sha256": digest(data)}}}
+	p.metadataRateLimits = map[string]int{fileID: 1}
+	p.mu.Unlock()
+	h.attachmentDrive.mu.Lock()
+	_, err := h.store.db.Exec(`INSERT INTO relay_drive_blobs(blob_id,file_id,state,local_present) VALUES(?,?,'remote',1)`, resumed, fileID)
+	h.attachmentDrive.signal()
+	h.attachmentDrive.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitAttachmentState(t, h, resumed, "remote") // and its local copy removed
+	p.mu.Lock()
+	left := p.metadataRateLimits[fileID]
+	p.mu.Unlock()
+	if left != 0 {
+		t.Fatal("Drive's rate limit was never hit")
 	}
 }
 

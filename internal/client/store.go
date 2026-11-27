@@ -330,7 +330,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema, groupCarrierLapseSchema, ViewCoverSchema, queuedFollowupSchema, blockSyncSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema, groupCarrierLapseSchema, ViewCoverSchema, queuedFollowupSchema, blockSyncSchema, requestEditIndex, claudeChatSchema, codexChatSchema}
 
 // unsentReceipts runs on every wake. Without these it read all three tables
 // whole (about 96 ms on 200k rows, 0.02 ms with them).
@@ -1360,6 +1360,7 @@ type job struct {
 	Local            bool // asked here, by this device's own person
 
 	nativeAttempt int64   // immutable attempt of this owned native process
+	editOf        string  // private queue projection of an edit of this request
 	run           *runDir // its run folder while it runs (runfiles.go)
 }
 
@@ -1412,16 +1413,16 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 		var target, previousState string
 		var receivedAt int64
 		var followup sql.NullString
-		err = tx.QueryRow(`SELECT id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,''),state,received_at,request_followup
+		err = tx.QueryRow(`SELECT id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,''),state,received_at,request_followup,`+editJobParent+`
    FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
     OR (attempts=0 AND ((state = ? AND kind='question') OR (state = ? AND kind='task')) AND `+ownTaskHolds+`)
-    OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
+    OR (state = ? AND (sub='`+requestEditJob+`' OR kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
      OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     AND (? = '' OR received_at > ? OR (received_at = ? AND id > ?))
     ORDER BY received_at, id LIMIT 1`,
 			stateAccepted, stateHeld, stateAwaiting, statePending, envelope.KindQuestion, envelope.KindTask,
-			envelope.KindQuestion, envelope.KindTask, responder, afterID, afterAt, afterAt, afterID).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key, &previousState, &receivedAt, &followup)
+			envelope.KindQuestion, envelope.KindTask, responder, afterID, afterAt, afterAt, afterID).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key, &previousState, &receivedAt, &followup, &j.editOf)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -1443,6 +1444,31 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 			if !ready {
 				continue
 			}
+		}
+		if j.editOf != "" {
+			if ready, err := queuedFollowupReadyIn(tx, j.ID); err != nil {
+				return job{}, false, err
+			} else if !ready {
+				continue
+			}
+			text, ok, err := editJobText(tx, j, false)
+			if err != nil {
+				return job{}, false, err
+			}
+			var allowed bool
+			if ok {
+				if err := tx.QueryRow(`SELECT (kind='question' AND `+questionApprovalHolds+` OR kind='task' AND (`+taskGrantHolds+` OR `+ownTaskHolds+`)) FROM inbox WHERE id=?`, j.ID).Scan(&allowed); err != nil {
+					return job{}, false, err
+				}
+			}
+			if !allowed {
+				if err := closeUnrunEdit(tx, j.ID, previousState, "Edit follow-up could not run under the original attempt and current permissions"); err != nil {
+					return job{}, false, err
+				}
+				changed = true
+				continue
+			}
+			j.Body = text
 		}
 		if j.Kind == envelope.KindQuestion || j.Kind == envelope.KindTask {
 			person, e := permissionPersonIn(tx, j.From, j.Key)
@@ -1535,6 +1561,9 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 			j.Executor = stamp
 		}
 		if err = tx.QueryRow(`SELECT count(*) FROM attachments WHERE message_id=?`, j.ID).Scan(&j.Attachments); err != nil {
+			return job{}, false, err
+		}
+		if j.Body, err = requestEditAtClaim(tx, j); err != nil {
 			return job{}, false, err
 		}
 		if err = settleRequestFollowupIn(tx, j); err != nil {

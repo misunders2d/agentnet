@@ -251,6 +251,9 @@ func codexNativeScan(file, sid string, offset int64, match func(json.RawMessage)
 	var ordinal int64
 	seen := false
 	err := nativeRecords(file, offset, func(rec nativeRecord) error {
+		if !rec.Complete {
+			return nil // the last record, still being written: read once its newline lands
+		}
 		if rec.Oversize {
 			if first {
 				return errors.New("native Codex exact daemon session header absent")
