@@ -4452,3 +4452,45 @@ without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
 161 px desktop), and the inline "saw N messages" control opens What it saw and
 closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
 
+
+## Storage page on Android: attachment status reads and "On this phone" (v0.11.13)
+
+Owner's Play app (v0.11.12), 2026-11-27: You → Storage → Workspace attachments
+showed "AgentNet is not reachable…" with a stuck "Refreshing…" while the phone
+received a large history copy; chats loaded. Cause, reproduced: the card started
+one relay read for every un-hinted change event (every committed local write is
+one; `/events` does not throttle). A superseded read never cleared "Refreshing…",
+and while no status was known even background reads set it. Chromium rejects
+fetches once about 1,350 are pending (1,300 queued: all answered; 1,500: 145
+`TypeError: Failed to fetch`; 4,000: 2,651), which `errorText` names as "not
+reachable". The old card with 300 held change events: 300 reads in flight,
+button "Refreshing…", that alert. The phone's own event rate during the copy and
+Android WebView's exact pending-request limit were not measured.
+
+Reused pattern: the store's refresh lanes (`store.ts` `refreshOpen`, "each lane
+coalesces independently, including continuous traffic"). The card keeps at most
+two reads in flight and folds later events into one follow-up; the newest read
+still wins over an older one. Background reads never change or disable Refresh.
+Refresh clears the old error and shows "Refreshing…" at once, until a read
+started after the press settles. A read unanswered after 30 s (the core's relay
+call is bounded at 20 s) ends with "No answer about workspace attachments yet.
+Refresh to try again." A request with no HTTP answer says "Workspace attachment
+status couldn’t be read just now. Refresh to try again."; HTTP refusals keep
+their own words.
+
+`TestRelayAttachmentStorageRendered` (390 px, Chromium, fake clock): a real
+`fetch` aborted at the network gives the truthful alert with Refresh usable; 300
+change events start 2 reads plus exactly 1 follow-up, Refresh stays enabled and
+labelled; Refresh feedback (error gone, "Refreshing…") measured 0–1 ms; a real
+read succeeds after the failure; a never-answering read ends at the 30 s bound
+and Refresh then succeeds. The existing member and Move focus variants pass. The
+same fixture on the unchanged candidate fails at the alert text, and with that
+assertion removed shows 300 reads in flight. The full default run fails at
+"keyboard dismissal returns focus" (1280 dark) on the unchanged candidate too,
+3 of 3 runs here; not addressed.
+
+Storage on Android now says "On this phone" in the stat tile and the section
+header (`store.host.platform`, as the same file's workspace and runs-as lines
+do). `TestAndroidComicRendered` (390 and 320 px) opens You → Storage with a
+stood-in `/api/storage` summary: both labels say "On this phone", nothing says
+"this computer". Not run in Android WebView or on a device.

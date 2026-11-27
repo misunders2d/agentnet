@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { errorText } from "../api";
+import { errorText, requestFailed } from "../api";
 import type { Host } from "../host";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -7,6 +7,21 @@ import { canUseStorageAction, readRelayStorage, storageBytes, storageFiles, stor
 
 const endpoint = "/api/storage/attachments";
 const active = () => true;
+// Reads in flight at once. Every stored local write is a change event (a
+// history copy makes a burst of them); unbounded, each started its own relay
+// read, and the browser rejected the excess queued requests ("Failed to
+// fetch"). Later events coalesce into one follow-up read, as the store's
+// refresh lanes do; the newest read still wins over an older one.
+const maxReads = 2;
+// A read with no answer after this releases the card: the core's own relay
+// call is bounded at 20 s, so a longer wait means no answer will come.
+export const relayStorageReadBound = 30_000;
+class ReadBound extends Error {}
+function readFailure(e: unknown): string {
+  if (e instanceof ReadBound) return "No answer about workspace attachments yet. Refresh to try again.";
+  if (requestFailed(e)) return "Workspace attachment status couldn’t be read just now. Refresh to try again.";
+  return errorText(e);
+}
 
 /** All calls remain bound to the captured workspace host. No Google transport,
  *  tokens, per-user consent, polling or direct fetch lives in this component. */
@@ -17,28 +32,52 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
   const [confirm, setConfirm] = useState<"move" | "disconnect" | null>(null);
   const scope = useRef(0), reads = useRef(0), acting = useRef(false), queuedRefresh = useRef(false);
   const known = useRef<RelayStorageStatus | null>(null);
+  // This scope's reads: how many are in flight, whether a change asked for
+  // another, and whether a shown "Refreshing…" still waits for its read.
+  const lane = useRef({ running: 0, again: false, shown: true });
 
-  const refresh = useCallback(async (background = false) => {
-    if (!isActive()) return;
-    if (acting.current) { queuedRefresh.current = true; return; }
-    const owner = scope.current, request = ++reads.current;
+  const read = useCallback(() => {
+    const owner = scope.current, request = ++reads.current, mine = lane.current;
     const current = () => owner === scope.current && request === reads.current && isActive();
-    if (!background || !known.current) setLoading(true);
-    try {
-      const next = readRelayStorage(await host.api(endpoint));
-      if (!current()) return;
-      known.current = next; setStatus(next); setError("");
-      if (!next.can_admin || !next.configured || next.state === "connected" || next.state === "migrating") setConsent("");
-    } catch (e) { if (current()) setError(errorText(e)); }
-    finally { if (current()) setLoading(false); }
+    mine.running++; mine.again = false; mine.shown = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ReadBound()), relayStorageReadBound); });
+    void (async () => {
+      try {
+        const next = readRelayStorage(await Promise.race([host.api(endpoint), bound]));
+        if (!current()) return;
+        known.current = next; setStatus(next); setError("");
+        if (!next.can_admin || !next.configured || next.state === "connected" || next.state === "migrating") setConsent("");
+      } catch (e) { if (current()) setError(readFailure(e)); }
+      finally {
+        clearTimeout(timer);
+        mine.running--;
+        if (current() && !mine.shown) setLoading(false);
+        if (mine === lane.current && mine.again && mine.running < maxReads && isActive()) {
+          if (acting.current) { mine.again = false; queuedRefresh.current = true; } else read();
+        }
+      }
+    })();
   }, [host, isActive]);
+
+  // A manual refresh shows itself at once: the old error goes and the button
+  // says "Refreshing…" until a read started after the press settles. A
+  // background read never changes the button.
+  const refresh = useCallback((manual = false) => {
+    if (!isActive()) return;
+    if (manual) { lane.current.shown = true; setError(""); setLoading(true); }
+    if (acting.current) { queuedRefresh.current = true; return; }
+    if (lane.current.running >= maxReads) { lane.current.again = true; return; }
+    read();
+  }, [isActive, read]);
 
   useEffect(() => {
     scope.current++; reads.current++; acting.current = false; queuedRefresh.current = false; known.current = null;
-    setStatus(null); setBusy(null); setConfirm(null); setConsent(""); setError("");
-    void refresh();
-    const stop = host.listen(e => { if (e.type === "restart" || (e.type === "change" && !e.hint)) void refresh(true); });
-    const visible = host.android?.onVisibility(() => { if (host.android?.visible()) void refresh(true); });
+    lane.current = { running: 0, again: false, shown: true };
+    setStatus(null); setBusy(null); setConfirm(null); setConsent(""); setError(""); setLoading(true);
+    refresh();
+    const stop = host.listen(e => { if (e.type === "restart" || (e.type === "change" && !e.hint)) refresh(); });
+    const visible = host.android?.onVisibility(() => { if (host.android?.visible()) refresh(); });
     return () => { scope.current++; reads.current++; stop(); visible?.(); };
   }, [host, refresh]);
 
@@ -59,7 +98,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
     finally {
       if (current()) {
         acting.current = false; setBusy(null);
-        if (queuedRefresh.current) { queuedRefresh.current = false; void refresh(true); }
+        if (queuedRefresh.current) { queuedRefresh.current = false; refresh(); }
       }
     }
   };
@@ -119,7 +158,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
             : `Disconnect is unavailable: ${storageFiles(status.remote.files)} retained in Drive still need this account for access or cleanup, even when local copies exist.`}</p>}
       </> : loading ? <p role="status" className="text-text-2">Reading attachment storage…</p> : null}
       {!status && error && <p role="alert" className="text-[15px] text-danger">{error}</p>}
-      <Button size="sm" variant="ghost" disabled={locked} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh storage status"}</Button>
+      <Button size="sm" variant="ghost" disabled={locked} onClick={() => refresh(true)}>{loading ? "Refreshing…" : "Refresh storage status"}</Button>
       <Sheet open={confirm !== null} onOpenChange={open => { if (!open) setConfirm(null); }}
         title={confirm === "disconnect" ? "Disconnect this relay’s Drive?" : "Move existing relay attachments?"}
         description={confirm === "disconnect" ? "This changes attachment storage for everyone in this workspace." : "Move encrypted copies stored on this relay, without changing chats or attachment references."}

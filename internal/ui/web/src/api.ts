@@ -204,9 +204,16 @@ export function api(host: Host) {
 
 export type Api = ReturnType<typeof api>;
 
+// requestFailed: the request got no HTTP answer at all (the fetch itself
+// rejected). Browsers say only that, not why: a lost connection, or a
+// browser refusing to queue more requests.
+export function requestFailed(e: unknown): boolean {
+  return e instanceof TypeError && /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed)$/i.test(e.message);
+}
+
 // errorText is what a failed call says, for the person.
 export function errorText(e: unknown): string {
-  if (e instanceof TypeError && /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed|fetch failed)$/i.test(e.message))
+  if (requestFailed(e))
     return "AgentNet is not reachable. Check the connection and try again.";
   if (e instanceof Error) return e.message || "Something went wrong.";
   return String(e || "Something went wrong.");

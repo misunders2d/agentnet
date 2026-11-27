@@ -148,6 +148,18 @@ const fs = require('node:fs');
       assert.deepEqual(await page.evaluate(()=>window.androidAppCalls),['app:status']);
       await page.evaluate(()=>{window.androidStoreBuild=false;});
       await back();
+      // Storage names the phone, not a computer: the stat tile and the
+      // section header (owner's Play app, v0.11.12). The core's own summary.
+      await page.route('**/api/storage',route=>route.fulfill({json:{local:{scope:'agent-home-managed-files',location:"This installation's AgentNet home",complete:true,known:{files:3,bytes:3072},areas:[{directory:'kept',label:'Retained sent files',kind:'ciphertext',lifetime:'Retained for history.',status:'available',usage:{files:3,bytes:3072}}]},remote:{status:'unsupported',reason:'Your server doesn’t report storage.'}}}));
+      await page.getByRole('button',{name:/^Storage/}).first().click();
+      await page.locator('#storage-here').waitFor();
+      assert.equal((await page.locator('#storage-here').textContent()).trim(),'On this phone');
+      await page.getByText('On this phone',{exact:true}).first().waitFor();
+      assert.equal(await page.getByText(/On this phone/).count(),2,'the stat tile and the section header');
+      assert.equal(await page.getByText(/this computer/i).count(),0,'no computer wording on the phone');
+      await fits('Storage on this phone'); await snap('storage');
+      await back();
+      await page.unroute('**/api/storage');
       await page.evaluate(()=>{window.androidNotificationGranted=false;window.agentnetNativeVisibility(true);});
       await page.getByRole('button',{name:/Notifications/}).first().click();
       await page.getByText('Stay connected in the background',{exact:true}).waitFor();
