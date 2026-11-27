@@ -386,11 +386,10 @@ func (a *Agent) admitClear(ctx context.Context, env envelope.Envelope, in envelo
 	if !ok || !me.has(env.From, sender.Fingerprint()) || env.From == a.Address {
 		return hold(reasonInvalid, "a conversation deletion comes only from another current device of this person")
 	}
-	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
-		return err
-	} else if !found {
-		return hold(reasonProof, "the conversation is not here (yet)")
-	}
+	// The names are kept even while the conversation is not here: a device
+	// linked after the deletion never gets a chat that has nothing later
+	// (syncRoots, history), and a named turn that arrives later, from any
+	// device, is kept as a skeleton. Holding it would leave it held for good.
 	selfFP := a.Self().Fingerprint()
 	tx, err := a.store.db.Begin()
 	if err != nil {

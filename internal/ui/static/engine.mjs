@@ -2684,9 +2684,11 @@ export class Engine {
     for(;;) {
       const own=await this.store.get("kv","person");
       if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
-      const ops=[],checks=[];
+      const ops=[],checks=[];let rows=null;
       for(const c of await this.store.all("convs")) {
-        if(c.kind==="group" || this.erasedConv(c.id))continue;
+        if(c.kind==="group")continue;
+        // Deleted here and nothing later (client convDeleted): this conversation's own turns only, as the core.
+        if(this.erasedConv(c.id)){rows??=[await this.store.all("inbox"),await this.store.all("outbox")];if(!(await this.convMessages(c.id,rows[0],rows[1])).some(m=>!m.sub))continue;}
         const root=wire.parseRoot(c.root);if(!wire.rootMember(root,own.person))continue;
         for(const dev of own.devices) {
         if (!await this.recipientAvailable(dev,checks)) continue;
@@ -10206,7 +10208,7 @@ export class Engine {
     let part;
     try { part = wire.parseControl(wire.SubClear, n.body); } catch (e) { throw new Hold("invalid", "a malformed conversation deletion"); }
     if (!this.me || env.from === this.address || !this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint)) throw new Hold("invalid", "a conversation deletion comes only from another current device of this person");
-    if (!(await this.store.get("convs", n.conv)) && !(await this.groupRecord(n.conv))) throw new Hold("proof_pending", "the conversation is not here (yet)");
+    // Kept even while the conversation is not here (client admitClear): a named turn arriving later stays a skeleton.
     const checks=[],turns = [n.ref, ...part.turns], ops = [{ s: "inbox", k: env.id, v: { id: env.id, v: 3, control: true, from: env.from, fp: pin.fingerprint, kind: "message", sub: wire.SubClear, body: n.body,
       ref: n.ref, conv: n.conv, lid: n.lid, replica: true, own: true, person: this.me.person, fan: n.fan || null, at: this.now(), read: true } }];
     const prior = this.erased, next = new Set(prior);
