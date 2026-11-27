@@ -681,7 +681,7 @@ export const TOPICS = Object.freeze({
 // a connected host's word is old news (client ExecRunningMaxAge, pinned by
 // internal/ui topics_browser_test.go).
 export const EXEC_RUNNING_MAX_AGE = 3600;
-const requestEditStatus = (detail) => /^request-edit ([0-9a-f]{32}) (queued|running|steered|answered|failed)$/.exec(detail || "");
+const requestEditStatus = (detail) => /^request-edit ([0-9a-f]{32}) (queued|running|followup|steered|answered|failed)$/.exec(detail || "");
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting", "helpers_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined", "not_delivered"]);
 // replyCloses: an answer or result is its request's last word unless it says
