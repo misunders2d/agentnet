@@ -1037,6 +1037,9 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 	if info.State != PartInvited {
 		return info, fmt.Errorf("the invite is %s, not waiting for a decision", info.State)
 	}
+	if info.Held != 0 { // evidence that may end or change it waits: decided once it counts
+		return info, errors.New("the invite waits for verified participation evidence, not decided yet")
+	}
 	decided, err := a.signWith(ctx, info, typ, info.Invite, undecidedHere(info.Conv, pid, a.Self().Fingerprint()))
 	if errors.Is(err, errDecidedHere) { // decided meanwhile, without a click or by another process: as a retry, once
 		own, e := a.ownEvent(info.Conv, pid, typ, protocol.EventAccept, protocol.EventDecline)

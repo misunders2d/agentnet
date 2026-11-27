@@ -235,6 +235,15 @@ func (a *Agent) admitGroupVisitorCancel(env envelope.Envelope, in envelope.Inner
 	if ev.Prev != inv.Hash() || ev.Author.Person != inv.Author.Person || ev.Author.Address != inv.Author.Address || ev.Author.Fingerprint != inv.Author.Fingerprint || ev.Author.Person != sp.info.Person || !sp.has(env.From, sender.Fingerprint()) {
 		return false, nil
 	}
+	// As the invitation's author counts once context is held (dmMembers
+	// author): a pinned roster step and the invitation's admission. Recorded
+	// otherwise, it would never count and hold the invitation for good.
+	if ev.Author.GroupAdmission == "" || ev.Author.GroupAdmission != inv.Author.GroupAdmission {
+		return false, nil
+	}
+	if chained, err := inChainIn(a.store.db, ev.Author.Person, ev.Author.Roster); err != nil || !chained {
+		return false, err
+	}
 	result, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, []byte(in.Body)) })
 	if err == nil && result == admitConflict {
 		return true, hold(reasonDuplicate, "group: visitor cancellation logical conflict")

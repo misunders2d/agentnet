@@ -673,3 +673,75 @@ func TestGroupGuestCancellationBeforeInvite(t *testing.T) {
 		})
 	}
 }
+
+// Fail closed, and never wedged: a dismissal that follows the invitation
+// but names a roster step outside the inviter's chain or another group
+// admission is not recorded before context (it would then never count yet
+// hold the invitation as waiting for evidence); the invitation stays
+// decidable once context arrives.
+func TestGroupGuestCancellationBeforeContextUnverifiedAuthor(t *testing.T) {
+	for name, mutate := range map[string]func(*protocol.EventAuthor){
+		"unchained-roster": func(a *protocol.EventAuthor) { a.Roster = strings.Repeat("cd", 32) },
+		"wrong-admission":  func(a *protocol.EventAuthor) { a.GroupAdmission = strings.Repeat("cd", 32) },
+		"no-admission":     func(a *protocol.EventAuthor) { a.GroupAdmission = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w, conv := offlineGroupGuestFixture(t)
+			inviter, guest := w.alice, w.bob
+			first, err := inviter.InviteHuman(tctx(t), conv, guest.Address, nil, "first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs, err := inviter.store.participationEvents(conv, first.PID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(evs, func(ev protocol.ParticipationEvent) bool { return ev.Type == protocol.EventInvite })
+			if i < 0 {
+				t.Fatal("no invitation")
+			}
+			deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubEvent)
+			bad := protocol.ParticipationEvent{V: 1, Conv: conv, PID: first.PID, Type: protocol.EventDismiss, Prev: evs[i].Hash(), TS: time.Now().Unix(), Author: evs[i].Author}
+			mutate(&bad.Author)
+			bad.Sign(inviter.id.Sign)
+			env := sealGuestEvent(t, inviter, guest, conv, bad)
+			if err = guest.accept(tctx(t), env); err != nil {
+				t.Fatal(err)
+			}
+			if got, e := guest.store.participationEvents(conv, first.PID); e != nil || slices.ContainsFunc(got, func(ev protocol.ParticipationEvent) bool { return ev.Type == protocol.EventDismiss }) {
+				t.Fatalf("unverified dismissal recorded without context: %v", e)
+			}
+			deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubGroupProof)
+			deliverPIDCopies(t, inviter, guest, first.PID, envelope.SubGroupContext)
+			for guest.retryProof(tctx(t)) {
+			}
+			if got, e := guest.Participation(first.PID); e != nil || got.State != PartInvited || got.Held != 0 {
+				t.Fatalf("valid invitation wedged: %+v %v", got, e)
+			}
+			if _, err = guest.AcceptParticipation(tctx(t), first.PID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// sealGuestEvent seals ev as from's copy of it to to in conv.
+func sealGuestEvent(t *testing.T, from, to *Agent, conv string, ev protocol.ParticipationEvent) envelope.Envelope {
+	t.Helper()
+	body, _ := json.Marshal(ev)
+	root, _, _, err := from.store.conversation(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRaw, _ := json.Marshal(root)
+	key, err := to.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: protocol.NewID(), From: from.Address, To: to.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: rootRaw, PID: ev.PID, Sub: envelope.SubEvent, Body: string(body)}
+	env, err := envelope.Seal(in, from.id.Sign, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
