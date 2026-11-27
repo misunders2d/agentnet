@@ -569,9 +569,12 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		if e != nil {
 			return e
 		}
-		for i, d := range []identity.Public{a.Self(), sender} {
+		// The sender first: one this context does not list is refused for
+		// good, whatever context comes later; only then may this device's own
+		// absence wait for a newer context (groupReaderBehind).
+		for i, d := range []identity.Public{sender, a.Self()} {
 			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
-				if i == 0 && errors.Is(e, errGroupRecipientNotCurrent) {
+				if i == 1 && errors.Is(e, errGroupRecipientNotCurrent) {
 					return groupReaderBehind{e}
 				}
 				return e

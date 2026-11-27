@@ -961,3 +961,83 @@ func TestGroupGuestDecisionGuards(t *testing.T) {
 		}
 	})
 }
+
+// Review of f9c0d17a: the sender is checked before this device's own
+// absence may wait. A visitor's verified context lists neither this device
+// nor a third person, whose turn arrives against it; both then become
+// members. The turn is refused for good: a later context never authorizes a
+// turn whose sender the context it arrived against did not list.
+func TestGroupUnlistedSenderTurnBeforeReaderContext(t *testing.T) {
+	w := newWorld(t, "")
+	carol := proofReader(t, w, "carol")
+	persons(t, w.alice, w.bob)
+	runAgent(t, w.alice)
+	publishGroupFixtureCaps(t, w.alice, true)
+	stopB := runAgent(t, w.bob)
+	publishGroupFixtureCaps(t, w.bob, true)
+	runAgent(t, carol)
+	publishGroupFixtureCaps(t, carol, true)
+	p, err := w.alice.CreateGroup(tctx(t), "Solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob, carol} {
+		roomReader(t, a)
+	}
+	conv := p.Root.ID()
+	guestP, err := w.alice.InviteHumanInScope(WithQueuedSend(tctx(t), ""), conv, w.bob.Address, nil, "guest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "guest invitation", func() bool { p, e := w.bob.Participation(guestP.PID); return e == nil && p.State == PartInvited })
+	eventually(t, "visitor context", func() bool { _, e := w.bob.GroupContext(conv); return e == nil })
+	stopB() // its verified context lists the inviter alone
+	root, _, _, err := w.alice.store.conversation(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRaw, _ := json.Marshal(root)
+	key, err := w.bob.Self().Recipient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: protocol.NewID(), From: carol.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: rootRaw, Body: "from an unlisted sender", Origin: envelope.OriginUI}
+	turn, err := envelope.Seal(in, carol.id.Sign, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.bob.accept(tctx(t), turn); err != nil {
+		t.Fatal(err)
+	}
+	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
+		t.Fatalf("turn of a sender the reader's context does not list held as %q", got)
+	}
+	runAgent(t, w.bob)
+	for _, a := range []*Agent{carol, w.bob} {
+		person, _, e := a.Person()
+		if e != nil {
+			t.Fatal(e)
+		}
+		inv, e := w.alice.InviteGroup(tctx(t), conv, person.Person, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		awaitGroupInvitation(t, a, inv.ID, "pending")
+		if e = a.DecideGroupInvitation(tctx(t), inv.ID, true); e != nil {
+			t.Fatal(e)
+		}
+		eventually(t, "published", func() bool {
+			r, e := groupInvitationIn(w.alice.store.db, inv.ID, "out")
+			return e == nil && r.State == "published"
+		})
+	}
+	eventually(t, "reader context lists both", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 3 })
+	for w.bob.retryProof(tctx(t)) {
+	}
+	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {
+		t.Fatalf("turn of an unlisted sender held as %q once both joined", got)
+	}
+	if slices.Contains(convBodies(t, w.bob, conv), "in:from an unlisted sender") {
+		t.Fatal("turn of an unlisted sender shown once both joined")
+	}
+}
