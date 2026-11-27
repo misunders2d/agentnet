@@ -4453,7 +4453,7 @@ without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
 closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
 
 
-## A removed own device is history, not a chat (v0.11.13)
+## A removed own device is history, not a chat (v0.11.14)
 
 Owner, 2026-11-27: after removing admin/android-phone-3 (replaced by
 android-phone-4), "Android phone 3 · Not linked to a person" appeared among
@@ -4487,7 +4487,7 @@ browser still lists such a row (closed in "Delete a whole device chat; others'
 removed devices leave the list" below).
 
 
-## Delete a whole device chat; others' removed devices leave the list (v0.11.13)
+## Delete a whole device chat; others' removed devices leave the list (v0.11.14)
 
 Owner, 2026-11-27: "there should be a distinction between deleting the whole
 chat or just deleting one topic … 'delete' removes the whole chat"; and other
@@ -4509,6 +4509,8 @@ capability would be the 33rd advertised name, which released v0.11.x readers,
 the hub's `PUT /v1/caps` and `wire.mjs` refuse. Evidence:
 `TestDeleteDeviceChatRemovesEveryTopic` (four topics; one topic delete leaves
 three, the chat delete leaves none; fails before with "delete chat: 400");
+`TestDeleteDeviceChatTakesArchivedTopics` (two of three topics archived by the
+clock: one delete leaves no row, not even an archived count);
 `convclear_engine_check.mjs` (the browser engine: three topics, one chat
 delete, no row left, nothing sent).
 
@@ -4521,5 +4523,8 @@ browser engine computes the same list from its persons' known keys and pins,
 so browser, desktop and Android match. Evidence: `comic_people_check.mjs`
 (fails on the old model: another person's dropped device was listed),
 `TestRemovedDeviceOfAnotherPerson` (Bob removes his phone; Alice's list names
-it with Bob; its thread found by topic search), `convclear_engine_check.mjs`
-(engine list; a reused address with another key is not removed).
+it with Bob; its thread found by topic search; the overview's former source,
+`OwnRemovedDevices`, returned nothing for it), `convclear_engine_check.mjs`
+(engine list for Bob's dropped phone and for this person's own dropped
+tablet, kept in kv "person"; a reused address with another key is not
+removed; fails on the old engine with `removed_devices` undefined).

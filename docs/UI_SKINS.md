@@ -1039,6 +1039,7 @@ types are the Go structs in `internal/ui/*.go`, generated into
   findable by topic search, and name them by their person ("Your Phone 3 ·
   Removed device", "Vitalii’s Old phone · Removed device"), never as a device
   not linked to a person, and never as "you" or that person for review.
+  (`GET /api/approvals` keeps its own `removed_devices` as addresses.)
 - Deleting a device chat: `POST /api/conversation/delete` with
   `{peer, thread}` deletes one topic; with `chat: true` it deletes every topic
   of that chat's row. Offer both ("Delete topic…", "Delete chat…"); hide the

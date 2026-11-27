@@ -215,5 +215,10 @@ await bobHere([b.roster, r2, r3]);
 assert.deepEqual((await a.overview()).removed_devices, [{ address: 'bob/phone', person: b.me.person }]); checks++;
 await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(b.pub), fingerprint: b.fp, pending: null } }]); a.changed();
 check((await a.overview()).removed_devices === undefined, 'a different key at that address is never the removed device');
+// This person's own removed device (the owner's case): Alice drops alice/tablet
+// as removeDevice does (a new signed roster kept in kv "person").
+const prevA = await wire.parseRoster(a.me.json), nextA = await wire.nextRoster(a.keys, a.address, prevA, prevA.devices.filter((d) => d.address !== tablet.address), null);
+a.me = { ...(await a.personRecord([prevA, nextA], 'self', a.me)), published: true }; await a.store.write([{ s: 'kv', k: 'person', v: a.me }]); a.changed();
+assert.deepEqual((await a.overview()).removed_devices, [{ address: tablet.address, person: a.me.person }]); checks++;
 
 console.log(JSON.stringify({ shapes, checks }));

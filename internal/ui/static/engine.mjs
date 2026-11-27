@@ -1401,7 +1401,8 @@ export class Engine {
   // RemovedDeviceOwners): a device whose exact pinned key a verified
   // person's (this one's or a pinned one's) roster history named and no
   // current roster names. Display only, never authority.
-  async removedDevicesView(persons) {
+  async removedDevicesView(stored) {
+    const persons = [...(this.me ? [{ ...this.me, state: "self" }] : []), ...stored.filter((p) => p.person !== this.me?.person)]; // this person lives in kv "person"
     const current = new Set(persons.flatMap((p) => (p.devices || []).map((d) => d.address + "|" + d.fingerprint))), out = new Map();
     for (const p of persons) {
       if (!["self", "pinned"].includes(p.state)) continue;
