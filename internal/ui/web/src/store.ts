@@ -1015,6 +1015,16 @@ export class Store {
     return work;
   }
 
+  /** Close a refused group change. Only a failed one: nothing changed in
+   * the group, so the current signed group view stays the truth. */
+  dismissGroupChange(id: string) {
+    const pending = this.state.groupChanges?.[id];
+    if (!pending?.error || this.groupChangeWork.has(id)) return;
+    const next = { ...this.state.groupChanges };
+    delete next[id];
+    this.set({ groupChanges: next });
+  }
+
   async checkGroupChange(id: string) {
     const pending = this.state.groupChanges?.[id], before = this.state.views[id];
     if (!pending || !this.alive) return;

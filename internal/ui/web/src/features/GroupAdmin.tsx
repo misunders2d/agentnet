@@ -121,6 +121,7 @@ function GroupChangeCard({ p }: { p: PendingGroupChange }) {
     {error && <p role="alert" className="text-danger">{error}</p>}
     {(p.saved || p.error) && <Button size="sm" variant="ghost" disabled={checking} onClick={() => void check()}>{checking ? "Checking group…" : "Check group change"}</Button>}
     {p.error && <Button size="sm" variant="ghost" onClick={() => void store.api.manageGroup(p.change).catch(() => {})}>Try group change again</Button>}
+    {p.error && <Button size="sm" variant="ghost" onClick={() => store.dismissGroupChange(p.change.conv)}>Dismiss</Button>}
   </div>;
 }
 

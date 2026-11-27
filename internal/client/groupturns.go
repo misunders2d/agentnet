@@ -345,6 +345,20 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			seals = append(seals, sealing{recipient, notify && !in.Replica && asksAttention(in) && in.TopicEvent == nil, protocol.NotifyChannel(conv, device.Fingerprint())})
 		}
 	}
+	// A group that is this person's alone, on this one device (their own
+	// agents may run here): nobody else needs a copy. As a control does
+	// (controls.go), keep one signed local-only copy, stored here as
+	// delivered and never posted to the relay.
+	if len(copies) == 0 && len(skipped) == 0 && !others {
+		recipient, e := a.Self().Recipient()
+		if e != nil {
+			return ConvSent{}, e
+		}
+		fan := []envelope.Fan{{Person: me.roster.Person, Roster: me.roster.Hash()}}
+		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Quote: quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Origin: m.Origin, Emotion: m.Emotion, Replica: true, Fan: fan}
+		copies = append(copies, outCopy{in: in, state: protocol.StateDelivered, required: protocol.CapGroup, recipientFP: a.Self().Fingerprint(), groupAdmission: admission.Hash()})
+		seals = append(seals, sealing{recipient: recipient})
+	}
 	// Not sent at all only when no device of another member can get it
 	// (and none of this person's when the group is theirs alone).
 	if len(copies) == 0 || len(skipped) > 0 && others && !slices.ContainsFunc(copies, func(c outCopy) bool { return !c.in.Replica }) {
@@ -431,14 +445,14 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered}
 	var sending []envelope.Envelope
 	for _, copy := range copies {
-		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here
+		if copy.state != stateConvWaiting && copy.state != protocol.StateDelivered { // waiting: released by releaseConv; delivered: the local-only copy
 			sending = append(sending, copy.env)
 		}
 	}
 	results, errs := a.deliverEach(ctx, sending)
 	for _, copy := range copies {
 		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state, Detail: copy.why}
-		if copy.state != stateConvWaiting {
+		if copy.state != stateConvWaiting && copy.state != protocol.StateDelivered {
 			r, e := results[0], errs[0]
 			results, errs = results[1:], errs[1:]
 			if e != nil {
