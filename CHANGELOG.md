@@ -22,6 +22,10 @@ This record starts with v0.8.1; earlier releases remain on the
   line.
 - "Save a readable copy to Google Drive" shows under a file only when it
   can actually save one; the dead "Google Drive off" label is gone.
+- The desktop app no longer shows the browser's own right-click menu (Back,
+  Refresh, Save as, Print). Its Back left a blank window on Windows. Back
+  from the mouse or keyboard can no longer leave the chats either. Text
+  boxes and selected text keep Cut, Copy and Paste.
 
 - Photos attached to the same message can be browsed in one viewer. Use
   Previous and Next, the arrow keys, or swipe at fit zoom.
