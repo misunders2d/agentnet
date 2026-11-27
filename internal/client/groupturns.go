@@ -543,11 +543,15 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	if !sameGroupRoot(packet.Root, root) {
 		return hold(reasonInvalid, "group: root differs from verified current context")
 	}
-	// A member turn reaching a reader its installed context removed is
-	// refused for good, before anything (a newer proof head, a refresh) can
-	// hold it for a retry that a later rejoin would pass (MEL-841).
+	// A member turn reaching a reader its installed context removed, or an
+	// administrator reader that left by itself (that context's actor, no
+	// longer listed: only an administrator signs as actor), is refused for
+	// good, before anything (a newer proof head, a refresh) can hold it for a
+	// retry that a later rejoin would pass (MEL-841).
 	removedReader := func(q dbq, current GroupContext) error {
-		if in.Human == nil && groupRemovalNotice(q, current, me.roster.Person) != "" {
+		_, listed := current.State.Member(me.roster.Person)
+		left := !listed && current.State.Actor == me.roster.Person
+		if in.Human == nil && (left || groupRemovalNotice(q, current, me.roster.Person) != "") {
 			return errors.New("group: written while this reader was removed")
 		}
 		return nil

@@ -895,13 +895,16 @@ func TestGroupRemovedSenderTurnStaysRefused(t *testing.T) {
 // no newer context; re-invited with no history, the reader still never
 // sees it.
 func TestGroupRemovedReaderTurnStaysRefused(t *testing.T) {
-	t.Run("context", func(t *testing.T) { removedReaderTurn(t, false) })
+	t.Run("context", func(t *testing.T) { removedReaderTurn(t, false, false) })
 	// Codex review (P2): the readmission's newer proof head is known before
 	// its context; the removal installed here still refuses the turn first.
-	t.Run("proof-before-context", func(t *testing.T) { removedReaderTurn(t, true) })
+	t.Run("proof-before-context", func(t *testing.T) { removedReaderTurn(t, true, false) })
+	// agy re-check: an administrator reader that left by itself (its own
+	// removal: no terminal proof, itself the actor) is out just the same.
+	t.Run("self-leave", func(t *testing.T) { removedReaderTurn(t, false, true) })
 }
 
-func removedReaderTurn(t *testing.T, proofFirst bool) {
+func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 	w, p := groupLifecycleFixture(t, false)
 	runAgent(t, w.alice)
 	publishGroupFixtureCaps(t, w.alice, true)
@@ -918,7 +921,19 @@ func removedReaderTurn(t *testing.T, proofFirst bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = w.alice.RemoveGroupMember(tctx(t), conv, bob.Person); err != nil {
+	if selfLeave {
+		if _, err = w.alice.PromoteGroupMember(tctx(t), conv, bob.Person); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "administrator at the reader", func() bool {
+			got, e := w.bob.GroupContext(conv)
+			m, ok := got.State.Member(bob.Person)
+			return e == nil && ok && m.Admin
+		})
+		if left, e := w.bob.LeaveGroup(tctx(t), conv); e != nil || left.Context == nil {
+			t.Fatalf("administrator leave: %+v %v", left, e)
+		}
+	} else if _, err = w.alice.RemoveGroupMember(tctx(t), conv, bob.Person); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "removal at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
