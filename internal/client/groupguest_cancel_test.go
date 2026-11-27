@@ -937,6 +937,9 @@ func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 		t.Fatal(err)
 	}
 	eventually(t, "removal at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
+	// The re-invitation below must follow the removal at the inviter too,
+	// or it is made on the older context and goes stale.
+	eventually(t, "removal at the inviter", func() bool { got, e := w.alice.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
 	stopB()
 	root, _, _, err := w.alice.store.conversation(conv)
 	if err != nil {
