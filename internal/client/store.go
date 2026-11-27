@@ -1551,7 +1551,11 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 			changed = true
 			continue // no fallback; a removed identity cannot starve the next job
 		}
-		if _, err = tx.Exec(`UPDATE inbox SET state=?, responder=?, detail=NULL, attempts=attempts+1, last_attempt_at=unixepoch() WHERE id=? AND state=?`, stateRunning, responder, j.ID, previousState); err != nil {
+		// A claimed job is its own run: a handover the live run refused
+		// (whose mark kept it from being handed over again) never reports
+		// it steered.
+		if _, err = tx.Exec(`UPDATE inbox SET state=?, responder=?, detail=NULL, attempts=attempts+1, last_attempt_at=unixepoch(),
+			steering_parent=NULL, steering_attempt=NULL WHERE id=? AND state=?`, stateRunning, responder, j.ID, previousState); err != nil {
 			return job{}, false, err
 		}
 		changed = true
