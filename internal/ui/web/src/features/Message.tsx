@@ -397,12 +397,14 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
   );
 }
 
+// MEL-825: whether the correction reached the live run or is a follow-up.
 function editOutcome(state?: string) {
   switch (state) {
-    case "queued": return "Edit queued for the agent";
-    case "running": return "Agent processing the edit";
+    case "queued": return "Edit queued as a follow-up";
+    case "running": return "Sending the edit to the running agent";
+    case "followup": return "Agent answering the edit as a follow-up";
     case "steered": return "Edit reached the running agent";
-    case "answered": return "Agent replied to the edit";
+    case "answered": return "Agent replied to the edit as a follow-up";
     case "failed": return "Edit could not be applied to the agent’s work";
     default: return "";
   }

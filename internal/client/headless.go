@@ -396,11 +396,12 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	var conv, lid sql.NullString
 	var local, replica, selected, ownTarget bool
 	var editOf, editID string
+	var handover bool
 	err = a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, `+executionLocal+`, replica, attempts,
 		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id),
 		coalesce(json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=?,0),
-		`+editJobParent+`,coalesce(ref_id,'') FROM inbox WHERE id = ?`, a.Address, a.Self().Fingerprint(), id).
-		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected, &ownTarget, &editOf, &editID)
+		`+editJobParent+`,coalesce(ref_id,''),steering_parent IS NOT NULL FROM inbox WHERE id = ?`, a.Address, a.Self().Fingerprint(), id).
+		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected, &ownTarget, &editOf, &editID, &handover)
 	if err != nil || due == 0 {
 		return true
 	}
@@ -458,7 +459,7 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		} else {
 			public = "not_run"
 		}
-		detail = editStatusDetail(editID, editStateWord(state))
+		detail = editStatusDetail(editID, editStateWord(state, handover))
 	}
 	n, err := a.store.nextCounter(ref, envelope.SubStatus, "")
 	if err != nil {
