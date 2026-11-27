@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -348,4 +349,65 @@ func TestSoloGroupFileLeavesNoSpool(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("a turn with the agent present", sent, "with Pi")
+}
+
+// The own agent answers only with a reaction (agentjob.go's prompt allows
+// a whole reply of "reaction: EMOJI"). In a group that is this device's
+// alone it is one local-only copy, online and with the Hub down: the
+// request is answered and shows the agent's reaction, nothing is posted.
+func TestSoloOwnAgentGroupReactionOnly(t *testing.T) {
+	for _, offline := range []bool{false, true} {
+		t.Run(map[bool]string{false: "online", true: "offline"}[offline], func(t *testing.T) {
+			stub := installAgentStub(t)
+			stub.mode("reactgate")
+			w := newWorld(t, "")
+			persons(t, w.alice)
+			runAgent(t, w.alice)
+			conv, p := soloAgentGroup(t, w, stub)
+			if !offline {
+				if err := os.WriteFile(stub.log+".go", nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ask, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "thumbs?")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if offline {
+				eventually(t, "the agent to start", func() bool { _, err := os.Stat(stub.log + ".started"); return err == nil })
+				w.hub.Stop()
+				if err = os.WriteFile(stub.log+".go", nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			eventually(t, "the run to end", func() bool {
+				return slices.Contains([]string{stateAnswered, stateNotDelivered, stateJobFailed, stateCancelled}, jobState(t, w.alice, ask.ID))
+			})
+			if s := jobState(t, w.alice, ask.ID); s != stateAnswered {
+				var detail string
+				w.alice.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, ask.ID).Scan(&detail)
+				t.Fatalf("a reaction-only answer: %s %q", s, detail)
+			}
+			msgs, err := w.alice.ConversationMessages(conv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rs := reactorsOn(msgs, ask.LID, "👍"); len(rs) != 1 || !rs[0].Assistant {
+				t.Fatalf("the agent's reaction on the ask: %+v", rs)
+			}
+			var local, posted int
+			if err = w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE sub=? AND recipient=? AND state=?`, envelope.SubReaction, w.alice.Address, protocol.StateDelivered).Scan(&local); err != nil {
+				t.Fatal(err)
+			}
+			if err = w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE sub=? AND NOT (recipient=? AND state=?)`, envelope.SubReaction, w.alice.Address, protocol.StateDelivered).Scan(&posted); err != nil {
+				t.Fatal(err)
+			}
+			if local != 1 || posted != 0 {
+				t.Fatalf("the reaction's copies: %d local-only, %d to post", local, posted)
+			}
+			if n := stub.runs(); n != 1 {
+				t.Fatalf("the agent ran %d times", n)
+			}
+		})
+	}
 }

@@ -283,8 +283,20 @@ func (a *Agent) sendAssistantReactionTarget(ctx context.Context, t reactionTarge
 		return ControlSent{}, err
 	}
 	body, _ := json.Marshal(envelope.Reaction{Emoji: emoji, Op: op, N: n})
+	// A group that is this device's alone (soloGroup) needs no relay: its
+	// reaction is one local-only copy, so the Hub may be out of reach.
+	solo := false
+	if t.conv != "" {
+		m, e := controlMembers(a.store.db, t.conv)
+		if e != nil {
+			return ControlSent{}, e
+		}
+		if solo, e = soloGroup(a.store.db, m, self, a.Self().Fingerprint()); e != nil {
+			return ControlSent{}, e
+		}
+	}
 	feats, err := a.relayFeatures(ctx)
-	if err != nil {
+	if err != nil && !(solo && hubUnreachable(err)) {
 		return ControlSent{}, err
 	}
 	eref := &envelope.Ref{ID: t.ref.ID, Fingerprint: t.ref.Fingerprint}
@@ -409,10 +421,43 @@ func (a *Agent) sendAssistantReactionTarget(ctx context.Context, t reactionTarge
 		}
 		copies = append(copies, c)
 	}
+	if len(dests) == 0 && solo {
+		// Nobody else needs a copy: as a sole member's control does
+		// (controls.go), one signed local-only copy, stored here as
+		// delivered and never posted.
+		me, ok, e := a.store.selfPerson(self)
+		if e != nil || !ok {
+			return ControlSent{}, errors.New("group sender person missing")
+		}
+		recipient, e := a.Self().Recipient()
+		if e != nil {
+			return ControlSent{}, e
+		}
+		adm, e := groupMemberAdmission(a.store.db, *group, self, a.Self().Fingerprint())
+		if e != nil {
+			return ControlSent{}, e
+		}
+		in := base
+		in.ID, in.To, in.Replica, in.Fan = protocol.NewID(), self, true, []envelope.Fan{{Person: me.info.Person, Roster: me.info.Roster}}
+		env, e := envelope.Seal(in, a.id.Sign, recipient)
+		if e != nil {
+			return ControlSent{}, e
+		}
+		required := protocol.CapAgentReaction
+		if origin == envelope.OriginMentionReaction {
+			required = protocol.CapMentionReaction
+		}
+		copies = append(copies, outCopy{env: env, in: in, state: protocol.StateDelivered, required: required, recipientFP: a.Self().Fingerprint(), groupAdmission: adm.Hash()})
+	}
 	if len(copies) == 0 {
 		return sent, fmt.Errorf("%w: %s", ErrNoControls, strings.Join(sent.Skipped, "; "))
 	}
 	guard := func(tx *sql.Tx, _ string) error {
+		if solo {
+			if err := soloGroupStill(tx, t.conv, self, a.Self().Fingerprint()); err != nil {
+				return err
+			}
+		}
 		if err := a.assistantReactionCurrent(tx, t, copies[0].in, group); err != nil {
 			return err
 		}
@@ -432,6 +477,9 @@ func (a *Agent) sendAssistantReactionTarget(ctx context.Context, t reactionTarge
 	sent.ID = copies[0].env.ID
 	for _, c := range copies {
 		state := c.state
+		if localOnlyCopy(c) { // never posted
+			continue
+		}
 		res, err := a.deliver(ctx, c.env, nil)
 		switch {
 		case err == nil:
