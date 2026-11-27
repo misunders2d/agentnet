@@ -23,11 +23,11 @@ pub fn app_origin(url: &Url) -> bool {
 }
 
 /// back_to_start is a navigation to the bundled starting page while the
-/// messenger page is showing, other than its own Try again: history Back.
+/// messenger page is showing: history Back. That includes an old Try again
+/// entry (?retry=1), which would otherwise restart a running program; Try
+/// again itself only shows after show_error forgot the page.
 pub fn back_to_start(url: &Url, splash: Option<&Url>, page_known: bool) -> bool {
-    page_known
-        && (app_origin(url) || splash.is_some_and(|s| crate::same_origin(url, s)))
-        && !url.query_pairs().any(|(k, _)| k == "retry")
+    page_known && (app_origin(url) || splash.is_some_and(|s| crate::same_origin(url, s)))
 }
 
 #[cfg(test)]
@@ -41,8 +41,11 @@ mod tests {
             assert!(back_to_start(&u, None, true), "{value}");
             assert!(!back_to_start(&u, None, false), "before the page is known: {value}");
         }
+        // Back to an old Try again entry must not restart the running program.
         let retry = Url::parse("tauri://localhost/index.html?retry=1").unwrap();
-        assert!(!back_to_start(&retry, None, true));
+        assert!(back_to_start(&retry, None, true));
+        // Try again on the error page (the page is forgotten there) still works.
+        assert!(!back_to_start(&retry, None, false));
         let page = Url::parse("http://127.0.0.1:17443/").unwrap();
         assert!(!back_to_start(&page, None, true));
     }
