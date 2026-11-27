@@ -52,7 +52,9 @@ export function concreteAgentName(id:string,names:Record<string,string>):string 
 
 export function historicalAgentName(id:string,names:Record<string,string>):string {const name=names[id]||"Agent "+id.slice(0,8);return names[id+"#current"]!=="true"&&Object.keys(names).filter(k=>/^[a-f0-9]{32}$/.test(k)&&names[k]===name).length>1?name+" · "+id.slice(0,8):name;}
 
-export const directChatKey=(t:Pick<T.ThreadSummary,"peer"|"agent_host"|"agent_key"|"agent_id"|"agent_legacy">)=>JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]);
+// client topicAgentKey: a legacy agent thread (no agent_id) is grouped per peer
+// too, so "Delete chat" never reaches another peer's threads.
+export const directChatKey=(t:Pick<T.ThreadSummary,"peer"|"agent_host"|"agent_key"|"agent_id"|"agent_legacy">)=>JSON.stringify(t.agent_id?[t.agent_host||t.peer,t.agent_key||"",t.agent_id]:t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"","",t.peer]:[t.peer,"","human"]);
 
 // ---- people and agents ---------------------------------------------------
 

@@ -2,6 +2,7 @@ package client
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -30,7 +31,26 @@ func TestRemovedDevicesExactCurrentKey(t *testing.T) {
 		}
 	}
 	check(false)
+	keeper := func(peer, want string) {
+		t.Helper()
+		if got, err := w.alice.DeviceChatKeeper(peer); err != nil || got != want {
+			t.Fatalf("keeper of %s: %q %v; want %q", peer, got, err, want)
+		}
+	}
+	keeper(phone.Address, "") // another current device of this person: it gets the deletion
 	if err = w.alice.RemoveDevice(tctx(t), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	keeper(phone.Address, "Your removed device is not told.")
+	// Re-enrolled: a current roster names the address again (under a key
+	// this device has not pinned yet). It is not a removed device.
+	me, _, _ := w.alice.Person()
+	if _, err = w.alice.store.db.Exec(`INSERT INTO person_devices(address,person,fingerprint,added) VALUES(?,?,?,1)`, phone.Address, me.Person, "00000000-0000-0000-0000-000000000000"); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if _, err = w.alice.store.db.Exec(`DELETE FROM person_devices WHERE address=?`, phone.Address); err != nil {
 		t.Fatal(err)
 	}
 	check(true)
@@ -92,6 +112,15 @@ func TestRemovedDeviceOfAnotherPerson(t *testing.T) {
 	owned, err := w.alice.RemovedDeviceOwners()
 	if err != nil || !slices.Equal(owned, []RemovedDevice{{Address: phone.Address, Person: bob.Person}}) {
 		t.Fatalf("bob's removed phone: %v %v", owned, err)
+	}
+	if got, err := w.alice.DeviceChatKeeper(phone.Address); err != nil || got != "That removed device keeps its copy." {
+		t.Fatalf("keeper of bob's removed phone: %q %v", got, err)
+	}
+	if got, err := w.alice.DeviceChatKeeper(w.bob.Address); err != nil || !strings.HasSuffix(got, " keeps their copy.") || got == " keeps their copy." {
+		t.Fatalf("keeper of bob's laptop: %q %v", got, err)
+	}
+	if got, err := w.alice.DeviceChatKeeper("nobody/unknown"); err != nil || got != "That device keeps its copy." {
+		t.Fatalf("keeper of an unknown device: %q %v", got, err)
 	}
 	page, err := w.alice.Topics(TopicQuery{Query: "bobs phone"})
 	if err != nil || !slices.ContainsFunc(page.Topics, func(s ThreadSummary) bool { return s.Peer == phone.Address }) {

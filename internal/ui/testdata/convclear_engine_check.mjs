@@ -190,7 +190,7 @@ const v1 = async (bodyText) => { const raw = await wire.seal({ v: 1, id: id(), f
 const t1 = await v1('THREAD ONE'), t2 = await v1('THREAD TWO');
 const deviceClears = async () => (await a.store.all('outbox')).filter((r) => r.sub === wire.SubClear && !r.conv);
 const td = await a.deleteConversation({ peer: b.address, thread: t1 });
-check(/^Deleted on all your devices: here now; your 2 other device\(s\)/.test(td.note) && /The other person keeps their copy\.$/.test(td.note), 'truthful device deletion note: ' + td.note);
+check(/^Deleted on all your devices: here now; your 2 other device\(s\)/.test(td.note) && / bob keeps their copy\.$/.test(td.note), 'truthful device deletion note: ' + td.note);
 const threads = (await a.overview()).threads;
 check(!threads.some((t) => t.id === t1) && threads.some((t) => t.id === t2), 'exactly that thread is gone; the other stays');
 let dc = await deviceClears();
@@ -198,11 +198,13 @@ check(dc.length === 2 && dc.every((r) => r.required_cap === wire.CapReminderSync
 
 // The whole device chat (owner 2026-11-27): every topic of its row goes at once.
 const t3 = await v1('THREAD THREE'), t4 = await v1('THREAD FOUR');
+const old4 = await a.store.get('inbox', t4); await a.store.write([{ s: 'inbox', k: t4, v: { ...old4, at: old4.at - 8 * 86400 * 1000 } }]); a.changed(); // quiet past TopicArchiveAfter: archived
 const rowOf = async () => (await a.overview()).threads.filter((t) => t.peer === b.address && !t.notice_only).map((t) => t.id);
 check((await rowOf()).length === 3, 'the chat row holds three topics');
+check((await a.overview()).threads.some((t) => t.id === t4 && t.state === 'archived'), 'one of them archived');
 const cd = await a.deleteConversation({ peer: b.address, thread: t3, chat: true });
 check(/^Deleted on all your devices:/.test(cd.note), 'chat deletion says all your devices');
-check((await rowOf()).length === 0, 'every topic of the chat is gone; no row is left');
+check((await rowOf()).length === 0 && !((await a.overview()).topics || []).some((c) => c.peer === b.address), 'every topic of the chat is gone, archived too; no row is left');
 check((await deviceClears()).length === 4, 'queued for both own devices again');
 check((await b.store.all('inbox')).every((r) => r.sub !== wire.SubClear), 'nothing is told to the other person');
 
@@ -227,6 +229,11 @@ await bobHere([b.roster, r2, r3]);
 assert.deepEqual((await a.overview()).removed_devices, [{ address: 'bob/phone', person: b.me.person }]); checks++;
 await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(b.pub), fingerprint: b.fp, pending: null } }]); a.changed();
 check((await a.overview()).removed_devices === undefined, 'a different key at that address is never the removed device');
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(ppub), fingerprint: pfp, pending: null } }]);
+const nk = await wire.newKeys(), npub = await wire.publicEntry(nk, 'bob/phone');
+const r4 = await wire.nextRoster(b.keys, b.address, r3, [b.pub, npub], await wire.joinConsent(nk, 'bob/phone', b.me.person, r3.seq, await wire.rosterHash(r3)));
+await bobHere([b.roster, r2, r3, r4]);
+check((await a.overview()).removed_devices === undefined, 'a re-enrolled address (a current roster names it, new key) is not removed');
 // This person's own removed device (the owner's case): Alice drops alice/tablet
 // as removeDevice does (a new signed roster kept in kv "person").
 const prevA = await wire.parseRoster(a.me.json), nextA = await wire.nextRoster(a.keys, a.address, prevA, prevA.devices.filter((d) => d.address !== tablet.address), null);

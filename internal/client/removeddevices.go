@@ -37,7 +37,7 @@ func (a *Agent) RemovedDeviceOwners() ([]RemovedDevice, error) {
  (SELECT 1 FROM json_each(c.record,'$.devices') h WHERE json_extract(h.value,'$.address')=p.address)
  JOIN persons n ON n.person=c.person AND n.state IN ('self','pinned')
  LEFT JOIN person_devices d ON d.address=p.address
- WHERE p.pending IS NULL ORDER BY p.address`)
+ WHERE p.pending IS NULL ORDER BY p.address, n.state='self' DESC, n.person`) // first person per address wins: this one, else the lowest id
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (a *Agent) RemovedDeviceOwners() ([]RemovedDevice, error) {
 			return nil, err
 		}
 		fp := pin.Fingerprint()
-		if pin.Address == address && memberKey != fp && old.Has(address, fp) && !now.Has(address, fp) {
+		if pin.Address == address && memberKey == "" && old.Has(address, fp) && !now.Has(address, fp) { // an address a current roster names (re-enrolled, any key) is not removed
 			if _, seen := removed[address]; !seen {
 				removed[address] = person
 			}

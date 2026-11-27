@@ -1039,11 +1039,17 @@ types are the Go structs in `internal/ui/*.go`, generated into
   findable by topic search, and name them by their person ("Your Phone 3 ·
   Removed device", "Vitalii’s Old phone · Removed device"), never as a device
   not linked to a person, and never as "you" or that person for review.
+  An address any current roster still names (re-enrolled under a new key, or
+  now another person's device) is never listed here.
   (`GET /api/approvals` keeps its own `removed_devices` as addresses.)
 - Deleting a device chat: `POST /api/conversation/delete` with
   `{peer, thread}` deletes one topic; with `chat: true` it deletes every topic
   of that chat's row. Offer both ("Delete topic…", "Delete chat…"); hide the
-  whole row at once and bring it back if the host refuses.
+  whole row at once and bring it back if the host refuses. A row is one peer
+  and one agent: an agent-history chat with unknown original agent is still
+  per peer, never every peer's history on that host. Say how many topics go
+  (`PeerTopics.total` counts archived ones) and who keeps a copy only as far
+  as it is known: nobody for another current device of yours.
 - People, not addresses: name a device by its person and device
   ("Vitalii · Phone", "You · Pixel"; the device in words, dashes as spaces);
   keep addresses for verified-detail panels. When a person's name is also

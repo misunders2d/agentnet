@@ -69,10 +69,15 @@ func (l *Live) DeleteConversation(x DeleteConversationAction) (string, error) {
 	l.a.NoteChange()
 	var note string
 	switch {
-	case x.Conv == "" && done.Devices == 0: // a device topic or chat (client DeleteThread, DeleteDeviceChat)
-		note = "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion. The other person keeps their copy."
-	case x.Conv == "":
-		note = fmt.Sprintf("Deleted on all your devices: here now; your %d other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it. The other person keeps their copy.", done.Devices)
+	case x.Conv == "": // a device topic or chat (client DeleteThread, DeleteDeviceChat)
+		if done.Devices == 0 {
+			note = "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion."
+		} else {
+			note = fmt.Sprintf("Deleted on all your devices: here now; your %d other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it.", done.Devices)
+		}
+		if keeper, kerr := l.a.DeviceChatKeeper(x.Peer); kerr == nil && keeper != "" {
+			note += " " + keeper
+		}
 	case done.Devices == 0:
 		note = "Deleted here. No other device of yours was linked; one you link later gets the deletion. Others in it keep their copies."
 	default:

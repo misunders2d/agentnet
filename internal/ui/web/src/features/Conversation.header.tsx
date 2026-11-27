@@ -2,7 +2,7 @@ import { hostNote, pendingGroupInvites } from "./RoomPanel.model";
 // The conversation's header (who this is, whether their computer is on,
 // Bring in, and the overflow menu) and, on phones, the guest bar: who is
 // helping here right now, with Dismiss said in words.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconChevronLeft, IconDotsVertical, IconUserPlus, IconUsers, IconBell, IconBellOff, IconTrash, IconHandStop, IconFlag,
@@ -11,7 +11,7 @@ import {
 import type { Api, T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { deviceKind, directChatKey, niceDevice, personName, threadRow, reminderOf, runsAgent, timeOf, type DeviceKind } from "../model";
+import { deviceKind, deviceOwner, directChatKey, niceDevice, personName, removedDevice, threadRow, reminderOf, runsAgent, timeOf, type DeviceKind } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
@@ -105,6 +105,25 @@ export function presence(addresses: string[], o: T.Overview | null): { online: b
   return seen.length ? { online: false, text: "Offline" } : { online: null, text: "" };
 }
 
+// chatTopics: how many topics a whole device chat's delete takes, archived
+// ones too (PeerTopics.total counts them; one PeerTopics per chat row).
+function chatTopics(key: string, o: T.Overview | null | undefined) {
+  const n = (o?.topics || []).filter(c => directChatKey(c.latest) === key).reduce((n, c) => n + c.total, 0)
+    || new Set((o?.threads || []).filter(t => directChatKey(t) === key).map(t => t.id)).size;
+  return n <= 1 ? "This chat’s one topic is deleted" : "All " + n + " topics of this chat are deleted";
+}
+
+// deviceKeeper: who still has the chat afterwards, said only as far as it is
+// known (client.DeviceChatKeeper, engine deviceChatKeeper): nobody for
+// another current device of yours (it gets the deletion too).
+function deviceKeeper(peer: string, o: T.Overview | null | undefined) {
+  if (!o || peer === o.me.address || (o.person?.devices || []).some(d => d.address === peer)) return "";
+  const gone = removedDevice(peer, o);
+  if (gone) return gone.person === o.person?.person ? " Your removed device is not told." : " That removed device keeps its copy.";
+  const owner = deviceOwner(peer, o), name = owner && owner.person !== o.person?.person ? personName(owner).trim() : "";
+  return name ? " " + name + " keeps their copy." : " That device keeps its copy.";
+}
+
 const presenceTitle = "Whether the server sees their AgentNet running now. It doesn’t mean a person is there.";
 
 // ---- header -------------------------------------------------------------------------------
@@ -116,6 +135,10 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
   const overview = ctx.overview;
   const t = ctx.dm, th = ctx.thread;
   const [del, setDel] = useState<false | "topic" | "chat">(false);
+  // The dialog keeps saying what it was opened for while it animates closed.
+  const lastDel = useRef<"topic" | "chat">("topic");
+  if (del) lastDel.current = del;
+  const delMode = del || lastDel.current;
   const [remind, setRemind] = useState<boolean | null>(null);
   const [report, setReport] = useState<boolean | null>(null);
   // A direct chat with another person: Report (and Block) apply to them.
@@ -178,8 +201,9 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
   const muted = !!t && !!notify && (notify.mutes || []).includes(t.id);
   // A device chat's row holds every topic with that peer: "Delete chat"
   // removes all of them, "Delete topic" only this one (owner, 2026-11-27).
+  const chatKey = th ? directChatKey(th.topic || { peer: th.peer }) : "";
   const remove = () => void (t ? store.deleteChat(t.id, { conv: t.id })
-    : del === "chat" ? store.deleteChat(th!.topic?.id || ctx.conv, { peer: th!.peer, thread: th!.topic?.id || ctx.conv, chat: true }, directChatKey(th!.topic || { peer: th!.peer }))
+    : delMode === "chat" ? store.deleteChat(th!.topic?.id || ctx.conv, { peer: th!.peer, thread: th!.topic?.id || ctx.conv, chat: true }, chatKey)
     : store.deleteChat(th!.topic?.id || ctx.conv, { peer: th!.peer, thread: th!.topic?.id || ctx.conv }));
 
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
@@ -269,8 +293,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
       {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
       {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
       <Confirm open={!!del} onOpenChange={o => { if (!o) setDel(false); }} ok="Delete" onOk={remove}
-        title={th ? (del === "chat" ? "Delete this whole chat from your devices?" : "Delete this topic from your devices?") : "Delete this conversation from your devices?"}>
-        {th ? <p>{del === "chat" ? "Every topic of this chat is deleted" : "It’s deleted"} here and, once they connect, on your other linked devices. {title} keeps their copy.{del === "chat" ? " A new message starts the chat again." : ""}</p> : <>
+        title={th ? (delMode === "chat" ? "Delete this whole chat from your devices?" : "Delete this topic from your devices?") : "Delete this conversation from your devices?"}>
+        {th ? <p>{delMode === "chat" ? chatTopics(chatKey, overview) : "It’s deleted"} here and, once they connect, on your other linked devices.{deviceKeeper(th.peer, overview)}{delMode === "chat" ? " A new message starts the chat again." : ""}</p> : <>
           <p>The messages go from this device and, once they connect, from your other linked devices.</p>
           <p>Everyone else keeps their copies. Anything already running finishes first. Members and guests stay as they are; a new message brings the chat back.</p>
         </>}

@@ -58,9 +58,9 @@ const erasedKey = (conv, key, lid) => conv + "|" + key + "|" + lid;
 const retainedIn = (r) => ["question", "task"].includes(r.kind) && ["pending", "accepted", "held", "awaiting", "running", "cancel_requested", "part_waiting", "helpers_waiting", "needs_human"].includes(r.state);
 const retainedOut = (r) => ["queued", "waiting", "receiver_waiting"].includes(r.state);
 // deletionNote is what the page says after a deletion (ui livedelete.go).
-const deletionNote = (device, devices, kept) => (device ? (devices === 0
-    ? "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion. The other person keeps their copy."
-    : "Deleted on all your devices: here now; your " + devices + " other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it. The other person keeps their copy.")
+const deletionNote = (device, devices, kept, keeper = "") => (device ? (devices === 0
+    ? "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion."
+    : "Deleted on all your devices: here now; your " + devices + " other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it.") + (keeper ? " " + keeper : "")
   : devices === 0 ? "Deleted here. No other device of yours was linked; one you link later gets the deletion. Others in it keep their copies."
   : "Deleted here. Queued for your " + devices + " other device(s): each removes it once it is connected and runs an AgentNet version that applies deletions; until then it still shows it there. Others in it keep their copies.")
   + (kept > 0 ? " " + kept + " item(s) still in progress keep running and are removed when they finish." : "");
@@ -1404,12 +1404,12 @@ export class Engine {
   // person's (this one's or a pinned one's) roster history named and no
   // current roster names. Display only, never authority.
   async removedDevicesView(stored) {
-    const persons = [...(this.me ? [{ ...this.me, state: "self" }] : []), ...stored.filter((p) => p.person !== this.me?.person)]; // this person lives in kv "person"
-    const current = new Set(persons.flatMap((p) => (p.devices || []).map((d) => d.address + "|" + d.fingerprint))), out = new Map();
+    const persons = [...(this.me ? [{ ...this.me, state: "self" }] : []), ...stored.filter((p) => p.person !== this.me?.person).sort((a, b) => (a.person < b.person ? -1 : a.person > b.person ? 1 : 0))]; // this person (kv "person") first, then by id: the first per address wins
+    const current = new Set(persons.flatMap((p) => (p.devices || []).map((d) => d.address))), out = new Map(); // an address a current roster names (re-enrolled, any key) is not removed
     for (const p of persons) {
       if (!["self", "pinned"].includes(p.state)) continue;
       for (const k of p.known || []) {
-        if (out.has(k.address) || current.has(k.address + "|" + k.fingerprint)) continue;
+        if (out.has(k.address) || current.has(k.address)) continue;
         const pin = await this.store.get("pins", k.address);
         if (pin && !pin.pending && pin.fingerprint === k.fingerprint) out.set(k.address, p.person);
       }
@@ -5150,7 +5150,7 @@ export class Engine {
   // counts (client TopicOverview): archived topics only counted unless
   // listArchived (GET /api/overview without topics=1: a page that knows
   // nothing of topics still reaches every thread).
-  topicPeerKey(t) { return JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]); }
+  topicPeerKey(t) { return JSON.stringify(t.agent_id?[t.agent_host||t.peer,t.agent_key||"",t.agent_id]:t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"","",t.peer]:[t.peer,"","human"]); } // client topicAgentKey: a legacy thread's row is per peer
   addPeerTopic(c,t) {
     if(t.notice_only)return;
     if(!c.total||byNewest(t,c.latest)<0)c.latest=t;
@@ -10158,6 +10158,16 @@ export class Engine {
     return this.eraseDeviceThreads(all.filter((t) => this.topicPeerKey(t) === key).map((t) => [t.peer, t.id]));
   }
 
+  // deviceChatKeeper is client DeviceChatKeeper: who still keeps a copy of a
+  // device topic or chat with peer once this person's devices delete it.
+  async deviceChatKeeper(peer) {
+    if ((this.me?.devices || []).some((d) => d.address === peer)) return ""; // another current device of this person: it gets the deletion
+    const persons = await this.store.all("persons"), removed = ((await this.removedDevicesView(persons)).removed_devices || []).find((r) => r.address === peer);
+    if (removed) return removed.person === this.me?.person ? "Your removed device is not told." : "That removed device keeps its copy.";
+    const owner = persons.find((p) => p.person !== this.me?.person && ["self", "pinned"].includes(p.state) && (p.devices || []).some((d) => d.address === peer));
+    return owner && (owner.label || "").trim() ? owner.label.trim() + " keeps their copy." : "That device keeps its copy.";
+  }
+
   async eraseDeviceThreads(pairs) {
     const groups = await this.v1Threads(), threads = [];
     for (const [peer, id] of pairs) {
@@ -10181,7 +10191,7 @@ export class Engine {
       await this.store.write(ops,checks);
     } finally { await this.loadErased(); }
     this.changed();
-    return { note: deletionNote(true, await this.shareErased(), kept) };
+    return { note: deletionNote(true, await this.shareErased(), kept, await this.deviceChatKeeper(pairs[0][0])) };
   }
 
   // clearCopies seals the parts of one deletion for devs (this person's other

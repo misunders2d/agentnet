@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -252,7 +253,13 @@ func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (Conversation
 		return out, err
 	}
 	defer tx.Rollback()
-	for peer, pt := range threads {
+	peers := make([]string, 0, len(threads))
+	for peer := range threads {
+		peers = append(peers, peer)
+	}
+	sort.Strings(peers) // one order every time
+	for _, peer := range peers {
+		pt := threads[peer]
 		for _, thread := range pt.groups {
 			for _, m := range thread {
 				key := selfFP
@@ -911,4 +918,44 @@ func (s *store) convDeleted(conv, selfFP string) bool {
 	s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox i WHERE i.conv = ? AND i.local = 0 AND i.ref_id IS NULL AND coalesce(i.sub, '') IN `+erasableSubs+` AND NOT `+erasedIn+`)
 		+ (SELECT count(*) FROM outbox o WHERE o.conv = ? AND o.ref_id IS NULL AND coalesce(o.sub, '') IN `+erasableSubs+` AND NOT `+erasedOut+`)`, conv, conv, selfFP).Scan(&visible)
 	return visible == 0
+}
+
+// DeviceChatKeeper is the truthful last sentence of a device topic or chat
+// deletion with peer: who still keeps a copy. Deletions reach only this
+// person's current devices, so another current device of theirs keeps
+// nothing (""), a removed one is not told, and anyone else keeps theirs.
+func (a *Agent) DeviceChatKeeper(peer string) (string, error) {
+	me, _, err := a.Person()
+	if err != nil {
+		return "", err
+	}
+	owners, err := a.store.devicePersons()
+	if err != nil {
+		return "", err
+	}
+	if p := owners[peer]; p != "" && p == me.Person {
+		return "", nil
+	}
+	removed, err := a.RemovedDeviceOwners()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range removed {
+		if r.Address == peer && r.Person == me.Person {
+			return "Your removed device is not told.", nil
+		}
+		if r.Address == peer {
+			return "That removed device keeps its copy.", nil
+		}
+	}
+	known, err := a.KnownPersons()
+	if err != nil {
+		return "", err
+	}
+	for _, k := range known {
+		if k.Person != "" && k.Person == owners[peer] && strings.TrimSpace(k.Label) != "" {
+			return strings.TrimSpace(k.Label) + " keeps their copy.", nil
+		}
+	}
+	return "That device keeps its copy.", nil
 }
