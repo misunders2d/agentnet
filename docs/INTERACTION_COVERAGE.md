@@ -4452,3 +4452,84 @@ without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
 161 px desktop), and the inline "saw N messages" control opens What it saw and
 closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
 
+
+## Storage page on Android: attachment status reads and "On this phone" (v0.11.13)
+
+Owner's Play app (v0.11.12), 2026-11-27: You → Storage → Workspace attachments
+showed "AgentNet is not reachable…" with a stuck "Refreshing…" while the phone
+received a large history copy; chats loaded. The card, `/events` and loader code
+are unchanged from v0.11.12 to this candidate.
+
+Proven defects: the card started one relay read for every un-hinted change
+event (every committed local write is one; `/events` does not throttle). A read
+superseded by a newer one never cleared "Refreshing…", and while no status was
+known even background reads set it. The old card with 300 held change events:
+300 reads in flight, button "Refreshing…", the "not reachable" alert.
+
+Hypothesis for the alert itself, not confirmed on the phone: Chromium rejects
+fetches once about 1,350 are pending (desktop Chromium 158: 1,300 queued all
+answered; 1,500 gave 145 `TypeError: Failed to fetch`; 4,000 gave 2,651), which
+`errorText` names "not reachable". Not measured: the phone's change-event rate
+during the copy, and Android WebView's limit. Chat reads from the same page would
+be rejected at that limit too; the report that chats loaded is not explained by
+it. Settling evidence: the WebView subresource error code and path for this GET
+(`onReceivedError`, no token), and the core's count of change events during a copy.
+
+Reused pattern: the store's refresh lanes (`store.ts` `refreshOpen`, "each lane
+coalesces independently, including continuous traffic"), adapted to two reads.
+The card keeps at most two reads in flight and folds later events into one
+follow-up. An answer is dropped only once a newer read has answered or an action
+or workspace change made it stale, so under steady events every read still
+lands. Background reads never change or disable Refresh. Refresh clears the old
+error and shows "Refreshing…" at once, until a read started after the press
+settles. A read unanswered after 30 s (the core's relay call is bounded at 20 s)
+ends with "No answer about workspace attachments yet. Refresh to try again." A
+request with no HTTP answer says "Workspace attachment status couldn’t be read
+just now. Refresh to try again."; HTTP refusals keep their own words.
+
+Review follow-up (same release line). A manual Refresh drops answers to reads
+started before the press and starts its own read at once, one past the cap, so a
+pre-press timeout can no longer bring back the cleared error while Refresh stays
+disabled. Unmounting or switching workspace replaces the lane, so a queued
+follow-up never starts afterwards. Move, Connect and Disconnect have the same
+30 s bound: a silent change says "No answer about this change yet. Refresh to see
+whether it happened."; a change rejected at the network says "This change
+couldn’t be confirmed. Refresh to see whether it happened." Neither claims done
+or failed. An action's message is kept apart from read errors: background reads
+never clear it; the next action or a manual Refresh does. `host.api` takes no
+AbortSignal (skin contract), so a call past the bound keeps running in the host
+and its late answer is ignored.
+
+`TestRelayAttachmentStorageRendered` (390 px, Chromium, fake clock): a real
+`fetch` aborted at the network gives the truthful alert with Refresh usable; 300
+change events start 2 reads plus exactly 1 follow-up, Refresh stays enabled and
+labelled; under steady events (two per answered read) a fresh workspace's status
+appears and a pressed Refresh returns while reads are still in flight; Refresh
+feedback (error gone, "Refreshing…") measured 0–2 ms; a real read succeeds after
+the failure; a never-answering read ends at the 30 s bound and Refresh then
+succeeds. The member and Move focus variants pass, and one default run passed all
+six views (Playwright 1.66.0-alpha). The same fixture fails on the unchanged
+candidate (alert text; with that removed, 300 reads in flight) and on the first
+lane (steady events never landed a read). "Keyboard dismissal returns focus" in
+the default run fails intermittently at different views, on the unchanged
+candidate too (3 of 3 runs with Playwright 1.65.1); not addressed.
+
+The follow-up adds rendered cases: Refresh pressed 5 s into two hung reads shows
+no alert at 30.5 s and its own timeout alert, with Refresh enabled, at 35.5 s; a
+replaced workspace's queued follow-up never reads; a silent Move releases the card
+at 30 s with its message, which five background reads keep; a network-rejected
+Move says it could not be confirmed. On the previous lane the first case fails
+(the press starts no read) and the silent Move never alerts. The whole fixture
+also runs with the Office overlay and CSS (`AGENTNET_RELAY_STORAGE_SKIN=office`):
+default (all six views), member and Move variants pass, Playwright 1.66.0-alpha.
+
+Outstanding: none of this ran in Android WebView or on a phone. A device check of
+You → Storage during a large history copy (both labels, the card's alert and
+Refresh) remains open.
+
+Storage on Android now says "On this phone" in the stat tile and the section
+header (`store.host.platform`, as the same file's workspace and runs-as lines
+do). `TestAndroidComicRendered` (390 and 320 px) opens You → Storage with a
+stood-in `/api/storage` summary: both labels say "On this phone", nothing says
+"this computer"; on the unchanged candidate it fails with "On this computer".
+Not run in Android WebView or on a device.
