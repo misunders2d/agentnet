@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -57,6 +58,16 @@ func currentOwnLegacyHistory(q dbq, sender, reader identity.Public) error {
 }
 
 func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
+	// The page is picked, then read, in two statements: on the store they
+	// share one read snapshot, so every picked row is still there to read.
+	if d, ok := q.(*storeDB); ok {
+		tx, err := d.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		q = tx
+	}
 	inVisible := "NOT " + erasedInFor("inbox")
 	outVisible := "NOT " + erasedOut
 	if own {
@@ -116,7 +127,7 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
 		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id,quote,topic,topic_event,topic_done,arrival,0 AS outseq` + visible + ` AND id IN (` + in + `)
 		  UNION ALL
-		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub IN ('status','reaction','revision','retraction')) AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done,0,o.rowid` + visibleOut + ` AND o.id IN (` + in + `))` + listed
+		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub IN ('status','reaction','revision','retraction')) AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done,0,o.rowid` + visibleOut + ` AND o.id IN (` + in + `))`
 	params = append([]any{}, ids...)
 	params = append(params, a.Address, a.Self().Fingerprint(), a.Self().Fingerprint())
 	if own {
@@ -159,9 +170,16 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// A caller's own transaction may change rows between the two statements;
+	// a short page would end a snapshot early, so fail and let it retry.
+	if len(items) != len(rank) {
+		return nil, errHistorySourceMoved
+	}
 	slices.SortFunc(items, func(x, y historySourceRow) int { return rank[key{x.dir, x.in.ID}] - rank[key{y.dir, y.in.ID}] })
 	return items, nil
 }
+
+var errHistorySourceMoved = errors.New("history source changed while it was read")
 
 // The narrow page choice reads every outbox column it needs from here, never
 // from the table row behind its inline envelope (owner's store: the busiest
