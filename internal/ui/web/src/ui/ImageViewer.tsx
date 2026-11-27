@@ -24,6 +24,7 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
 }) {
   const portal = usePortal(), modal = useModal(true);
   const [stage, setStage] = useState<HTMLDivElement | null>(null);
+  const [contentStage, setContentStage] = useState<HTMLDivElement | null>(null);
   const pointers = useRef(new Map<number, Point>());
   const swipe = useRef<(Point & { pointerId: number }) | null>(null);
   const [image, setImage] = useState({ width: 0, height: 0 });
@@ -68,6 +69,23 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
     observer.observe(el);
     return () => observer.disconnect();
   }, [stage]);
+  // A touch swipe here is the viewer's own gesture (pointer events below), so
+  // its touchmoves are cancelled: otherwise Chromium (Android's WebView)
+  // still starts a fling after a quick swipe, and a tap during that fling,
+  // such as Close right after swiping to the last item, only stops the fling
+  // and is not a click. Taps never move, so they still click. Around a video
+  // only a sideways album swipe is cancelled; up and down still scroll.
+  useEffect(() => {
+    const els = [stage, contentStage].filter((el): el is HTMLDivElement => !!el);
+    const move = (e: TouchEvent) => {
+      if (!e.cancelable) return;
+      if (e.currentTarget === stage) { e.preventDefault(); return; }
+      const start = swipe.current, touch = e.touches[0];
+      if (start && touch && e.touches.length === 1 && Math.abs(touch.clientX - start.x) > Math.abs(touch.clientY - start.y)) e.preventDefault();
+    };
+    for (const el of els) el.addEventListener("touchmove", move, { passive: false });
+    return () => { for (const el of els) el.removeEventListener("touchmove", move); };
+  }, [stage, contentStage]);
   // Native listener: React's passive wheel listener cannot prevent page zoom.
   useEffect(() => {
     const el = stage;
@@ -114,7 +132,7 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
             </>}
             <Dialog.Close aria-label="Close" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken"><IconX size={20} /></Dialog.Close>
           </div>
-          {content ? <div role="region" aria-label={"Video: " + name} className="relative flex min-h-0 flex-1 touch-pan-y items-center justify-center overflow-auto bg-sunken p-3"
+          {content ? <div ref={setContentStage} role="region" aria-label={"Video: " + name} className="relative flex min-h-0 flex-1 touch-pan-y items-center justify-center overflow-auto bg-sunken p-3"
             onPointerDown={e => {
               const video = e.target instanceof Element ? e.target.closest("video") : null;
               const controls = video && e.clientY > video.getBoundingClientRect().bottom - 64;

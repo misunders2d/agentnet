@@ -57,6 +57,13 @@ What Comic does (`Message.groups.ts`, `Message.files.tsx`):
   video plays in the viewer inside its existing card (`VideoFile`: the same
   load, 16 MiB, WebKitGTK interleave, release and Android download paths), and
   leaving it unloads it.
+- The viewer cancels the touchmoves of its own swipes. Without that,
+  Chromium (Android's WebView) started a fling of about 400 ms after a quick
+  swipe, and a tap during it (Close right after the last swipe) only stopped
+  the fling: no click. An input trace showed `GestureFlingCancel` then a
+  suppressed `GestureTap`. With the old viewer, the rendered check (Close
+  150 ms after a finger-like swipe) failed 3 of 3 runs; with the fix it
+  passed 24 of 24 cases.
 
 AgentNet-specific adaptations. One AgentNet message carries up to
 `envelope.MaxAttachments` (8) files and one text, so a message is split into
