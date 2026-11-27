@@ -26,7 +26,21 @@ const check=async e=>{
   const f=await e.api('/api/file?id='+encodeURIComponent(withFile.id)+'&i=0&dir=out');assert.equal(new TextDecoder().decode(f.bytes),'solo notes');
 };
 await check(a);
+// The local-only copy is the only holder of its file's bytes: they are kept
+// in the same write as the delivered row. A failed file write stores neither,
+// and the send fails visibly.
+const failing=new TextEncoder().encode('never half kept'),failingKey='kept/'+wire.hex(await wire.sha256(failing)),write=a.store.write;
+a.store.write=async(ops,checks)=>{if(ops.some(o=>o.s==='files'&&o.k===failingKey))throw Error('synthetic file write failure');return write.call(a.store,ops,checks);};
+await assert.rejects(()=>a.sendDM({conv:solo,body:'file write fails',files:[{name:'lost.txt',size:failing.length,bytes:failing}]}),/synthetic file write failure/);
+a.store.write=write;
+assert.equal((await a.store.all('outbox')).some(r=>r.body==='file write fails'),false,'no delivered row without its file');
+assert.equal(await a.store.get('files',failingKey),undefined,'no file without its row');
+assert.equal((await shown(a)).length,2);
+assert.equal((await a.api('/api/dm?id='+solo)).messages.some(m=>m.body==='file write fails'),false);
 const restarted=new Engine({store:a.store,base:a.base,fetch:a.fetch,now:a.now});
 await restarted.load();await restarted.features();
 await check(restarted);
+const kept=await restarted.store.get('files','kept/'+wire.hex(await wire.sha256(bytes)));
+assert.ok(kept?.ct,'the kept bytes are there after a reload');
+assert.equal(new TextDecoder().decode(await wire.decryptFile(kept.ct,kept.attachment,restarted.keys)),'solo notes');
 console.log('solo group engine check ok');
