@@ -42,7 +42,12 @@ code). Now Go `MyAgentsRoomIn` keeps a deleted room, and the new
 `overview.my_agents` field (docs/HOST_API_ROUTES.md, docs/UI_SKINS.md) names
 it for the web ("Chat with", Assign, built-in rules) and the browser engine.
 The next agent message reuses it and its turn brings it back; deleted
-messages stay deleted, as in any deletion.
+messages stay deleted, as in any deletion. After review: creating a group
+titled "My agents" while one exists, deleted here or not, returns that room
+in both hosts (Go `CreateGroup`, engine `createGroup`), so a skin that looks
+only among listed chats cannot make a second one; and when older copies
+exist, the oldest listed room wins, the oldest deleted one only when all are
+deleted.
 Starting a chat with the person again creates a new DM, as after any
 deletion; a turn in the old one brings it back.
 
@@ -53,7 +58,16 @@ both); `TestDeleteEmptyGroupHidesItOnly` (client: an empty group leaves the
 list, membership hash unchanged, others keep it, a repeat refuses, a turn
 brings it back); `TestDeletedMyAgentsRoomIsReused` (client: My agents
 deleted with a message and empty is still the room the next ask gets, still
-the built-in group, and a turn brings it back); `TestDeletedMyAgentsRoomStaysNamed`
+the built-in group, and a turn brings it back; creating "My agents" while
+it is deleted returns the same room and no second one); `TestMyAgentsRoomInPrefersListed`
+(client: of two rooms, the listed one over an older deleted one; the oldest
+when all are listed or all deleted); `TestDeletedEmptyChatsOnOwnDevices`
+(client: an empty group and My agents deleted on the laptop leave the list on
+the linked agent-host device, whose `MyAgentsRoom()` is still the same room;
+a device linked after the deletion of an empty DM and an empty group shows
+neither, nor My agents, and its `MyAgentsRoom()` is the same room; the
+deleted DM's root is not synced to it at all, root-sync leaving deleted
+chats out); `TestDeletedMyAgentsRoomStaysNamed`
 (ui `Live`: after deletion the room is out of `dms` and still `my_agents`);
 `TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
 overview, deleted with a note, gone from the next overview, people kept);
@@ -62,16 +76,21 @@ desk and the linked phone, people kept, a repeat adds no marker, a turn
 brings it back; the phone's root is seeded as root-sync leaves it, and no
 new-chat step; an empty group leaves the list with its group context
 unchanged and comes back with a turn; My agents, empty and with a message,
-leaves the list, stays `my_agents` and the built-in group, and comes back).
-The new client, ui `Live` and browser checks fail on the code before each
-fix (the reported refusal, a second My agents room, or a missing
-`my_agents`). Not rendered: "Chat with" and Assign reopening a hidden room in
-the web UI (the model reads `my_agents`; the latency fixture's mocked
-overview has none and falls back to `dms`). The skins gate must be rerun
-before release for the new overview field. Group own-device sync uses the DM's tested path; it has no
-two-device group test.
-Not rerun: the rendered latency suite (web code unchanged); not checked on the
-real installed app.
+leaves the list, stays `my_agents` and the built-in group, and comes back;
+`createGroup('My agents')` while it is deleted returns it; of two rooms, the
+listed newer one over the older deleted one, the oldest when both are
+deleted or both listed); `TestAgentChatStarterRendered` (rendered Comic,
+opt-in Playwright: with the My agents room out of `dms` and named by
+`my_agents`, "Chat with" asks in that room, makes no second room, and the
+question brings it back).
+The new client, ui `Live`, browser and rendered checks fail on the code
+before each fix (the reported refusal, a second My agents room, a missing
+`my_agents`, a newer deleted room winning, or "Chat with" asking in a new
+room). Not rendered: Assign into a hidden room (same `myAgentsRoomId`). The
+skins gate (agentnet-skins `npm test` against the candidate) must be rerun
+before release for the new overview field.
+Not rerun: the rendered latency suite (web code unchanged this round); not
+checked on the real installed app or Android.
 
 ## Next release after v0.11.10 — MEL-825 and MEL-826
 

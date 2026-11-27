@@ -248,6 +248,25 @@ check((await a.store.all('outbox')).length === before, 'a thread deletion tells 
   }
   await ga.sendDM({ conv: room, body: 'NEXT JOB' });
   check((await ga.overview()).dms.some((d) => d.id === room && d.title === 'My agents'), 'the next turn brings the same room back');
+  // A skin that looks only among listed chats asks for a new "My agents"
+  // while it is deleted: it gets the same room, and no second one is made.
+  const rooms = async () => (await ga.store.all('kv')).filter((v) => v?.context && wire.parseGroupContext(v.context).state.title === 'My agents').map((v) => wire.parseGroupContext(v.context).state.conv);
+  await ga.deleteConversation({ conv: room });
+  check(await ga.createGroup('My agents') === room && (await rooms()).length === 1, 'creating "My agents" while it is deleted returns the same room');
+  // Two rooms from before the guard (overview hidden from createGroup):
+  // the oldest listed one wins over an older deleted one; when all are
+  // deleted, the oldest.
+  const overview = ga.overview, now = ga.now;
+  ga.overview = async (...args) => { const o = await overview.apply(ga, args); delete o.my_agents; return o; };
+  ga.now = () => now() + 60_000;
+  const second = await ga.createGroup('My agents');
+  ga.overview = overview; ga.now = now;
+  check(second !== room && (await rooms()).length === 2, 'the fixture has a second, newer My agents');
+  check((await ga.overview()).my_agents === second, 'a listed newer room wins over the older deleted one');
+  await ga.deleteConversation({ conv: second });
+  check((await ga.overview()).my_agents === room, 'with both deleted, the oldest wins');
+  await ga.sendDM({ conv: room, body: 'BACK' });
+  check((await ga.overview()).my_agents === room, 'with both listed, the oldest wins');
 }
 
 console.log(JSON.stringify({ shapes, checks }));

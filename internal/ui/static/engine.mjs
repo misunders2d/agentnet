@@ -5728,6 +5728,8 @@ export class Engine {
   async createGroup(title) {
     const checks=[], me=await this.groupRead(checks,"kv","person");
     if(!me || me.state!=="self" || !wire.validID(this.realm || "")) throw Error("Set up and connect your person before creating a group.");
+    // One "My agents" room per person (client.CreateGroup): a skin that looked only among listed chats gets the existing one, deleted here or not.
+    if(title==="My agents"){const room=(await this.overview()).my_agents;if(room)return room;}
     const root=await wire.signGroupRoot(this.keys,{v:wire.GroupRootVersion,kind:"group",realm:this.realm,title,creator:{person:me.person,roster:me.hash,address:this.address,fingerprint:this.fp},members:[{person:me.person,roster:me.hash}],admins:[me.person],nonce:wire.newID(),created:Math.floor(this.now()/1000)});
     const conv=await wire.rootID(root), admission=await wire.signGroupAdmission(this.keys,{conv,realm:this.realm,person:me.person,roster:me.hash,seq:0,prev:"",history:null,by:this.fp});
     const state=await wire.signGroupState(this.keys,{v:1,conv,realm:this.realm,seq:0,prev:"",title,members:[{person:me.person,roster:me.hash,admin:true,admission}],actor:me.person,actor_roster:me.hash,by:this.fp});
@@ -10613,7 +10615,7 @@ export class Engine {
         ...(last ? { last_event: last } : {}) });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
-    let myAgents=null; // the person's "My agents" room, also while deleted here (client.MyAgentsRoomIn)
+    let myAgents=null,myAgentsDeleted=null; // the person's "My agents" room, also while deleted here (client.MyAgentsRoomIn): the oldest listed, else the oldest deleted
     for(const g of (read.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,read));
       const view=await this.groupThread(conv,read), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
@@ -10626,8 +10628,12 @@ export class Engine {
       }
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},read).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
-      if(packet.state.title==="My agents"&&!view.frozen&&view.members?.length===1&&view.members[0].person===this.me?.person&&(!myAgents||packet.root.created<myAgents.created||packet.root.created===myAgents.created&&conv<myAgents.id))myAgents={id:conv,created:packet.root.created};
-      if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
+      const hiddenHere=this.erasedConv(conv)&&!visible.some(m=>!m.sub);
+      if(packet.state.title==="My agents"&&!view.frozen&&view.members?.length===1&&view.members[0].person===this.me?.person){
+        const best=hiddenHere?myAgentsDeleted:myAgents;
+        if(!best||packet.root.created<best.created||packet.root.created===best.created&&conv<best.id){if(hiddenHere)myAgentsDeleted={id:conv,created:packet.root.created};else myAgents={id:conv,created:packet.root.created};}
+      }
+      if(hiddenHere)continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : latestView.edited ? bodyPreview(latestView.text || "") : latestView.event ? firstLine(latestView.event) : bodyPreview(latestView.body);
       const previewText=wire.topicOrganization(visible.at(-1)?.topic_event)?await this.topicOrganizationNotice(conv,visible.at(-1).topic):latestText;
@@ -10693,7 +10699,7 @@ export class Engine {
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       groups:true, group_invitations:await this.groupInvitations(),
-      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms, ...(myAgents ? { my_agents: myAgents.id } : {}),
+      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms, ...((myAgents||myAgentsDeleted) ? { my_agents: (myAgents||myAgentsDeleted).id } : {}),
       // A browser is always a person's device (never a service).
       role: this.me ? "person" : "unset", link, links: asks.length ? asks : undefined, history: history.length ? history : undefined,
     };

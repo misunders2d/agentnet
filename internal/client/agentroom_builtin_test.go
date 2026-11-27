@@ -27,8 +27,16 @@ func TestMyAgentsRoomCannotBeRenamedOrLeft(t *testing.T) {
 	if again, err := a.MyAgentsRoom(tctx(t)); err != nil || again != room {
 		t.Fatalf("My agents room changed: %s vs %s %v", again, room, err)
 	}
-	other, err := a.CreateGroup(tctx(t), MyAgentsRoomTitle)
+	// A second "My agents" is not created (CreateGroup returns the room);
+	// a look-alike comes from renaming another group.
+	if again, err := a.CreateGroup(tctx(t), MyAgentsRoomTitle); err != nil || again.State.Conv != room {
+		t.Fatalf("a new My agents: %v %v", again.State.Conv, err)
+	}
+	other, err := a.CreateGroup(tctx(t), "Other")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if other, err = a.RenameGroup(tctx(t), other.State.Conv, MyAgentsRoomTitle); err != nil {
 		t.Fatal(err)
 	}
 	// Both may carry the same creation second; the room is whichever

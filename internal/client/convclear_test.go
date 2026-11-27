@@ -661,6 +661,15 @@ func TestDeletedMyAgentsRoomIsReused(t *testing.T) {
 		t.Fatal("the deleted room is still listed")
 	}
 	reused("deleted with a message")
+	// A skin that looks for the room only among listed chats asks for a new
+	// group by that title: it gets the same room, never a second one.
+	if p, err := w.alice.CreateGroup(tctx(t), MyAgentsRoomTitle); err != nil || p.State.Conv != room {
+		t.Fatalf("a new group titled My agents: %s %v", p.State.Conv, err)
+	}
+	if convs, err := w.alice.Conversations(); err != nil || len(convs) != 1 {
+		t.Fatalf("%d chats after asking for another My agents: %v", len(convs), err)
+	}
+	reused("after asking for another")
 	sendConv(t, w.alice, room, ConvOutgoing{Body: "next job"})
 	eventually(t, "the room back with the next turn", func() bool {
 		return strings.Join(convBodies(t, w.alice, room), "|") == "out:next job" && !convInfo(t, w.alice, room).Deleted
@@ -679,6 +688,95 @@ func TestDeletedMyAgentsRoomIsReused(t *testing.T) {
 	}
 	if again, err := w2.alice.MyAgentsRoom(tctx(t)); err != nil || again != empty {
 		t.Fatalf("after the empty room's deletion: %s, not %s: %v", again, empty, err)
+	}
+}
+
+// Where older code made a second "My agents" room after a deletion, the
+// oldest listed room is the room; the oldest deleted one only when every
+// room is deleted.
+func TestMyAgentsRoomInPrefersListed(t *testing.T) {
+	me := PersonInfo{Person: "p"}
+	room := func(id string, created int64, deleted bool) ConversationInfo {
+		return ConversationInfo{ID: id, Kind: protocol.ConvKindGroup, Title: MyAgentsRoomTitle, Members: []PersonInfo{me}, Created: created, Deleted: deleted}
+	}
+	a, b := room("a", 1, true), room("b", 2, false)
+	if got := MyAgentsRoomIn([]ConversationInfo{b, a}, "p"); got != "b" {
+		t.Fatalf("an older deleted room against a listed one: %s", got)
+	}
+	b.Deleted = true
+	if got := MyAgentsRoomIn([]ConversationInfo{b, a}, "p"); got != "a" {
+		t.Fatalf("every room deleted: %s", got)
+	}
+	a.Deleted, b.Deleted = false, false
+	if got := MyAgentsRoomIn([]ConversationInfo{b, a}, "p"); got != "a" {
+		t.Fatalf("both listed: %s", got)
+	}
+}
+
+// Empty chats deleted on the laptop stay deleted on own devices: one linked
+// before (an empty group, and My agents, whose agent-host device still finds
+// the same room) and one linked after (an empty DM and an empty group).
+func TestDeletedEmptyChatsOnOwnDevices(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	host := linked(t, w.alice)
+	dumpClears(t, w.alice, host)
+	dm := newDM(t, w.alice, w.bob)
+	group, err := w.alice.CreateGroup(tctx(t), "Empty group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := w.alice.MyAgentsRoom(tctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	holds := func(a *Agent, conv string) bool {
+		convs, err := a.Conversations()
+		return err == nil && slices.ContainsFunc(convs, func(c ConversationInfo) bool { return c.ID == conv })
+	}
+	eventually(t, "the empty group and My agents on the host", func() bool {
+		return holds(host, group.State.Conv) && holds(host, room)
+	})
+	if got, err := host.MyAgentsRoom(tctx(t)); err != nil || got != room {
+		t.Fatalf("the host's My agents before: %s %v", got, err)
+	}
+	withConvClear(t, w.alice, host)
+	for _, conv := range []string{dm, group.State.Conv, room} {
+		if _, err := w.alice.DeleteConversation(tctx(t), conv); err != nil || !convInfo(t, w.alice, conv).Deleted {
+			t.Fatalf("delete %s: %v", conv, err)
+		}
+	}
+	eventually(t, "the host to leave the group and My agents out", func() bool {
+		return convInfo(t, host, group.State.Conv).Deleted && convInfo(t, host, room).Deleted
+	})
+	if got, err := host.MyAgentsRoom(tctx(t)); err != nil || got != room {
+		t.Fatalf("the host's My agents after the deletion: %s %v", got, err)
+	}
+
+	kept := newDM(t, w.alice, w.bob) // an empty DM not deleted: root-sync reaches the new device
+	tablet, awaited, _ := linkPhone(t, w.alice, "tablet")
+	if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil {
+		t.Fatal(out.err)
+	}
+	runAgent(t, tablet)
+	withConvClear(t, tablet)
+	shown := func(conv string) bool { return holds(tablet, conv) && !convInfo(t, tablet, conv).Deleted }
+	// The deleted DM's root is not synced at all (rootsync.go leaves deleted
+	// chats out); the group and My agents arrive with their deletion.
+	eventually(t, "the new device to hold the kept DM and the deleted groups", func() bool {
+		return shown(kept) && holds(tablet, group.State.Conv) && holds(tablet, room) &&
+			count(t, tablet, "conv_erased WHERE conv = '"+group.State.Conv+"'") > 0 && count(t, tablet, "conv_erased WHERE conv = '"+room+"'") > 0
+	})
+	if shown(dm) || shown(group.State.Conv) || shown(room) {
+		t.Fatal("the new device shows a chat deleted before it was linked")
+	}
+	if got, err := tablet.MyAgentsRoom(tctx(t)); err != nil || got != room {
+		t.Fatalf("the new device's My agents: %s, not %s: %v", got, room, err)
 	}
 }
 
