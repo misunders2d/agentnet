@@ -760,6 +760,13 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, e
 		}
 		fence, e := groupControlEpochFence(a.store.db, *group, a.Address, a.Self().Fingerprint(), a.Address, a.Self().Fingerprint())
+		if sub == envelope.SubStatus { // fenced as every status copy is (and as the guard checks it)
+			adm, statusErr := groupMemberAdmission(a.store.db, *group, a.Address, a.Self().Fingerprint())
+			e = statusErr
+			if e == nil {
+				fence = adm.Hash()
+			}
+		}
 		if e != nil {
 			return ControlSent{}, e
 		}

@@ -216,7 +216,15 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 			return ConvSent{}, err
 		}
 	}
-	if len(devices) == 0 && !out.selfJob {
+	// A group that is this person's alone, on this one device, with their
+	// own agents hosted here: nobody else needs a copy (as sendGroupTurn).
+	solo := false
+	if len(devices) == 0 && root.Kind == protocol.ConvKindGroup {
+		if solo, err = soloGroup(a.store.db, m, a.Address, a.Self().Fingerprint()); err != nil {
+			return ConvSent{}, err
+		}
+	}
+	if len(devices) == 0 && !out.selfJob && !solo {
 		return ConvSent{}, errors.New("human: no recipient")
 	}
 	// Network checks first, with no lock held: a text turn never waits for
@@ -260,6 +268,23 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 			copyIn.ID = in.LID // the host's executable copy (asked on the host: the first copy, whose ID its job takes)
 		}
 		copies = append(copies, outCopy{in: copyIn, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
+		seals = append(seals, sealing{recipient: recipient})
+	}
+	if solo {
+		// One signed local-only copy, stored here as delivered and never
+		// posted to the relay (sendGroupTurn's, controls.go's).
+		recipient, err := a.Self().Recipient()
+		if err != nil {
+			return ConvSent{}, err
+		}
+		me, ok, err := a.store.selfPerson(a.Address)
+		if err != nil || !ok {
+			return ConvSent{}, errors.New("group sender person missing")
+		}
+		copyIn := in
+		copyIn.ID, copyIn.To, copyIn.Replica, copyIn.SendGroup = protocol.NewID(), a.Address, true, ""
+		copyIn.Fan = []envelope.Fan{{Person: me.info.Person, Roster: me.info.Roster}}
+		copies = append(copies, outCopy{in: copyIn, state: protocol.StateDelivered, required: protocol.CapHumanParticipation, recipientFP: a.Self().Fingerprint(), groupAdmission: groupAdmission})
 		seals = append(seals, sealing{recipient: recipient})
 	}
 	for _, file := range out.Files {
@@ -342,14 +367,21 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if request {
 		sent.ID = in.LID // the exact executable copy, independent of audience order
 	}
-	envs := make([]envelope.Envelope, len(copies))
-	for i, c := range copies {
-		envs[i] = c.env
+	var envs []envelope.Envelope
+	for _, c := range copies {
+		if c.state != protocol.StateDelivered { // delivered: the local-only copy, never posted
+			envs = append(envs, c.env)
+		}
 	}
 	results, errs := a.deliverEach(ctx, envs)
-	for i, c := range copies {
+	for _, c := range copies {
 		cp := ConvCopy{ID: c.env.ID, To: c.env.To, State: c.state}
-		result, err := results[i], errs[i]
+		if c.state == protocol.StateDelivered {
+			sent.Copies = append(sent.Copies, cp)
+			continue
+		}
+		result, err := results[0], errs[0]
+		results, errs = results[1:], errs[1:]
 		if err == nil {
 			cp.State, cp.Detail = result.State, result.Detail
 		} else {

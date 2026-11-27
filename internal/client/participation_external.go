@@ -845,6 +845,52 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		}
 		copies = append(copies, c)
 	}
+	// A group that is this person's alone, on this one device, with their
+	// own agent hosted here: nobody else needs a copy. As a plain group turn
+	// does (sendGroupTurn), keep one signed local-only copy, stored here as
+	// delivered and never posted. A request keeps its logical ID, as the
+	// first copy of a request asked on its host does, so the job recorded
+	// with it below (jobKey) is the one this device's worker claims.
+	solo := false
+	if len(devices) == 0 && m.group != nil {
+		if solo, err = soloGroup(a.store.db, m, a.Address, a.Self().Fingerprint()); err != nil {
+			return ConvSent{}, err
+		}
+	}
+	if solo {
+		recipient, e := a.Self().Recipient()
+		if e != nil {
+			return ConvSent{}, e
+		}
+		copyIn := in
+		copyIn.ID, copyIn.To, copyIn.Replica, copyIn.SendGroup, copyIn.Fan = protocol.NewID(), a.Address, true, "", nil
+		if request {
+			copyIn.ID = in.LID
+		}
+		for person, p := range m.persons {
+			if p.has(a.Address, a.Self().Fingerprint()) {
+				copyIn.Fan = append(copyIn.Fan, envelope.Fan{Person: person, Roster: p.roster.Hash()})
+			}
+		}
+		for _, file := range out.Files {
+			attachment, e := a.spoolNamed(file, recipient)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			copyIn.Attachments = append(copyIn.Attachments, attachment)
+			spooled = append(spooled, attachment.Blob)
+		}
+		sealed, e := envelope.Seal(copyIn, a.id.Sign, recipient)
+		if e != nil {
+			return ConvSent{}, e
+		}
+		adm, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
+		if e != nil {
+			return ConvSent{}, e
+		}
+		copies = append(copies, outCopy{in: copyIn, env: sealed, state: protocol.StateDelivered, required: guestAgentRequirement(protocol.CapGroup, info.Parent != ""),
+			recipientFP: a.Self().Fingerprint(), groupAdmission: adm.Hash()})
+	}
 	if len(copies) == 0 {
 		return ConvSent{}, errors.New("no participation recipient")
 	}

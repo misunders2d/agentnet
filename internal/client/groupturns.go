@@ -194,6 +194,30 @@ func groupTurnCheck(q dbq, packet GroupContext, address, fp string) error {
 	return groupDeliveryRecipient(q, packet, address, fp)
 }
 
+// soloGroup reports whether m is a group whose every current member is the
+// person of this device (address with key fp): theirs alone, so a turn
+// there needs no copy for anyone else (sendGroupTurn's !others). A member
+// not resolvable here is never assumed to be this person.
+func soloGroup(q dbq, m dmMembers, address, fp string) (bool, error) {
+	if m.group == nil {
+		return false, nil
+	}
+	members, err := logicalGroupMembers(q, *m.group)
+	if err != nil || len(members) == 0 {
+		return false, err
+	}
+	for _, member := range members {
+		p, ok, err := messagingPersonIn(q, member.Person)
+		if err != nil {
+			return false, err
+		}
+		if !ok || !p.has(address, fp) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, binding *replyBinding) (ConvSent, error) {
 	if m.Kind == "" {
 		m.Kind = envelope.KindMessage
