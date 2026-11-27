@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -651,4 +652,79 @@ func TestEraseSweepOnlyWhenWorkMayExist(t *testing.T) {
 		a.store.db.QueryRow(`SELECT body FROM inbox WHERE id = 'ask'`).Scan(&body)
 		return body == ""
 	})
+}
+
+// A device linked after a chat was deleted, with nothing later, never gets
+// that chat (syncRoots, history): the replayed deletion is applied there
+// anyway, not held, so the sender's copy is delivered (not quarantined), no
+// held notice waits, and a named turn that arrives later stays a skeleton.
+// A copy held by an older reader is applied on its next look.
+func TestReplayedDeletionAppliedWithoutTheChat(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	first := sendConv(t, w.bob, conv, ConvOutgoing{Body: "secret"})
+	eventually(t, "the turn here", func() bool { return len(convBodies(t, w.alice, conv)) == 1 })
+	if done, err := w.alice.DeleteConversation(tctx(t), conv); err != nil || done.Erased != 1 || done.Devices != 0 {
+		t.Fatalf("delete: %+v %v", done, err)
+	}
+	phone := linked(t, w.alice)
+	dumpClears(t, w.alice, phone)
+	withConvClear(t, w.alice, phone)
+	eventually(t, "the replayed deletion applied on the new device", func() bool {
+		var state string
+		w.alice.store.db.QueryRow(`SELECT state FROM outbox WHERE sub = 'clear' AND recipient = ?`, phone.Address).Scan(&state)
+		return erasedHere(t, phone, conv, first.LID) && state == "delivered"
+	})
+	if n := count(t, phone, "quarantine"); n != 0 {
+		t.Fatalf("the new device holds %d messages", n)
+	}
+	if _, _, found, err := phone.store.conversation(conv); err != nil || found {
+		t.Fatalf("a deletion made a conversation here: %v %v", found, err)
+	}
+	if convs, err := phone.Conversations(); err != nil || len(convs) != 0 {
+		t.Fatalf("conversations on the new device: %+v %v", convs, err)
+	}
+	// A stale copy of the erased turn, from a device that was not told,
+	// stays a skeleton; a later turn shows alone.
+	var ts int64
+	if err := w.alice.store.db.QueryRow(`SELECT ts FROM inbox WHERE lid = ?`, first.LID).Scan(&ts); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := rootOf(t, w.alice, conv)
+	item := HistoryItem{V: 1, From: w.bob.Address, FromKey: w.bob.Self().Fingerprint(), ID: protocol.NewID(), LID: first.LID, TS: ts,
+		Kind: envelope.KindMessage, Body: "secret", Origin: envelope.OriginUI, At: time.Now().UnixMilli()}
+	stale, err := w.alice.historyCopy(phone.id.Public(phone.Address), conv, raw, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.verifyAndStore(tctx(t), stale.env); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount(t, phone, `lid = ? AND body <> ''`, first.LID) != 0 {
+		t.Fatal("a stale history copy of the erased turn kept its text")
+	}
+	sendConv(t, w.bob, conv, ConvOutgoing{Body: "after"})
+	eventually(t, "the later turn alone on the phone", func() bool { return strings.Join(convBodies(t, phone, conv), "|") == "in:after" })
+
+	// An older reader held such a copy for proof: its next look applies it.
+	gone, lid := strings.Repeat("ab", 32), protocol.NewID()
+	me, _, err := w.alice.store.selfPerson(w.alice.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copies, err := w.alice.clearCopies(me, []identity.Public{phone.Self()}, clearParts(gone, protocol.NewID(), []envelope.Ref{{ID: lid, Fingerprint: w.bob.Self().Fingerprint()}}))
+	if err != nil || len(copies) != 1 {
+		t.Fatal(len(copies), err)
+	}
+	held, _ := json.Marshal(copies[0].env)
+	if _, err := phone.store.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at) VALUES(?, ?, ?, ?, ?)`, copies[0].env.ID, w.alice.Address, reasonProof, string(held), time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	phone.retryProof(tctx(t))
+	if !erasedHere(t, phone, gone, lid) || count(t, phone, "quarantine") != 0 {
+		t.Fatal("a deletion held for proof was not applied on its next look")
+	}
 }

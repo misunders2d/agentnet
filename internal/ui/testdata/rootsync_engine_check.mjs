@@ -81,4 +81,15 @@ await a.store.write([{s:'kv',k:'person',v:own},{s:'persons',k:bp.person,v:{...bp
 await assert.rejects(()=>a.rootSyncAuthority(wire.parseRoot(raw),a.address,a.fp,p.address,p.fp),/frozen/);checks++;
 await a.store.write([{s:'persons',k:bp.person,v:bp},{s:'pins',k:p.address,v:{...(await a.store.get('pins',p.address)),pending:'changed'}}]);
 await assert.rejects(()=>a.rootSyncAuthority(wire.parseRoot(raw),a.address,a.fp,p.address,p.fp),/key changed/);checks++;
-console.log(JSON.stringify({checks,scope:'quiet empty DM roots, restart, old reader, own-human authority'}));
+await a.store.write([{s:'pins',k:p.address,v:{...(await a.store.get('pins',p.address)),pending:null}}]);
+// Deleted here (client convDeleted): with a later turn it is root-synced to a new link; with nothing later it is not.
+const reopened=await a.newDM(b.address),gone=await a.newDM(b.address);
+await a.sendDM({conv:reopened,body:'deleted turn'});await a.sendDM({conv:gone,body:'deleted turn'});
+const named=(await a.store.all('outbox')).filter(r=>r.body==='deleted turn'&&r.lid);
+await a.store.write([...new Map(named.map(r=>[r.conv+r.lid,r])).values()].map(r=>({s:'erased',k:r.conv+'|'+a.fp+'|'+r.lid,v:{conv:r.conv,key:a.fp,lid:r.lid,deletion:wire.newID(),shared:true}})));
+await a.loadErased();await a.sendDM({conv:reopened,body:'later turn'});
+const tablet=await sibling(a,'alice/tablet');await a.syncRoots();
+const toTablet=(await rootCopies(a)).filter(r=>r.to===tablet.address);
+check(toTablet.some(r=>r.conv===reopened),'deleted DM with a later turn is root-synced to a new link');
+check(!toTablet.some(r=>r.conv===gone),'deleted DM with nothing later is not root-synced');
+console.log(JSON.stringify({checks,scope:'quiet empty DM roots, restart, old reader, own-human authority, deleted chats'}));

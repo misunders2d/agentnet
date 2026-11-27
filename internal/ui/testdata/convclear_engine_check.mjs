@@ -168,6 +168,16 @@ const late = await wire.seal({ v: 2, id: id(), from: b.address, to: phone.addres
 await w.receive(late, phone);
 check(!(await phone.dm(conv)).messages.some((m) => m.body === 'OLD FROM BOB') && (await phone.store.all('inbox')).filter((r) => r.lid === oldBob.lid).every((r) => r.body === ''), 'a late copy of an erased turn stays a skeleton');
 
+// A second DM deleted with nothing later: a device linked afterwards never gets it.
+const gone = await a.newDM(b.address);
+await a.sendDM({ conv: gone, body: 'GONE FROM ALICE' });
+await w.drain(b); await w.drain(phone);
+await b.sendDM({ conv: gone, body: 'GONE FROM BOB' });
+await w.drain(a); await w.drain(phone);
+await a.api('/api/conversation/delete', { conv: gone }); await w.settle(a);
+await a.flushOutbox(); await w.drain(phone); await w.settle(phone);
+check(!(await phone.dm(gone)).messages.some((m) => m.body === 'GONE FROM BOB'), 'the second deletion reached the phone');
+
 // A device linked later learns every name and gets no deleted history.
 const tablet = await w.sibling(a, 'alice/tablet');
 await w.caps(tablet, [...defaults, wire.CapConvClear]);
@@ -175,6 +185,10 @@ await a.startHistory(tablet.address, tablet.fp); await a.runHistory(); await a.f
 const tView = await tablet.dm(conv).catch(() => ({ messages: [] }));
 check(!tView.messages.some((m) => /OLD FROM/.test(m.body || '')), 'new link: no deleted turn in its history');
 check((await tablet.store.all('erased')).length >= (await a.store.all('erased')).length, 'new link learns every erased name');
+// The replayed deletion of a chat the tablet never gets is applied, not held.
+check(!(await tablet.store.get('convs', gone)) && (await tablet.store.all('erased')).some((r) => r.conv === gone), 'new link keeps the names of a chat it does not hold');
+check(!(await tablet.store.all('held')).some((h) => h.reason === 'proof_pending'), 'new link holds no replayed deletion');
+check(!(await tablet.overview()).dms.some((d) => d.id === gone), 'the chat it does not hold stays unlisted');
 
 // Another person cannot delete anything here.
 const ref = { id: (await a.store.all('outbox')).find((r) => r.conv === conv && r.lid).lid, fingerprint: a.fp };
