@@ -237,14 +237,18 @@ func (s *agyStream) fail() {
 }
 
 func (s *agyStream) setConversation(id string) {
-	compact := strings.ReplaceAll(id, "-", "")
-	_, err := hex.DecodeString(compact)
-	if len(id) != 36 || len(compact) != 32 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' || err != nil ||
-		s.conversation != "" && s.conversation != id || s.expected != "" && s.expected != id {
+	if !validAgyConversation(id) || s.conversation != "" && s.conversation != id || s.expected != "" && s.expected != id {
 		s.damaged = true
 		return
 	}
 	s.conversation = id
+}
+
+// validAgyConversation: agy names a conversation with a UUID.
+func validAgyConversation(id string) bool {
+	compact := strings.ReplaceAll(id, "-", "")
+	_, err := hex.DecodeString(compact)
+	return len(id) == 36 && len(compact) == 32 && id[8] == '-' && id[13] == '-' && id[18] == '-' && id[23] == '-' && err == nil
 }
 
 // Diagnostics are read on stderr's own goroutine, independently of stdout.

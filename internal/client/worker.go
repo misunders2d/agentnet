@@ -563,6 +563,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			agentAttempt = int64(attempt)
 		}
 	}
+	// agy can be steered only over ACP (agyacp.go); an agy without the ACP
+	// server keeps the stream-json transport, where a correction waits.
+	agyACP := h.sessions == agySessions && launchErr == nil && agyACPSupported(runCtx, cmd)
+	if agyACP {
+		prepAgyACPLaunch(cmd)
+	}
 	var wp *warmProc // this turn's warm worker
 	reused := false
 	var key warmKey
@@ -640,7 +646,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var agy *agyStream
 	var agyErr agyDiagnostics
 	var agyTurn *agyWarmTurn
-	if h.sessions == agySessions {
+	if h.sessions == agySessions && !agyACP {
 		agy = &agyStream{onActivity: activity.report}
 		if plan.ref != nil {
 			agy.expected = plan.ref.ID
@@ -768,6 +774,26 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		followupBridge = claudeBridge
 		defer claudeBridge.close()
 	}
+	var acp *agyACPBridge
+	if agyACP {
+		session, resume := "", false
+		if plan.ref != nil && plan.resume && plan.ref.ID != "" {
+			session, resume = plan.ref.ID, true
+		}
+		if wp != nil {
+			acp = attachAgyACPBridge(runCtx, wp.input(), r.Dir, prompt, session, resume, reused, wp.turns)
+		} else {
+			acp, err = newAgyACPBridge(runCtx, cmd, prompt, session, resume)
+		}
+		if err != nil {
+			a.endJob(j.ID, stateJobFailed, "native Antigravity transport unavailable: "+err.Error(), j.nativeAttempt)
+			return
+		}
+		acp.onActivity = activity.report
+		cmd.Stdout = activityWriter{Writer: acp, activity: activity, first: first}
+		followupBridge = acp
+		defer acp.close()
+	}
 	if followupBridge != nil {
 		followupCtx, stopFollowups := context.WithCancel(runCtx)
 		followupsDone := make(chan struct{})
@@ -839,6 +865,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			settled, begin = claudeBridge.settledCh(), claudeBridge.begin
 		case agyTurn != nil:
 			settled, begin = agyTurn.settled, agyTurn.begin
+		case acp != nil:
+			settled, begin = acp.settledCh(), acp.begin
 		}
 		// Output reaches only this turn's decoder, from before its input.
 		wp.out.set(cmd.Stdout)
@@ -949,6 +977,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 					thread, turn = roomBridge.thread, roomBridge.turn
 					roomBridge.stateMu.Unlock()
 				}
+				if acp != nil {
+					thread = acp.conversation()
+				}
 				warmEnded = true
 				releaseWarmVouch()
 				_ = a.setWarmBinding(wp.handle, "", 0)
@@ -1014,6 +1045,21 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		piBridge.close()
 		if nativeFailure = piBridge.failureText(); runCtx.Err() == nil && settled && nativeFailure == "" {
 			runErr = nil
+		}
+	}
+	if acp != nil {
+		stopNativeFollowups()
+		acp.finish()
+		acp.close()
+		// Its outcome is read in the stream transport's terms (agy.result).
+		out, failure, auth := acp.outcome()
+		if failure != "" {
+			nativeFailure = failure
+		} else {
+			agy, agyErr.auth = &out, auth
+			if out.complete && !out.damaged && runCtx.Err() == nil {
+				runErr = nil
+			}
 		}
 	}
 	if roomBridge != nil {

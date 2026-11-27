@@ -31,6 +31,13 @@ a follow-up with earlier result context, delivery after a transport outage,
 and the stopped-run boundary. The retry uses the exact edit job's stored
 result and checks participation again while quoting the original turn.
 `TestEditFollowsUpCompletedRequest` exercises the direct worker path.
+Antigravity steers over ACP like Pi, Claude and Codex (docs/revival/M4.md);
+`TestAgyACP` covers an edit reaching agy's running turn with one answer,
+a correction refused while agy waits, a lost process, permission denial and
+conversation resume. The edit status now tells the paths apart: "Edit queued
+as a follow-up", "Sending the edit to the running agent", "Edit reached the
+running agent" (kept once that run answers), "Agent answering the edit as a
+follow-up", "Agent replied to the edit as a follow-up", or not applied.
 `TestLocalChangesRendered` checks immediate editing under a held write,
 failure, retry, concurrent linked-device text, and all five edit outcomes at
 desktop and phone sizes with 100 and 1000 messages. `TestListPanelCollapseResizeRendered`
