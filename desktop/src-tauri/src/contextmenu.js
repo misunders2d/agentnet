@@ -12,19 +12,16 @@
     if (f) return f instanceof HTMLTextAreaElement || textInput.test(f.type);
     return t instanceof HTMLElement && t.isContentEditable;
   };
-  // Selected text counts only where it was right-clicked: a selection
-  // elsewhere must not let the page menu through on a blank area.
-  const point = (x, y) => {
-    if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(x, y); return p && [p.offsetNode, p.offset]; }
-    if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(x, y); return r && [r.startContainer, r.startOffset]; }
-    return null;
-  };
+  // Selected text counts only where it was right-clicked: the click must
+  // land on the selection's own drawn text, not a blank spot beside it.
   const selectedAt = (e) => {
     const s = window.getSelection();
     if (!s || s.isCollapsed || String(s).trim() === '') return false;
-    const at = point(e.clientX, e.clientY);
-    if (!at || !at[0]) return false;
-    for (let i = 0; i < s.rangeCount; i++) { try { if (s.getRangeAt(i).isPointInRange(at[0], at[1])) return true; } catch (_) {} }
+    for (let i = 0; i < s.rangeCount; i++) {
+      for (const r of s.getRangeAt(i).getClientRects()) {
+        if (r.width && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return true;
+      }
+    }
     return false;
   };
   window.addEventListener('contextmenu', (e) => {
