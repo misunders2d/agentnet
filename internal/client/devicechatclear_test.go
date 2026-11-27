@@ -191,7 +191,20 @@ func TestBlockSyncHeldForNonReaderThenSent(t *testing.T) {
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
 	phone := linked(t, w.alice)
+	// The phone publishes its own record when it connects; a fixture record
+	// signed before that is replaced by it (slow under -race).
+	eventually(t, "the phone's own capability record", func() bool {
+		phone.capsPub.mu.Lock()
+		defer phone.capsPub.mu.Unlock()
+		return phone.capsPub.published
+	})
 	signCapsNow(t, phone, slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapReminderSyncV3 })) // read as v0.11.13 reads a rem3-only record
+	// Alice sees the new record once the relay's push drops her cached
+	// profile; blocking before that sends with the old capabilities.
+	eventually(t, "alice to see the phone read no block marks", func() bool {
+		advertised, reads := w.alice.peerReads(tctx(t), phone.Address, protocol.CapReminderSyncV2)
+		return advertised && !reads
+	})
 	someone := protocol.NewID()
 	if err := w.alice.SetBlocked(someone, true); err != nil {
 		t.Fatal(err)
