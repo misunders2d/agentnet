@@ -62,6 +62,7 @@ type agyACPBridge struct {
 	answering                  bool
 	said                       int  // answer text bytes read this request
 	late                       bool // a correction went to agy after its request ended
+	handedOver                 bool // agy ended a prompt for a newer one
 }
 
 type acpSteer struct {
@@ -69,6 +70,22 @@ type acpSteer struct {
 	result   chan string
 	said     int  // the request's said when this correction was made
 	writing  bool // its write has begun
+	sent     bool // its write succeeded
+	taken    bool // agy handed the turn over to it
+	resolved bool // its result was given
+}
+
+func (s *acpSteer) resolveLocked(result string) {
+	if !s.resolved {
+		s.resolved = true
+		s.result <- result
+	}
+}
+
+// acceptLocked gives a correction agy took, once it was written.
+func (b *agyACPBridge) acceptLocked(s *acpSteer) {
+	b.seen[s.id] = s.text
+	s.resolveLocked(steerAccepted)
 }
 
 var errACPSkipped = errors.New("not written: the request already ended")
@@ -286,14 +303,23 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 			s.writing = true
 			return true
 		}
-		if b.send(turn, call, keep) != nil {
-			b.mu.Lock()
+		err := b.send(turn, call, keep)
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		switch {
+		case err == nil:
+			s.sent = true
+			if s.taken {
+				b.acceptLocked(s) // agy's handover was read before the write returned
+			}
+		case !errors.Is(err, errACPSkipped):
+			// Not written, so never taken: it always leaves the turn.
 			if b.steers[rpc] == s {
 				delete(b.steers, rpc)
-				b.dropPromptLocked(rpc)
-				s.result <- steerUnknown
 			}
-			b.mu.Unlock()
+			b.dropPromptLocked(rpc)
+			s.resolveLocked(steerUnknown)
+			b.settleIfOpenLocked()
 		}
 	}()
 	select {
@@ -303,11 +329,21 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 	case <-b.ctx.Done():
 	}
 	b.mu.Lock()
-	if b.steers[rpc] == s {
-		delete(b.steers, rpc)
+	if b.steers[rpc] == s && !s.writing {
+		delete(b.steers, rpc) // never written: it is not part of the turn
+		b.dropPromptLocked(rpc)
 	}
+	s.resolved = true
 	b.mu.Unlock()
 	return steerUnknown
+}
+
+// settleIfOpenLocked completes a request that agy already ended for a
+// correction that then left the turn: nothing else will answer it.
+func (b *agyACPBridge) settleIfOpenLocked() {
+	if !b.done && b.handedOver && len(b.prompts) == 0 {
+		b.completeLocked(b.stop)
+	}
 }
 
 func (b *agyACPBridge) dropPromptLocked(id int64) {
@@ -347,7 +383,7 @@ func (b *agyACPBridge) endLocked() {
 	b.done, b.active = true, false
 	b.settleOnce.Do(func() { close(b.settled) })
 	for rpc, s := range b.steers {
-		s.result <- steerUnknown
+		s.resolveLocked(steerUnknown)
 		delete(b.steers, rpc)
 	}
 }
@@ -597,7 +633,8 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 		// answer): the turn goes on, the correction stays queued.
 		delete(b.steers, id)
 		b.dropPromptLocked(id)
-		s.result <- steerUnsupported
+		s.resolveLocked(steerUnsupported)
+		b.settleIfOpenLocked()
 		return
 	}
 	if e != nil {
@@ -618,31 +655,31 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 	if s := b.steers[id]; s != nil {
 		// The correction's own reply: agy ran the turn with it.
 		delete(b.steers, id)
-		b.seen[s.id] = s.text
-		s.result <- steerAccepted
+		b.acceptLocked(s)
 	}
 	if len(b.prompts) > 0 {
 		// Not the turn's end while a prompt is still open: the request
 		// settles only on its last outstanding prompt's reply.
 		if i := slices.IndexFunc(b.prompts, func(p int64) bool { return p > id }); i >= 0 {
 			next := b.steers[b.prompts[i]]
-			if len(r.Usage) > 0 || next != nil && b.said != next.said {
+			if len(r.Usage) > 0 || next == nil || !next.writing || b.said != next.said {
 				// agy finished this prompt with its own answer before it read
-				// the correction: the request is answered, and the correction
-				// is the person's next turn.
+				// the correction (or before it was even written): the request
+				// is answered, and the correction is the person's next turn.
 				b.completeLocked(r.Stop)
 				return
 			}
 			// The handover, as agy 1.5.18 does it: a bare end_turn (no usage,
 			// no answer text since the correction) because a newer prompt
-			// joined the turn. The newer prompt is taken; what was said before
-			// is not its answer.
-			if s := next; s != nil {
-				delete(b.steers, b.prompts[i])
-				b.seen[s.id] = s.text
-				s.result <- steerAccepted
+			// joined the turn. The newer prompt is taken, accepted once its
+			// write succeeded; what was said or asked before is not its
+			// outcome.
+			next.taken, b.handedOver, b.stop = true, true, r.Stop
+			if next.sent {
+				b.acceptLocked(next)
 			}
 			b.run, b.answer, b.answering = "", "", false
+			b.denied, b.waiting = false, false
 			return
 		}
 		// A newer prompt answered before an older one: keep what it said
@@ -665,9 +702,17 @@ func (b *agyACPBridge) completeLocked(stop string) {
 	}
 	b.stop, b.complete = stop, true
 	for rpc, s := range b.steers {
-		b.late = b.late || s.writing
 		delete(b.steers, rpc)
-		s.result <- steerQueued
+		if s.taken {
+			if s.sent {
+				b.acceptLocked(s)
+			} else {
+				s.resolveLocked(steerUnknown)
+			}
+			continue
+		}
+		b.late = b.late || s.writing
+		s.resolveLocked(steerQueued)
 	}
 	b.prompts = nil
 	if !b.late {

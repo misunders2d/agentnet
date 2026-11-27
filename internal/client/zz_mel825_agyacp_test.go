@@ -119,6 +119,28 @@ func TestAgyACPProcessHelper(t *testing.T) {
 		case "session/prompt":
 			first := m["id"]
 			switch mode {
+			case "bare-before-write":
+				// The request ends with a bare end_turn while AgentNet has not
+				// yet written the correction: nothing was handed over.
+				chunk("Answer for: the original city")
+				time.Sleep(300 * time.Millisecond)
+				reply(first, map[string]any{"stopReason": "end_turn"})
+			case "permission-steer":
+				// A denied permission in the request, then the correction takes
+				// the turn over and answers cleanly.
+				enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 0, "method": "session/request_permission", "params": map[string]any{"sessionId": session,
+					"toolCall": map[string]any{"toolCallId": "t1", "title": "rm -rf build"}, "options": []map[string]string{
+						{"optionId": "no", "name": "Deny", "kind": "reject_once"}}}})
+				if answer := next(); answer["id"] != float64(0) {
+					os.Exit(5)
+				}
+				correction := next()
+				if correction["method"] != "session/prompt" {
+					os.Exit(4)
+				}
+				reply(first, map[string]any{"stopReason": "end_turn"})
+				chunk("Answer for: " + promptText(correction))
+				reply(correction["id"], map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
 			case "steer-early":
 				// The real agy: a prompt that arrives during the turn takes it
 				// over. The earlier prompt ends at once with a bare end_turn;
@@ -397,6 +419,11 @@ func agyACPBridgeCases(t *testing.T) {
 		// The live failure: the correction follows the request at once and
 		// the request's own write is slow; agy must still see them in order.
 		{mode: "steer-early", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
+		// The request ended before the correction was written: its own
+		// answer stands and the correction is never written into this run.
+		{mode: "bare-before-write", steer: steerQueued, answer: "Answer for: the original city"},
+		// A permission denied before the handover is not the corrected turn's.
+		{mode: "permission-steer", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
 		{mode: "refuse", steer: steerUnsupported, answer: "Answer for: the original request"},
 		{mode: "crash", steer: steerUnknown},
 		{mode: "permission", attention: "could not obtain a native tool approval"},
@@ -404,6 +431,19 @@ func agyACPBridgeCases(t *testing.T) {
 		{mode: "answer", answer: "Answer for: Original request"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
+			gate := make(chan struct{})
+			if tc.mode == "bare-before-write" {
+				old := agyACPBeforeWrite
+				agyACPBeforeWrite = func(v any) {
+					if m, _ := v.(map[string]any); m["method"] == "session/prompt" && strings.Contains(fmt.Sprint(m["params"]), "Moscow") {
+						select {
+						case <-gate:
+						case <-time.After(5 * time.Second):
+						}
+					}
+				}
+				t.Cleanup(func() { agyACPBeforeWrite = old })
+			}
 			if tc.mode == "steer-early" {
 				old := agyACPBeforeWrite
 				agyACPBeforeWrite = func(v any) {
@@ -432,7 +472,15 @@ func agyACPBridgeCases(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("the request never started")
 				}
-				if tc.mode != "steer-early" {
+				switch tc.mode {
+				case "steer-early":
+				case "permission-steer":
+					eventually(t, "the permission denied", func() bool {
+						b.mu.Lock()
+						defer b.mu.Unlock()
+						return b.denied
+					})
+				default:
 					eventually(t, "native commentary read", func() bool {
 						b.mu.Lock()
 						defer b.mu.Unlock()
@@ -451,6 +499,7 @@ func agyACPBridgeCases(t *testing.T) {
 			if tc.steer != "" {
 				eventually(t, "the request settled", func() bool { return isClosed(b.settledCh()) })
 			}
+			close(gate)
 			runErr := <-waited
 			b.close()
 			if steered != nil {
@@ -494,6 +543,11 @@ func agyACPBridgeCases(t *testing.T) {
 			}
 			if n := log.count(t, "process", ""); n != 1 {
 				t.Fatalf("%d processes", n)
+			}
+			if tc.mode == "bare-before-write" {
+				if prompts := log.prompts(t); len(prompts) != 1 {
+					t.Fatalf("a correction the request never took was written: %q", prompts)
+				}
 			}
 		})
 	}
