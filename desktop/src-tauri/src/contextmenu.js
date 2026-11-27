@@ -3,7 +3,15 @@
 // (Windows, November 27, 2026). Text fields and selected text keep their
 // native Cut/Copy/Paste menu; AgentNet's own menus already handle the event.
 (() => {
-  const editable = (t) => t instanceof Element && !!t.closest('input, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]');
+  // Only text entry keeps the native menu: a checkbox, file picker or
+  // slider would otherwise bring back the page menu (Back, Reload, Print).
+  const textInput = /^(text|search|email|url|tel|password|number)$/;
+  const editable = (t) => {
+    if (!(t instanceof Element)) return false;
+    const f = t.closest('input, textarea');
+    if (f) return f instanceof HTMLTextAreaElement || textInput.test(f.type);
+    return t instanceof HTMLElement && t.isContentEditable;
+  };
   // Selected text counts only where it was right-clicked: a selection
   // elsewhere must not let the page menu through on a blank area.
   const point = (x, y) => {
