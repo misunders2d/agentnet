@@ -11,7 +11,7 @@ import {
 import type { Api, T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { deviceKind, niceDevice, personName, threadRow, reminderOf, runsAgent, timeOf, type DeviceKind } from "../model";
+import { deviceKind, deviceOwner, directChatKey, niceDevice, personName, removedDevice, threadRow, reminderOf, runsAgent, timeOf, type DeviceKind } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
@@ -105,6 +105,25 @@ export function presence(addresses: string[], o: T.Overview | null): { online: b
   return seen.length ? { online: false, text: "Offline" } : { online: null, text: "" };
 }
 
+// chatTopics: how many topics a whole device chat's delete takes, archived
+// ones too (PeerTopics.total counts them; one PeerTopics per chat row).
+function chatTopics(key: string, o: T.Overview | null | undefined) {
+  const n = (o?.topics || []).filter(c => directChatKey(c.latest) === key).reduce((n, c) => n + c.total, 0)
+    || new Set((o?.threads || []).filter(t => directChatKey(t) === key).map(t => t.id)).size;
+  return n <= 1 ? "This chat’s one topic is deleted" : "All " + n + " topics of this chat are deleted";
+}
+
+// deviceKeeper: who still has the chat afterwards, said only as far as it is
+// known (client.DeviceChatKeeper, engine deviceChatKeeper): nobody for
+// another current device of yours (it gets the deletion too).
+function deviceKeeper(peer: string, o: T.Overview | null | undefined) {
+  if (!o || peer === o.me.address || (o.person?.devices || []).some(d => d.address === peer)) return "";
+  const gone = removedDevice(peer, o);
+  if (gone) return gone.person === o.person?.person ? " Your removed device is not told." : " That removed device keeps its copy.";
+  const owner = deviceOwner(peer, o), name = owner && owner.person !== o.person?.person ? personName(owner).trim() : "";
+  return name ? " " + name + " keeps their copy." : " That device keeps its copy.";
+}
+
 const presenceTitle = "Whether the server sees their AgentNet running now. It doesn’t mean a person is there.";
 
 // ---- header -------------------------------------------------------------------------------
@@ -176,7 +195,12 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
   const topicAgents = t && overview?.person?.state === "self" ? (t.agents || []).filter(a => a.topic === currentTopic && a.state === "active" && !!a.agent_id
     && overview.person!.devices?.some(d => d.address === a.host.address && d.fingerprint === a.host.fingerprint)) : [];
   const muted = !!t && !!notify && (notify.mutes || []).includes(t.id);
-  const remove = () => void store.deleteChat(t ? t.id : th!.topic?.id || ctx.conv, t ? { conv: t.id } : { peer: th!.peer, thread: th!.topic?.id || ctx.conv });
+  // A device chat's row holds every topic with that peer: "Delete chat"
+  // removes all of them. One topic is never deleted, only archived or marked
+  // done (owner, 2026-11-27; docs/DECISIONS.md).
+  const chatKey = th ? directChatKey(th.topic || { peer: th.peer }) : "";
+  const remove = () => void (t ? store.deleteChat(t.id, { conv: t.id })
+    : store.deleteChat(th!.topic?.id || ctx.conv, { peer: th!.peer, thread: th!.topic?.id || ctx.conv, chat: true }, chatKey));
 
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   const copyLink=async(topic:string)=>{
@@ -250,7 +274,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
                 ? <Menu.Item className={item} onClick={() => void store.setBlocked(dmPeer.person!, false, personName(dmPeer))}><IconBan size={20} />Unblock {personName(dmPeer)}</Menu.Item>
                 : <Menu.Item className={item + " text-danger"} onClick={() => setBlock(true)}><IconBan size={20} />Block {personName(dmPeer)}…</Menu.Item>)}
               {rights.member && !rights.builtIn && <Menu.Item className={item + " text-danger"} onClick={() => change.pick("leave")}><IconDoorExit size={20} />Leave group…</Menu.Item>}
-              {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />{th ? "Delete topic…" : "Delete conversation…"}</Menu.Item>}
+              {th && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />Delete chat…</Menu.Item>}
+              {t && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />Delete conversation…</Menu.Item>}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
@@ -262,9 +287,9 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
       {report !== null && dmPeer && <ReportSheet open={report} onOpenChange={setReport} subject={{ name: personName(dmPeer), address: dmPeer.address, person: dmPeer.person }} />}
       {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
       {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
-      <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}
-        title={th ? "Delete this topic from this device?" : "Delete this conversation from your devices?"}>
-        {th ? <p>It’s stored on this device only, so it’s deleted here and nowhere else. {title} keeps its copy.</p> : <>
+      <Confirm open={del} onOpenChange={o => { if (!o) setDel(false); }} ok="Delete" onOk={remove}
+        title={th ? "Delete this whole chat from your devices?" : "Delete this conversation from your devices?"}>
+        {th ? <p>{chatTopics(chatKey, overview)} here and, once they connect and update, on your other linked devices.{deviceKeeper(th.peer, overview)} A new message starts the chat again.</p> : <>
           <p>The messages go from this device and, once they connect, from your other linked devices.</p>
           <p>Everyone else keeps their copies. Anything already running finishes first. Members and guests stay as they are; a new message brings the chat back.</p>
         </>}

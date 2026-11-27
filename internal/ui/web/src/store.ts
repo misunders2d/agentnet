@@ -372,7 +372,7 @@ export class Store {
     for (const fn of this.subs) fn();
   }
   private presentReads(s: State): State {
-    if (!this.localReads.size && !this.localUnreads.size && !this.deletingChats.size) return s;
+    if (!this.localReads.size && !this.localUnreads.size && !this.deletingChats.size && !this.deletingRows.size) return s;
     if (this.readState?.source === s) return this.readState.value;
     let overview = s.overview;
     const views = { ...s.views };
@@ -425,6 +425,10 @@ export class Store {
     if (overview && this.deletingChats.size) {
       const kept = (c: { id: string; last_at: string; last_id?: string }) => this.deletingChats.get(c.id) !== this.chatStamp(c);
       overview = { ...overview, dms: overview.dms?.filter(kept) ?? null, threads: overview.threads?.filter(kept) ?? null, topics: overview.topics?.filter(t => kept(t.latest)) ?? overview.topics };
+    }
+    if (overview && this.deletingRows.size) { // a whole device chat: its row leaves at once; a newer message keeps it
+      const kept = (t: T.ThreadSummary) => { const at = this.deletingRows.get(directChatKey(t)); return at === undefined || (t.last_at || "") > at; };
+      overview = { ...overview, threads: overview.threads?.filter(kept) ?? null, topics: overview.topics?.filter(t => kept(t.latest)) ?? overview.topics };
     }
     const value = { ...s, views, overview,
       dm: s.dm && (views[s.dm.id] as T.DMThread || s.dm),
@@ -2715,12 +2719,15 @@ export class Store {
   // before the server answers. A refusal puts it back and says why.
   // Only what was there when deleted: a message arriving meanwhile brings it back.
   private deletingChats = new Map<string, string>();
+  private deletingRows = new Map<string, string>(); // a whole device chat (directChatKey) → its newest last_at when deleted
   private chatStamp(c: { last_at: string; last_id?: string }) { return c.last_at + "\0" + (c.last_id || ""); }
-  async deleteChat(id: string, ref: Parameters<Api["deleteConversation"]>[0]) {
+  async deleteChat(id: string, ref: Parameters<Api["deleteConversation"]>[0], row?: string) {
     const open = this.state.open, o = this.state.overview;
     const summary = o?.dms?.find(d => d.id === id) || o?.threads?.find(t => t.id === id) || o?.topics?.find(t => t.latest.id === id)?.latest;
     const stamp = summary ? this.chatStamp(summary) : "";
     this.deletingChats.set(id, stamp);
+    const rowAt = row === undefined ? "" : [...(o?.threads || []), ...(o?.topics || []).map(t => t.latest)].filter(t => directChatKey(t) === row).map(t => t.last_at || "").sort().pop() || "";
+    if (row !== undefined) this.deletingRows.set(row, rowAt);
     this.publishReads();
     this.close();
     const result = await this.run(a => a.deleteConversation(ref));
@@ -2728,6 +2735,7 @@ export class Store {
     // A later delete of what came back meanwhile keeps its own hold.
     const latest = this.deletingChats.get(id) === stamp;
     if (latest) this.deletingChats.delete(id);
+    if (row !== undefined && this.deletingRows.get(row) === rowAt) this.deletingRows.delete(row);
     this.publishReads();
     if (!this.alive) return;
     if (result?.note) this.toast(result.note, "ok");

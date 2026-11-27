@@ -223,7 +223,10 @@ try {
     if(body?.do==='read'){for(const m of view.messages)if(body.ids?.includes(m.id))m.unread=false;overview.dms[0].unread=view.messages.filter(m=>m.unread).length;view.main_topic={unread:overview.dms[0].unread};emit();}
     return {};
    }
-   if(path==='/api/conversation/delete'){if(chatDeleteHold){chatDeleteWaiting++;await chatDeleteHold;}await pause(100);if(chatDeleteFailure){chatDeleteRefusals++;throw Error('Synthetic delete refusal');}overview.dms=overview.dms.filter(d=>d.id!==body.conv);seq++;emit();return{note:''};}
+   if(path==='/api/conversation/delete'){if(chatDeleteHold){chatDeleteWaiting++;await chatDeleteHold;}await pause(100);if(chatDeleteFailure){chatDeleteRefusals++;throw Error('Synthetic delete refusal');}
+    // A whole device chat: every topic of that one row (peer and concrete agent), none of another row's.
+    if(body.chat){assert(p1==='direct'&&body.peer===peer.address&&directTopics.some(t=>t.id===body.thread&&t.agent_id===binding.agent_id),'whole chat delete names its exact row');directMessages=directMessages.filter(m=>directTopics.find(t=>t.id===m.placement)?.agent_id!==binding.agent_id);updateDirect();overview.topics=overview.topics.filter(s=>s.total);seq++;emit();return{note:''};}
+    overview.dms=overview.dms.filter(d=>d.id!==body.conv);seq++;emit();return{note:''};}
    if(path==='/api/refresh')return {};
    if(path.startsWith('/api/agents')){counts.catalogs++;return{host:overview.me.address,local:true,agents:[],sessions:[]};}
    if(path==='/api/responder')return{manual:true,harness:'',dir:'',available:[],setup:{tools:[]}};
@@ -788,11 +791,10 @@ try {
     assert(!control('Undo',all()),'All topics must not offer pseudo-Undo after dispatch');
     await closeSheet('topics.bulk-after-confirm-close','All topics');assert(portable.bulk.length===1,'closing dispatched the already confirmed batch again');
     await openAll('topics.bulk-reopen');await tap('topics.bulk-archived-filter',control(/^Archived/,all()),()=>!!all().querySelector('ul[aria-label="Archived topics"]'),'exact archived batch visible after host result');await choose(1);await choose(2);
-    await tap('topics.bulk-delete-review',control('Delete for me',all()),()=>!!control('Confirm',all()),'delete exact reviewed batch for this person');
-    const remove=control('Confirm',all());remove.scrollIntoView({block:'nearest'});await frame();await measure('topics.bulk-delete-confirm',()=>{remove.click();remove.click();},()=>remove.disabled&&label(remove)==='Deleting 2…','immediate exact delete pending; no pseudo-success before host result',()=>portable.bulk.length===2&&!control('Confirm',all())&&!all().textContent.includes('2 selected')&&!view.topics.some(t=>['1'.repeat(32),'2'.repeat(32)].includes(t.id)));
-    assert(!control('Undo',all()),'bulk deletion must not offer pseudo-Undo');
-    assert(view.topics.length===1&&view.topics[0].id==='3'.repeat(32)&&view.topics[0].state==='active','unselected newer topic survives');reports.portableBulk=clone(portable.bulk);
-    await closeSheet('topics.bulk-final-close','All topics');assert(portable.bulk.length===2,'close duplicated confirmed delete');
+    // One topic is never deleted, only archived or marked done (owner, 2026-11-27).
+    assert(!control('Delete for me',all())&&!control(/^Delete/,all()),'no topic delete offered');
+    assert(view.topics.filter(t=>t.state==='archived').length===2&&view.topics.some(t=>t.id==='3'.repeat(32)&&t.state==='active'),'archived batch kept; unselected newer topic active');reports.portableBulk=clone(portable.bulk);
+    await closeSheet('topics.bulk-final-close','All topics');assert(portable.bulk.length===1,'close dispatched another batch');
    }else{
     const title=p1==='direct'?'Portable Pi 1':'Portable second source';
     await openAll('topics.'+p1+'-all-open',()=>!!all()&&!!control(new RegExp('^'+title+','),all()));
@@ -822,6 +824,25 @@ try {
     const applied=[...portable.ops.values()].filter(o=>o.applied).at(-1);assert(applied.review.merge===original&&applied.review.topic===target,'merge retains exact source/destination');
     assert(JSON.stringify(rows.map(({placement,topic,...m})=>m))===originals,'organization preserves every original message field');
     if(p1==='direct')assert(directMessages.find(m=>m.id==='9'.repeat(32)).placement==='9'.repeat(32),'other concrete agent context remains separate');
+    if(p1==='direct'){
+     // Delete chat on a device chat row: the row leaves and closes at once, stays gone
+     // with the answer held, and comes back with the reason when refused (store.ts deletingRows).
+     // The other agent's row on the same device is a different chat and stays.
+     const deviceRow=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Portable Pi'));
+     const otherRow=()=>[...root.querySelectorAll('[data-part="chat-row"]')].find(b=>b.textContent.includes('Other agent topic')||b.textContent.includes('Other Claude'));
+     const shownList=()=>[...root.querySelectorAll('section[aria-label="Chats"][data-part="list"]')].filter(shown);
+     const rowGone=()=>{const lists=shownList();return lists.length===1&&![...lists[0].querySelectorAll('[data-part="chat-row"]')].some(b=>b.textContent.includes('Portable Pi'))&&!deviceRow();};
+     const askDeleteDeviceChat=async()=>{await retire();if(!control('More')){deviceRow().click();await until(()=>control('More'),'device chat open again');}control('More').click();await until(()=>control('Delete chat…'),'delete chat item');assert(!control('Delete topic…'),'one topic is never deleted: no Delete topic offered');control('Delete chat…').click();await until(()=>[...scope().querySelectorAll('[role="alertdialog"]')].find(shown),'delete chat confirmation');await retire();return [...scope().querySelectorAll('[role="alertdialog"]')].find(shown);};
+     if(control('Back to chats')){control('Back to chats').click();await until(deviceRow,'phone: back to the chat list');}assert(deviceRow()&&otherRow(),'both agent rows of the device listed before the delete');
+     chatDeleteFailure=true;let confirmChat=await askDeleteDeviceChat();
+     assert(confirmChat.textContent.includes('This chat’s one topic is deleted')&&confirmChat.textContent.includes((peer.label||'').trim()+' keeps their copy.'),'device chat dialog states its topic count and who keeps a copy');
+     let closingText=null;await measure('topics.direct-chat-delete-refused',()=>{[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click();requestAnimationFrame(()=>{closingText=confirmChat.isConnected&&confirmChat.hasAttribute('data-ending-style')?confirmChat.textContent:'';});},brief(rowGone),'device chat row leaves before the refusal',()=>visibleText('Synthetic delete refusal')&&(innerWidth<1024?!!control('Back to chats'):!!deviceRow()));
+     assert(closingText&&closingText.includes('Delete this whole chat from your devices?')&&closingText.includes('This chat’s one topic is deleted'),'closing dialog kept its whole-chat wording: '+closingText);
+     chatDeleteFailure=false;let releaseDeviceDelete;chatDeleteHold=new Promise(r=>releaseDeviceDelete=r);const waitingBefore=chatDeleteWaiting;confirmChat=await askDeleteDeviceChat();
+     await measure('topics.direct-chat-delete',()=>[...confirmChat.querySelectorAll('button')].find(b=>label(b)==='Delete').click(),rowGone,'device chat row leaves and closes with the server answer held');
+     await until(()=>chatDeleteWaiting===waitingBefore+1,'device chat delete at the server',3000);await pause(150);assert(rowGone()&&!!otherRow(),'held delete keeps the row gone and the other agent row listed');
+     chatDeleteHold=null;releaseDeviceDelete();await until(()=>!directMessages.some(m=>m.agent_id===binding.agent_id),'device chat delete confirmed');await pause(50);assert(!deviceRow()&&!!otherRow(),'confirmed delete removed only its own row');
+    }
     else{
      await openAll('topics.personal-destination-list');
      await tap('topics.personal-destination-open',control(/^Portable second destination,/,all()),()=>!all()&&!!control(/^Portable second destination, open topic/),'exact second-root destination selected',()=>!!root.querySelector('form[data-conv="'+secondConv+'"]')&&(!!root.querySelector('[data-mid="'+sourceID+'"]')||!!control('Earlier messages')));

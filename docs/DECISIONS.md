@@ -1106,6 +1106,16 @@ All were read on November 25.
 - Marks travel like reminder marks: private, between current own human
   devices only, newest revision wins. The reader capability `rem2` replaces
   `rem1`'s slot (the advertisement list is full) and implies it.
+- `rem3` (v0.11.14) replaces `rem2` in the same slot and implies `rem2` and
+  `rem1`; it also reads device chat deletions (a clear with no
+  conversation, `protocol.CapDeviceClear`). Owner chose slot reuse
+  (2026-11-27) over a 33rd name, which v0.11.x readers, the hub and
+  `wire.mjs` refuse. All three names gate only copies to the person's own
+  devices (`blocksync.go`, `remindersync.go`, `convclear.go`, `engine.mjs`);
+  the hub reads no reminder name. A v0.11.13 own device reads a rem3-only
+  record as neither: its reminder and block copies to an updated device
+  wait (never dropped) until it updates. An updated device reads a rem2-only
+  one exactly as before and holds only device chat deletions for it.
 - Both engines hold a blocked person's direct messages, questions, tasks and
   controls outside groups (reactions, edits) before any admission, with no
   review notice, unread count or alert. Unblocking does not release them, as
@@ -1151,3 +1161,19 @@ All were read on November 25.
 **Implementation note (not an owner decision):** the first build gates only
 the app's first-run page, which Play reviews. The browser landing page and
 Comic's add-workspace sheet are not gated yet.
+
+## November 27, 2026 — a topic is archived, a chat is deleted
+
+**Owner decision (Sergey, November 27):** a single topic offers only Archive
+and Mark done (and Reopen); it never offers delete. Erasing for good is only
+"Delete chat…", for the whole chat (every topic of its row, archived ones
+too).
+
+- The bundled Comic UI and the built-in Office skin drop every entry point
+  that erases one topic: the header "Delete topic…", the All topics bulk
+  "Delete for me", and any topic menu item. The shared skin source
+  (`skins/shared/topics.mjs`) drops its "Delete for me" too.
+- `POST /api/topic/delete`, the one-topic form of
+  `POST /api/conversation/delete` (`{peer, thread}` without `chat`), and the
+  Go `DeleteThread` stay for compatibility: external skins may call them.
+  The route docs mark them "no longer offered by the bundled UI".

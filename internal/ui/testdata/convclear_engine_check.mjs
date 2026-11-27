@@ -106,6 +106,7 @@ check(wire.clearJSON(wire.parseControl(wire.SubClear, body)) === body, 'browser 
   const rec = wire.parseCaps(puts[0]); await wire.verifyCaps(rec, pub.sign_key);
   check(rec.caps.length <= wire.MaxAdvertisedCaps, 'published capabilities fit the advertisement bound');
   check(await wire.profileSupports({ sessions: [rec.session], caps: [JSON.parse(puts[0])] }, address, pub.sign_key, wire.CapConvClear), 'signed browser profile supports clr1');
+  check(rec.caps.includes(wire.CapReminderSyncV3) && !rec.caps.includes(wire.CapReminderSyncV2) && await wire.profileSupports({ sessions: [rec.session], caps: [JSON.parse(puts[0])] }, address, pub.sign_key, wire.CapReminderSyncV2), 'rem3 holds rem2\'s slot and reads as rem2');
   e.stop();
 }
 
@@ -211,15 +212,81 @@ const foreign = await wire.seal({ v: 3, id: id(), from: b.address, to: a.address
 const fid = await w.receive(foreign, a);
 check((await a.store.get('held', fid))?.reason === 'invalid' && !(await a.store.get('inbox', fid)), "another person's deletion is refused");
 
-// A device thread is erased exactly, here only.
+// A device thread is erased exactly, and told to this person's other devices
+// only (rem3): they hold it until they read rem3; the other person gets nothing.
 const v1 = async (bodyText) => { const raw = await wire.seal({ v: 1, id: id(), from: b.address, to: a.address, ts: Math.floor(now / 1000), kind: 'message', body: bodyText }, b.keys, a.pub); await w.receive(raw, a); return wire.parseEnvelope(raw).id; };
 const t1 = await v1('THREAD ONE'), t2 = await v1('THREAD TWO');
-const before = (await a.store.all('outbox')).length;
+const deviceClears = async () => (await a.store.all('outbox')).filter((r) => r.sub === wire.SubClear && !r.conv);
 const td = await a.deleteConversation({ peer: b.address, thread: t1 });
-check(/stored on this device only/.test(td.note), 'thread deletion says this device only');
+check(/^Deleted on all your devices: here now; your 2 other device\(s\)/.test(td.note) && / bob keeps their copy\.$/.test(td.note), 'truthful device deletion note: ' + td.note);
 const threads = (await a.overview()).threads;
 check(!threads.some((t) => t.id === t1) && threads.some((t) => t.id === t2), 'exactly that thread is gone; the other stays');
-check((await a.store.all('outbox')).length === before, 'a thread deletion tells no one');
+let dc = await deviceClears();
+check(dc.length === 2 && dc.every((r) => r.required_cap === wire.CapReminderSyncV3 && r.state === 'waiting') && new Set(dc.map((r) => r.to)).size === 2 && dc.every((r) => [phone.address, tablet.address].includes(r.to)), 'one clear per other own device, each waiting for rem3');
+
+// The whole device chat (owner 2026-11-27): every topic of its row goes at once.
+const t3 = await v1('THREAD THREE'), t4 = await v1('THREAD FOUR');
+const old4 = await a.store.get('inbox', t4); await a.store.write([{ s: 'inbox', k: t4, v: { ...old4, at: old4.at - 8 * 86400 * 1000 } }]); a.changed(); // quiet past TopicArchiveAfter: archived
+const rowOf = async () => (await a.overview()).threads.filter((t) => t.peer === b.address && !t.notice_only).map((t) => t.id);
+check((await rowOf()).length === 3, 'the chat row holds three topics');
+check((await a.overview()).threads.some((t) => t.id === t4 && t.state === 'archived'), 'one of them archived');
+const cd = await a.deleteConversation({ peer: b.address, thread: t3, chat: true });
+check(/^Deleted on all your devices:/.test(cd.note), 'chat deletion says all your devices');
+check((await rowOf()).length === 0 && !((await a.overview()).topics || []).some((c) => c.peer === b.address), 'every topic of the chat is gone, archived too; no row is left');
+check((await deviceClears()).length === 4, 'queued for both own devices again');
+check((await b.store.all('inbox')).every((r) => r.sub !== wire.SubClear), 'nothing is told to the other person');
+
+// Threads of several peers (an agent's chat several devices talked to): the
+// note names no one keeper (client DeviceChatNote); one peer's names that peer.
+const v1From = async (s, bodyText) => { const raw = await wire.seal({ v: 1, id: id(), from: s.address, to: a.address, ts: Math.floor(now / 1000), kind: 'message', body: bodyText }, s.keys, a.pub); await w.receive(raw, a); return wire.parseEnvelope(raw).id; };
+const t5 = await v1('THREAD FIVE'), t6 = await v1From(phone, 'PHONE THREAD');
+const many = await a.eraseDeviceThreads([[phone.address, t6], [b.address, t5]], b.address);
+check(/ Others keep their copies\.$/.test(many.note) && !/keeps (their|its) copy/.test(many.note), "several peers' threads name no one keeper: " + many.note);
+const t7 = await v1('THREAD SEVEN'), one = await a.deleteDeviceChat(b.address, t7);
+check(/ bob keeps their copy\.$/.test(one.note), 'the clicked peer names the keeper: ' + one.note);
+
+// The phone updates (rem3): it applies exactly the named device-chat turns.
+await w.caps(phone, [...defaults, wire.CapConvClear, wire.CapReminderSyncV3]);
+await a.flushOutbox(); await w.drain(phone); await w.settle(phone);
+const pErased = await phone.store.all('erased');
+check([t1, t2, t3, t4].every((x) => pErased.some((r) => r.conv === '' && r.lid === x)), 'the updated phone erased every named device-chat turn');
+dc = await deviceClears();
+check(dc.filter((r) => r.to === tablet.address).every((r) => r.state === 'waiting'), 'the not-yet-updated tablet still holds its copies: ' + JSON.stringify(dc.map((r) => [r.to, r.state, r.detail])));
+
+// The overview names a removed device of a verified person (client
+// RemovedDeviceOwners): Bob's signed roster named bob/phone, then dropped it.
+const pk = await wire.newKeys(), ppub = await wire.publicEntry(pk, 'bob/phone'), pfp = await wire.fingerprint(ppub);
+const r2 = await wire.nextRoster(b.keys, b.address, b.roster, [b.pub, ppub], await wire.joinConsent(pk, 'bob/phone', b.me.person, b.me.seq + 1, b.me.hash));
+const r3 = await wire.nextRoster(b.keys, b.address, r2, [b.pub], null);
+const bobHere = async (steps) => { const p = await a.personRecord(steps, 'pinned', null); await a.store.write([{ s: 'persons', k: p.person, v: p }]); a.changed(); };
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(ppub), fingerprint: pfp, pending: null } }]);
+await bobHere([b.roster, r2]);
+check((await a.overview()).removed_devices === undefined, 'a current device is not removed');
+await bobHere([b.roster, r2, r3]);
+assert.deepEqual((await a.overview()).removed_devices, [{ address: 'bob/phone', person: b.me.person }]); checks++;
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(b.pub), fingerprint: b.fp, pending: null } }]); a.changed();
+check((await a.overview()).removed_devices === undefined, 'a different key at that address is never the removed device');
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(ppub), fingerprint: pfp, pending: null } }]);
+const nk = await wire.newKeys(), npub = await wire.publicEntry(nk, 'bob/phone');
+const r4 = await wire.nextRoster(b.keys, b.address, r3, [b.pub, npub], await wire.joinConsent(nk, 'bob/phone', b.me.person, r3.seq, await wire.rosterHash(r3)));
+await bobHere([b.roster, r2, r3, r4]);
+check((await a.overview()).removed_devices === undefined, 'a re-enrolled address (a current roster names it, new key) is not removed');
+// This person's own removed device (the owner's case): Alice drops alice/tablet
+// as removeDevice does (a new signed roster kept in kv "person").
+const prevA = await wire.parseRoster(a.me.json), nextA = await wire.nextRoster(a.keys, a.address, prevA, prevA.devices.filter((d) => d.address !== tablet.address), null);
+a.me = { ...(await a.personRecord([prevA, nextA], 'self', a.me)), published: true }; await a.store.write([{ s: 'kv', k: 'person', v: a.me }]); a.changed();
+assert.deepEqual((await a.overview()).removed_devices, [{ address: tablet.address, person: a.me.person }]); checks++;
+
+// A device with no person has nobody to tell yet: its untold deletions do not
+// start a share on every change (client sweepErased), and stay untold.
+{
+  const lone = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', fetch: async () => { throw Error('offline'); } });
+  await lone.store.write([{ s: 'erased', k: '|fp|gone', v: { conv: '', key: 'fp', lid: 'gone', deletion: id(), shared: false } }]);
+  let shares = 0; const share = lone.shareErased.bind(lone); lone.shareErased = async () => { shares++; return share(); };
+  for (let i = 0; i < 3; i++) await lone.sweepErased();
+  check(!lone.me && shares === 0 && (await lone.store.all('erased')).every((r) => !r.shared), 'no person: untold deletions start no share per change and stay untold (' + shares + ')');
+  lone.stop();
+}
 
 // A DM never written in (nothing said, only its root) is deleted too, on
 // every own device, and nothing else changes: the people stay.

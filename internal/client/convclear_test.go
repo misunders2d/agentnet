@@ -167,7 +167,7 @@ func TestDeleteConversationOnAllOwnDevices(t *testing.T) {
 	withConvClear(t, w.alice, phone)
 
 	done, err := w.alice.DeleteConversation(tctx(t), conv)
-	if err != nil || done.Erased != 3 || done.Devices != 1 || done.Kept != 0 || done.ThisOnly {
+	if err != nil || done.Erased != 3 || done.Devices != 1 || done.Kept != 0 {
 		t.Fatalf("delete: %+v %v", done, err)
 	}
 	if b := convBodies(t, w.alice, conv); len(b) != 0 {
@@ -238,7 +238,7 @@ func TestDeleteEmptyDMOnAllOwnDevices(t *testing.T) {
 	withConvClear(t, w.alice, phone)
 
 	done, err := w.alice.DeleteConversation(tctx(t), conv)
-	if err != nil || done.Erased != 0 || done.Devices != 1 || done.ThisOnly {
+	if err != nil || done.Erased != 0 || done.Devices != 1 {
 		t.Fatalf("delete: %+v %v", done, err)
 	}
 	if !convInfo(t, w.alice, conv).Deleted {
@@ -508,7 +508,7 @@ func TestDeleteKeepsUnsentCopyUntilHandedOver(t *testing.T) {
 }
 
 // D5: a device thread is deleted exactly: the selected reply-linked thread
-// with that peer, on this device (its only copy), never another thread
+// with that peer, on this person's devices, never another thread
 // with the same peer; the peer keeps theirs; a later reply to it starts anew.
 func TestDeleteThreadExactScope(t *testing.T) {
 	w := newWorld(t, "")
@@ -528,7 +528,7 @@ func TestDeleteThreadExactScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	done, err := w.alice.DeleteThread(w.bob.Address, start.ID)
-	if err != nil || done.Erased != 2 || !done.ThisOnly {
+	if err != nil || done.Erased != 2 || done.Devices != 0 {
 		t.Fatalf("delete thread: %+v %v", done, err)
 	}
 	ts, _ := w.alice.Threads()
@@ -976,5 +976,44 @@ func TestReplayedDeletionAppliedWithoutTheChat(t *testing.T) {
 	phone.retryProof(tctx(t))
 	if !erasedHere(t, phone, gone, lid) || count(t, phone, "quarantine") != 0 {
 		t.Fatal("a deletion held for proof was not applied on its next look")
+	}
+}
+
+// A device with no person has no other device to tell: its untold
+// deletions do not hold the sweeper, which would otherwise re-sweep on
+// every content change (review of 189a5371). They stay untold, so a person
+// made here later still shares them.
+func TestEraseSweepNoPersonUntoldDoesNotRepeat(t *testing.T) {
+	w := newWorld(t, "")
+	a := w.alice
+	if _, ok, err := a.store.selfPerson(a.Address); err != nil || ok {
+		t.Fatalf("this device has a person: %v %v", ok, err)
+	}
+	if _, err := a.store.db.Exec(`INSERT INTO conv_erased(conv, key, lid, deletion, shared) VALUES('', ?, 'gone', 'd1', 0)`, a.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, a)
+	eventually(t, "the startup sweep", func() bool { return a.eraseSweeps.Load() > 0 })
+	settled := func() int64 {
+		for {
+			n := a.eraseSweeps.Load()
+			time.Sleep(300 * time.Millisecond)
+			if a.eraseSweeps.Load() == n {
+				return n
+			}
+		}
+	}
+	swept := settled()
+	for i := 0; i < 10; i++ {
+		a.NoteChange()
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := a.eraseSweeps.Load(); got != swept {
+		t.Fatalf("an untold deletion with no person started %d sweeps", got-swept)
+	}
+	var shared int
+	if err := a.store.db.QueryRow(`SELECT shared FROM conv_erased WHERE lid = 'gone'`).Scan(&shared); err != nil || shared != 0 {
+		t.Fatalf("the deletion was marked told with nobody told: %d %v", shared, err)
 	}
 }

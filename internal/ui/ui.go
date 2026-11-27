@@ -132,6 +132,11 @@ type Overview struct {
 	// an agent (MEL-529): the only "runs an agent" signal for skins, kept
 	// offline. A hint for display and offers, never authority.
 	AgentDevices []string `json:"agent_devices"`
+	// RemovedDevices are devices a verified person (this one or a pinned
+	// one) removed from their signed roster, exact key (client.
+	// RemovedDeviceOwners): their device threads stay searchable history,
+	// never active chats. Display only, never authority.
+	RemovedDevices []client.RemovedDevice `json:"removed_devices,omitempty"`
 	// ModelReports are private, read-only reports from verified own-human hosts.
 	ModelReports []client.PrivateModelReport `json:"model_reports,omitempty"`
 

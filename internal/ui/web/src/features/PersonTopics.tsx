@@ -50,7 +50,7 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
   void store.openUnread({kind:"dm",id:e.conv},e.topic);
  };
  const flatTopics:Topic[]=entries.map(e=>e.native?{...topicOf({...e.native,conv:e.conv}),id:e.key,orderID:e.topic}:e.main?{...topicOf({...e.main,conv:e.conv}),id:e.key,orderID:"",root:true}:{id:e.key,conv:e.conv,peer:"",title:e.title,last:e.last,lastAt:e.root.last_at||e.root.created,unread:e.unread,needsYou:0,waiting:false,pending:false,state:"active",renamed:false,count:e.count,quietSince:e.root.last_at||e.root.created});
- const change=async(what:"delete"|"done"|"archive",ids:string[],counts:Record<string,number>)=>{
+ const change=async(what:"done"|"archive",ids:string[],counts:Record<string,number>)=>{
   const groups=new Map<string,{ids:string[];counts:Record<string,number>}>();
   for(const e of entries.filter(e=>e.native&&ids.includes(e.key))){const group=groups.get(e.conv)||{ids:[],counts:{}};group.ids.push(e.topic);group.counts[e.topic]=counts[e.key];groups.set(e.conv,group);}
   const mainResults=await Promise.all(entries.filter(e=>e.main&&ids.includes(e.key)).map(async e=>{
@@ -62,7 +62,6 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
   const results=await Promise.all([...groups].map(async([conv,group])=>{
    const result=await store.run(api=>api.changeTopic(what,{conv,peer:"",id:"",...group}));
    if(!result)return undefined;
-   if(what==="delete"&&group.ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});
    try{const loaded=await store.api.dm(conv);setViews(current=>({...current,[conv]:loaded}));}catch(error){setFailed(errorText(error));}
    return result;
   }));

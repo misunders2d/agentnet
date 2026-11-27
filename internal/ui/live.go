@@ -225,6 +225,10 @@ func (l *Live) buildOverview(listArchived bool, unread *[]UnreadRow) (Overview, 
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
 	o.Me.Agent, o.AgentDevices = l.a.AdvertisesAgent(), l.a.AgentDevices()
+	var err error
+	if o.RemovedDevices, err = l.a.RemovedDeviceOwners(); err != nil {
+		return o, err
+	}
 	var modelErr error
 	if o.ModelReports, modelErr = l.a.ModelReports(); modelErr != nil {
 		return o, modelErr

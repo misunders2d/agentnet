@@ -4625,3 +4625,124 @@ do). `TestAndroidComicRendered` (390 and 320 px) opens You → Storage with a
 stood-in `/api/storage` summary: both labels say "On this phone", nothing says
 "this computer"; on the unchanged candidate it fails with "On this computer".
 Not run in Android WebView or on a device.
+
+
+## A removed own device is history, not a chat (v0.11.14)
+
+Owner, 2026-11-27: after removing admin/android-phone-3 (replaced by
+android-phone-4), "Android phone 3 · Not linked to a person" appeared among
+the active chats; deleting it brought it back twice. Cause: while the phone
+was on the roster its unbound device threads were "Agent history" rows,
+already left out of the active list (MEL-529); once removed, no current
+roster named it, so the same threads fell through to an unknown-device person
+row. The three returns were three one-message archived topics in that one
+row: each "Delete topic" erased exactly one (the store's last three device
+erasures, in order: Oct 28, Oct 24, Oct 18), and the row showed the next.
+Device-history replicas and the history copy skip erased turns already
+(devicehistory.go, devicehistoryqueue.go) and re-created nothing.
+
+Rule followed: AGENTS.md "One active agent per harness per device"
+(retired configurations and unbound legacy conversations remain searchable
+history). The overview now names this person's own removed devices
+(`removed_devices`, from `OwnRemovedDevices`: the exact pinned key appeared in
+the person's verified roster history and is no longer current). Their
+unbound device threads leave the active list; a current agent's topic once
+asked from them keeps its agent row; the threads stay reachable through
+topic search (`GET /api/topics`, labelled "Your Phone 3") and their row reads
+"Your Phone 3 · Removed device". Only rows name it as yours: review and asker
+words never call a removed (perhaps lost) device "you". No control changed:
+there is no new interaction to time. Evidence: `comic_people_check.mjs`
+(fails on the old model with "a removed own device's thread is not an active
+chat"), `TestRemovedDevicesExactCurrentKey` (own list; the removed phone's
+thread still found by topic search), `TestOwnPermissionInventory` (overview
+field after a real removal). Not covered: the browser engine
+(`static/engine.mjs`) builds its own overview without `removed_devices`, so a
+browser still lists such a row (closed in "Delete a whole device chat; others'
+removed devices leave the list" below).
+
+
+## Delete a whole device chat; others' removed devices leave the list (v0.11.14)
+
+Owner, 2026-11-27: "there should be a distinction between deleting the whole
+chat or just deleting one topic … 'delete' removes the whole chat"; and other
+people's removed devices go "same as mine".
+
+Delete chat. A device chat's row (one peer, or one agent by host, key and id:
+`directChatKey` / `topicAgentKey`) holds every topic with it. The header menu
+adds "Delete chat…" ("Delete topic…" was then removed: a topic is archived,
+never deleted; see the next section), which posts `{peer, thread, chat: true}`: `DeleteDeviceChat` erases every topic of
+that row in one transaction (`eraseDeviceThreads`). The row leaves the list
+at once (`store.deletingRows`, by `directChatKey` and its newest `last_at`,
+as tdlib removes a chat locally first); a refusal brings it back, and a
+message newer than the deletion keeps it. Both deletions are
+synced to the person's other devices (desktop, browser and Android
+engines): a clear with no conversation naming the erased turns, held for
+each own device until it reads `rem3`, which took `rem2`'s capability slot
+(owner decision; no 33rd name). The note reads "Deleted on all your devices:
+here now; your N other device(s) remove it once each is connected and runs an
+AgentNet version that applies it, and until then still show it.", then who
+keeps a copy as far as it is known (`DeviceChatKeeper`, engine
+`deviceChatKeeper`: nothing for another current device of yours, "Your
+removed device is not told.", "<name> keeps their copy.", "That device keeps
+its copy.", or "Others keep their copies." when the chat spans several
+peers). The dialog: "deleted here and, once they connect and update, on your
+other linked devices", with the topic count. Evidence for sync:
+`TestDeviceChatDeletionOnAllOwnDevices` (a v0.11.13-style phone listing rem2
+holds the deletion while still getting block sync; updated to rem3 it
+erases all three topics; re-delivered and fresh history stay erased; the
+other person keeps three), `TestBlockSyncHeldForNonReaderThenSent` (an own
+device read as neither rem1 nor rem2 holds a block copy, then gets it),
+`TestOwnCapsRem3OnlySwap`, `convclear_engine_check.mjs` (engine queues one
+clear per own device waiting for rem3; the updated phone applies every name;
+the tablet keeps waiting; shared Go/engine vectors for the clear). Evidence:
+`TestDeleteDeviceChatRemovesEveryTopic` (four topics; one topic delete leaves
+three, the chat delete leaves none; fails before with "delete chat: 400");
+`TestDeleteDeviceChatTakesArchivedTopics` (two of three topics archived by the
+clock: one delete leaves no row, not even an archived count);
+`convclear_engine_check.mjs` (the browser engine: three topics, one chat
+delete, no row left; clears queued for this person's own devices only,
+nothing told to the other person).
+
+Others' removed devices. `removed_devices` is now `[{address, person}]` for
+any verified person (`RemovedDeviceOwners`; it replaces `OwnRemovedDevices`),
+same exact-key rule. Their device threads leave the active list (an agent's
+row keyed on its host, so a current agent hosted here that the removed device
+asked keeps its row) and read "Vitalii’s Old phone · Removed device". The
+browser engine computes the same list from its persons' known keys and pins,
+so browser, desktop and Android match. Evidence: `comic_people_check.mjs`
+(fails on the old model: another person's dropped device was listed),
+`TestRemovedDeviceOfAnotherPerson` (Bob removes his phone; Alice's list names
+it with Bob; its thread found by topic search; the overview's former source,
+`OwnRemovedDevices`, returned nothing for it), `convclear_engine_check.mjs`
+(engine list for Bob's dropped phone and for this person's own dropped
+tablet, kept in kv "person"; a reused address with another key is not
+removed; fails on the old engine with `removed_devices` undefined).
+
+
+## A topic is archived, a chat is deleted (v0.11.14)
+
+Owner, 2026-11-27: a single topic offers only Archive and Mark done (and
+Reopen); erasing for good is only "Delete chat…" for the whole chat
+(docs/DECISIONS.md). Removed controls: the conversation header's "Delete
+topic…" (device chats), the All topics bulk "Delete for me" (Comic, Office,
+and the shared `skins/shared/topics.mjs` source). The routes stay for skins
+that call them. Evidence the controls are gone: `latency_fixture.mjs` topics
+suite (`topics.bulk-*`: Archive is still timed; no Delete control is offered
+in All topics; the device chat menu offers "Delete chat…" and no "Delete
+topic…"), `chattopics_rendered.cjs` (no Delete button in All topics, no
+`/api/topic/delete` request), `review_topics_ui_check.mjs` (Comic bulk
+confirm for Archive and Mark done only; no Delete button),
+`shared_review_topics_check.mjs` (shared popup: Archive route kept, no
+Delete), `skin_contract_check.cjs` (Comic and Office header menus: no "Delete
+topic…"; "Delete chat…" still confirms). The removed timings `topics.bulk-delete-review` and
+`topics.bulk-delete-confirm` no longer exist.
+
+Delete chat stays timed: `topics.direct-chat-delete-refused` (the row leaves
+before the refusal, then returns with the reason) and
+`topics.direct-chat-delete` (the row stays gone with the answer held; the
+other agent's row on the same device stays). An agent chat whose topics span
+several peers says "Others keep their copies." (Go `DeviceChatNote`, engine
+`eraseDeviceThreads` with the clicked peer). A device with no person record
+marks its deletions told (no other device exists to tell; a device linked
+later gets them from `replayErased`), so a content change no longer
+re-sweeps them.
