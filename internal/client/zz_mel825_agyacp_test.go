@@ -106,6 +106,10 @@ func TestAgyACPProcessHelper(t *testing.T) {
 			session = newUUID()
 			reply(m["id"], map[string]any{"sessionId": session})
 		case "session/resume":
+			if mode == "noresume" {
+				enc.Encode(map[string]any{"jsonrpc": "2.0", "id": m["id"], "error": map[string]any{"code": -32002, "message": "Session not found"}})
+				continue
+			}
 			session = m["params"].(map[string]any)["sessionId"].(string)
 			reply(m["id"], map[string]any{"sessionId": session})
 		case "session/prompt":
@@ -227,6 +231,8 @@ func TestAgyACP(t *testing.T) {
 	t.Run("bridge", agyACPBridgeCases)
 	t.Run("edit steers the running request", agyACPEditSteersRunningRequest)
 	t.Run("sessions", agyACPWorkerSessions)
+	t.Run("refused resume", agyACPRefusedResume)
+	t.Run("needs the owner", agyACPNeedsOwner)
 	t.Run("live agy", agyACPLive)
 }
 
@@ -515,5 +521,77 @@ func agyACPWorkerSessions(t *testing.T) {
 	}
 	if log.count(t, "process", "") != 2 || log.count(t, "method", "session/new") != 1 || resumed != ref.ID || len(log.prompts(t)) != 3 {
 		t.Fatalf("a restart did not resume %s: %+v", ref.ID, log.messages(t))
+	}
+}
+
+// A saved conversation agy no longer continues (an upgrade from the stream
+// transport, a deleted conversation): that message fails and is not retried,
+// and the next one starts a new conversation, as with every harness.
+func agyACPRefusedResume(t *testing.T) {
+	log, dir := agyACPFixture(t, "answer")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "agy", dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	stop, _ := runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	q1, a1 := ask(t, w, "")
+	ref := sessionOf(t, w.bob, q1)
+	stop()
+	t.Setenv("AGENTNET_TEST_AGYACP_MODE", "noresume")
+	runWith(t, w, w.bob, RunOptions{})
+	r2, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "synthetic question", ReplyTo: a1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a2 Message
+	eventually(t, "the refused resume is reported", func() bool {
+		m, ok := findReply(w.alice, r2.ID)
+		a2 = m
+		return ok
+	})
+	if a2.Status != envelope.StatusFailed || !strings.Contains(a2.Body, "resuming the background session "+ref.ID+" failed; not retried automatically") || !strings.Contains(a2.Body, "Session not found") {
+		t.Fatalf("refused resume answered %q %q", a2.Status, a2.Body)
+	}
+	q3, _ := ask(t, w, a2.ID)
+	if r3 := sessionOf(t, w.bob, q3); r3 == nil || r3.ID == ref.ID || !validAgyConversation(r3.ID) {
+		t.Fatalf("after a refused resume the session is %+v", r3)
+	}
+	if n := log.count(t, "method", "session/new"); n != 2 || len(log.prompts(t)) != 2 {
+		t.Fatalf("session/new %d, prompts %q", n, log.prompts(t))
+	}
+}
+
+// Through the worker: a permission request agy leaves to its client, or a
+// missing sign-in, needs the owner; nothing is sent and nothing is retried.
+func agyACPNeedsOwner(t *testing.T) {
+	for _, mode := range []string{"permission", "auth"} {
+		t.Run(mode, func(t *testing.T) {
+			log, dir := agyACPFixture(t, mode)
+			w := newWorld(t, "")
+			setResponder(t, w.bob, "agy", dir, time.Minute)
+			w.bob.Approve(w.alice.Address)
+			runWith(t, w, w.bob, RunOptions{})
+			runWith(t, w, w.alice, RunOptions{})
+			q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "synthetic request"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitState(t, w.bob, q.ID, stateNeedHuman)
+			var detail string
+			if err := w.bob.store.db.QueryRow(`SELECT coalesce(detail,'') FROM inbox WHERE id=?`, q.ID).Scan(&detail); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{"permission": "Antigravity could not obtain a native tool approval", "auth": "Antigravity requires sign-in"}[mode]
+			if !strings.Contains(detail, want) {
+				t.Fatalf("needs-you detail %q, want %q", detail, want)
+			}
+			time.Sleep(300 * time.Millisecond)
+			if _, ok := findReply(w.alice, q.ID); ok {
+				t.Fatal("a native blocker became an answer")
+			}
+			if log.count(t, "process", "") != 1 {
+				t.Fatal("request retried")
+			}
+		})
 	}
 }
