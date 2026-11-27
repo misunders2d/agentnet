@@ -39,6 +39,8 @@ type agyACPBridge struct {
 	ready, settled, closed           chan struct{}
 	readyOnce, settleOnce, closeOnce sync.Once
 	mu, writeMu, readMu              sync.Mutex
+	writeTurn                        *sync.Cond // on writeMu: messages go out in the order they were made
+	madeWrites, sentWrites           uint64     // under mu, under writeMu
 	buf                              []byte
 
 	dir, prompt string
@@ -142,9 +144,11 @@ func attachAgyACPBridge(ctx context.Context, input io.WriteCloser, dir, prompt, 
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs // ACP takes an absolute working directory
 	}
-	return &agyACPBridge{ctx: ctx, input: input, dir: dir, prompt: prompt, session: session, resume: resume, attached: attached,
+	b := &agyACPBridge{ctx: ctx, input: input, dir: dir, prompt: prompt, session: session, resume: resume, attached: attached,
 		next: int64(turn) << 20, ready: make(chan struct{}), settled: make(chan struct{}), closed: make(chan struct{}),
 		steers: map[int64]*acpSteer{}, seen: map[string]string{}}
+	b.writeTurn = sync.NewCond(&b.writeMu)
+	return b
 }
 
 func (b *agyACPBridge) begin() {
@@ -169,6 +173,9 @@ func (b *agyACPBridge) begin() {
 	}()
 }
 
+// agyACPBeforeWrite is a test hook: it runs before each message is written.
+var agyACPBeforeWrite = func(any) {}
+
 func acpCall(id int64, method string, params any) map[string]any {
 	return map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}
 }
@@ -176,15 +183,20 @@ func acpCall(id int64, method string, params any) map[string]any {
 func (b *agyACPBridge) idLocked() int64 { b.next++; return b.next }
 
 // writeLocked sends v without holding the bridge: agy may answer before the
-// write returns. A write that fails ends the request with why.
+// write returns. Writes leave in the order they were made, so agy reads a
+// correction after the request it corrects. A write that fails ends the
+// request with why.
 func (b *agyACPBridge) writeLocked(v any, why string) {
 	if b.done {
 		return
 	}
+	turn := b.madeWrites
+	b.madeWrites++
 	b.writes.Add(1)
 	go func() {
 		defer b.writes.Done()
-		if b.send(v) != nil && why != "" {
+		agyACPBeforeWrite(v)
+		if b.send(turn, v) != nil && why != "" {
 			b.mu.Lock()
 			b.failLocked(why)
 			b.mu.Unlock()
@@ -192,9 +204,16 @@ func (b *agyACPBridge) writeLocked(v any, why string) {
 	}()
 }
 
-func (b *agyACPBridge) send(v any) error {
+func (b *agyACPBridge) send(turn uint64, v any) error {
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+	for b.sentWrites != turn {
+		b.writeTurn.Wait()
+	}
+	defer func() {
+		b.sentWrites++
+		b.writeTurn.Broadcast()
+	}()
 	if b.ctx.Err() != nil {
 		return b.ctx.Err()
 	}
@@ -238,11 +257,15 @@ func (b *agyACPBridge) steer(ctx context.Context, id, text string) string {
 	rpc := b.idLocked()
 	b.steers[rpc] = s
 	b.prompts = append(b.prompts, rpc) // before the write: the handover can come first
+	turn := b.madeWrites
+	b.madeWrites++
 	b.writes.Add(1)
 	b.mu.Unlock()
+	call := acpCall(rpc, "session/prompt", map[string]any{"sessionId": b.session, "prompt": []map[string]string{{"type": "text", "text": text}}})
 	go func() {
 		defer b.writes.Done()
-		if b.send(acpCall(rpc, "session/prompt", map[string]any{"sessionId": b.session, "prompt": []map[string]string{{"type": "text", "text": text}}})) != nil {
+		agyACPBeforeWrite(call)
+		if b.send(turn, call) != nil {
 			b.mu.Lock()
 			if b.steers[rpc] == s {
 				delete(b.steers, rpc)
@@ -547,7 +570,6 @@ func (b *agyACPBridge) errorLocked(e *acpError, why string) bool {
 }
 
 func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e *acpError) {
-	newest := b.prompts[len(b.prompts)-1] == id
 	if s := b.steers[id]; s != nil && e != nil {
 		// agy refused the correction (it may be waiting on a permission
 		// answer): the turn goes on, the correction stays queued.
@@ -576,16 +598,27 @@ func (b *agyACPBridge) promptResponseLocked(id int64, result json.RawMessage, e 
 		b.seen[s.id] = s.text
 		s.result <- steerAccepted
 	}
-	if !newest {
-		// The handover: agy ended this prompt because a newer one joined the
-		// turn. The newer prompt is taken; what was said before is not its answer.
-		next := b.prompts[slices.IndexFunc(b.prompts, func(p int64) bool { return p > id })]
-		if s := b.steers[next]; s != nil {
-			delete(b.steers, next)
-			b.seen[s.id] = s.text
-			s.result <- steerAccepted
+	if len(b.prompts) > 0 {
+		// Not the turn's end while a prompt is still open: the request
+		// settles only on its last outstanding prompt's reply.
+		if i := slices.IndexFunc(b.prompts, func(p int64) bool { return p > id }); i >= 0 {
+			// The handover: agy ended this prompt because a newer one joined
+			// the turn. The newer prompt is taken; what was said before is not
+			// its answer.
+			if s := b.steers[b.prompts[i]]; s != nil {
+				delete(b.steers, b.prompts[i])
+				b.seen[s.id] = s.text
+				s.result <- steerAccepted
+			}
+			b.run, b.answer, b.answering = "", "", false
+			return
 		}
-		b.run, b.answer, b.answering = "", "", false
+		// A newer prompt answered before an older one: keep what it said
+		// for the answer and wait for the rest of the turn.
+		if strings.TrimSpace(b.run) != "" {
+			b.answer = b.run
+		}
+		b.run, b.answering = "", false
 		return
 	}
 	if strings.TrimSpace(b.run) != "" {

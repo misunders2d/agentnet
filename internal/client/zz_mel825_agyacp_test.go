@@ -115,6 +115,17 @@ func TestAgyACPProcessHelper(t *testing.T) {
 		case "session/prompt":
 			first := m["id"]
 			switch mode {
+			case "steer-early":
+				// The real agy: a prompt that arrives during the turn takes it
+				// over. The earlier prompt ends at once with a bare end_turn;
+				// the answer and its end_turn belong to the later prompt.
+				correction := next()
+				if correction["method"] != "session/prompt" {
+					os.Exit(4)
+				}
+				reply(first, map[string]any{"stopReason": "end_turn"})
+				chunk("Answer for: " + promptText(correction))
+				reply(correction["id"], map[string]any{"stopReason": "end_turn", "usage": map[string]int{"totalTokens": 3}})
 			case "steer", "steer-race", "refuse", "crash":
 				// Commentary and a tool call while the original works.
 				chunk("Looking up the original city.")
@@ -329,6 +340,9 @@ func agyACPBridgeCases(t *testing.T) {
 	for _, tc := range []struct{ mode, steer, answer, attention string }{
 		{mode: "steer", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
 		{mode: "steer-race", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
+		// The live failure: the correction follows the request at once and
+		// the request's own write is slow; agy must still see them in order.
+		{mode: "steer-early", steer: steerAccepted, answer: "Answer for: Use Moscow instead"},
 		{mode: "refuse", steer: steerUnsupported, answer: "Answer for: the original request"},
 		{mode: "crash", steer: steerUnknown},
 		{mode: "permission", attention: "could not obtain a native tool approval"},
@@ -336,6 +350,15 @@ func agyACPBridgeCases(t *testing.T) {
 		{mode: "answer", answer: "Answer for: Original request"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
+			if tc.mode == "steer-early" {
+				old := agyACPBeforeWrite
+				agyACPBeforeWrite = func(v any) {
+					if m, _ := v.(map[string]any); m["method"] == "session/prompt" && strings.Contains(fmt.Sprint(m["params"]), "Original request") {
+						time.Sleep(200 * time.Millisecond)
+					}
+				}
+				t.Cleanup(func() { agyACPBeforeWrite = old })
+			}
 			log, dir := agyACPFixture(t, tc.mode)
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
@@ -355,11 +378,13 @@ func agyACPBridgeCases(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("the request never started")
 				}
-				eventually(t, "native commentary read", func() bool {
-					b.mu.Lock()
-					defer b.mu.Unlock()
-					return b.answer != "" || strings.Contains(b.run, "original city")
-				})
+				if tc.mode != "steer-early" {
+					eventually(t, "native commentary read", func() bool {
+						b.mu.Lock()
+						defer b.mu.Unlock()
+						return b.answer != "" || strings.Contains(b.run, "original city")
+					})
+				}
 				steered = make(chan string, 1)
 				go func() { steered <- b.steer(ctx, "edit-1", "Explicit correction edit-1\nUse Moscow instead") }()
 			}
