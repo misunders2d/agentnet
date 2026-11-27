@@ -563,6 +563,10 @@ func TestDeleteThreadExactScope(t *testing.T) {
 func TestDeleteGroupConversationKeepsMembership(t *testing.T) {
 	w, carol, p, _ := groupTurnsFixture(t)
 	conv := p.State.Conv
+	// An empty group has nothing to delete (only an empty DM leaves the list).
+	if _, err := w.alice.DeleteConversation(tctx(t), conv); !errors.Is(err, ErrNothingToDelete) {
+		t.Fatalf("an empty group's deletion: %v", err)
+	}
 	sendConv(t, w.bob, conv, ConvOutgoing{Body: "group hello"})
 	eventually(t, "the first turn here", func() bool { return len(groupTurns(t, w.alice, conv)) == 1 })
 	sendConv(t, carol, conv, ConvOutgoing{Body: "from carol"})

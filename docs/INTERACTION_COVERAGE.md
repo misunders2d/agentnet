@@ -12,12 +12,13 @@ way).
 
 Counterpart: TDLib `4c6377aa`, `MessagesManager.cpp:8613`
 `delete_dialog_history`. With `remove_from_chat_list` an empty chat is still
-removed: `allow_error = d->messages.empty()` tolerates a server error, and
-the early "nothing to do" return applies only when the chat is not being
-removed from the list (`!(old_order != DEFAULT_ORDER && remove_from_dialog_list)`).
-A later message brings the chat back. Contacts are not part of that call;
-that the contact stays saved is observed Telegram behavior, not checked in
-source here.
+removed: `allow_error = d->messages.empty()` (line 8658) tolerates a server
+error, the early "nothing to do" return applies only when the chat is not
+being removed from the list (`!(old_order != DEFAULT_ORDER && remove_from_dialog_list)`),
+and `clear_dialog_message_list` (line 8887) sets the chat's order to
+`DEFAULT_ORDER`, which takes it off the list. A later message brings the
+chat back. Contacts are not part of that call; that the contact stays saved
+is observed Telegram behavior, not checked in source here.
 
 Reused: the existing deletion. A DM with no turn names one marker turn (this
 device's key and the deletion's own id, matching no message) in `conv_erased`;
@@ -26,15 +27,22 @@ clr1 `clear` control, and the existing list rule leaves the chat out until a
 turn arrives. No schema step, no new control. The web store's existing
 immediate removal (`deleteChat`, measured by the latency fixture's chat-delete
 cells) now ends in success instead of a restore. People, keys, grants and
-blocks are untouched. A repeat deletion, or a group or My agents room with no
-turn, still refuses as before.
+blocks are untouched (keys, grants and blocks by code reading: the path
+writes only `conv_erased` and the `clear` copies). A repeat deletion, a group
+or My agents room with no turn, and a recovered person's chat (its earlier
+DMs show in it) still refuse as before. Starting a chat with the person again
+creates a new DM, as after any deletion; a turn in the old one brings it back.
 
 Evidence: `TestDeleteEmptyDMOnAllOwnDevices` (client: laptop and linked
 phone; no error, left out on both, people unchanged, a repeat adds no marker,
 a new DM with the person is listed, a turn in the old one brings it back on
-both); `TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
+both); `TestDeleteGroupConversationKeepsMembership` (an empty group still
+refuses); `TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
 overview, deleted with a note, gone from the next overview, people kept);
-`TestBrowserConversationDeletionMatchesGo` (browser engine, same journey).
+`TestBrowserConversationDeletionMatchesGo` (browser engine: deleted on the
+desk and the linked phone, people kept, a repeat adds no marker, a turn
+brings it back; the phone's root is seeded as root-sync leaves it, and no
+new-chat step).
 Each new check fails on the code before the fix with the reported refusal.
 Not rerun: the rendered latency suite (web code unchanged); not checked on the
 real installed app.

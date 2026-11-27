@@ -137,6 +137,10 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	} else if !found {
 		return ConversationDeleted{}, ErrNoConversation
 	}
+	family, err := a.continuityDMs(conv) // read before the transaction
+	if err != nil {
+		return ConversationDeleted{}, err
+	}
 	selfFP := a.Self().Fingerprint()
 	out := ConversationDeleted{Deletion: protocol.NewID()}
 	tx, err := a.store.db.Begin()
@@ -152,12 +156,13 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if len(turns) == 0 {
 		// A DM that never had a turn here: its deletion names a marker
 		// turn of its own (see the top of this file). One deleted already,
-		// or a group, has nothing to delete.
+		// a group, or a recovered person's chat (it shows its earlier DMs
+		// too) has nothing to delete.
 		var erased int
 		if err := tx.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&erased); err != nil {
 			return out, err
 		}
-		if erased > 0 || root.Kind != protocol.ConvKindDM {
+		if erased > 0 || root.Kind != protocol.ConvKindDM || len(family) > 1 {
 			return out, ErrNothingToDelete
 		}
 		turns, marker = []envelope.Ref{{Fingerprint: selfFP, ID: out.Deletion}}, true
