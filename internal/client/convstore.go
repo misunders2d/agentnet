@@ -658,6 +658,9 @@ func addConvOutboxTx(tx *sql.Tx, copies []outCopy, local envelope.Inner, claim f
 			}
 		}
 		for _, b := range env.Blobs {
+			if localOnlyCopy(c) { // never posted: nothing to upload (dropLocalSpool)
+				break
+			}
 			if _, err := tx.Exec(`INSERT INTO uploads(blob_id, message_id, state) VALUES(?, ?, ?)`, b.ID, env.ID, protocol.BlobUploading); err != nil {
 				return err
 			}

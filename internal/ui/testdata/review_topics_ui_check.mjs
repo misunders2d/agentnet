@@ -201,11 +201,11 @@ for(const mode of ['off','ready','disconnected','error']){
  const x=hooks(),hold=deferred();let statusCalls=0,state={dm:{id:'chat',peer:{person:'person'}},contentRevision:1},nextStatus;
  const store={host:{drive:{drive:async()=>{statusCalls++;await hold.promise;if(nextStatus)return nextStatus;if(mode==='error')throw Error('status failed');return{enabled:mode!=='off',configured:true,connected:mode!=='disconnected',space:{}};}}}};
  const component=load('features/Drive.tsx',{...x.react,useCallback:f=>f,useApp:()=>store,useStore:(_s,f)=>f(state),Confirm:'Confirm',Button:'Button',Sheet:'Sheet'});
- x.start(()=>component.SaveToDrive({m:{id:'message'},index:0}));assert.equal(nodes(x.get()).find(n=>n.tag==='button').props.disabled,true);hold.resolve();await drain();
- const button=nodes(x.get()).find(n=>n.tag==='button');assert.equal(button.props.disabled,mode!=='ready');assert.equal(statusCalls,1);assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false);if(mode==='ready'){
+ x.start(()=>component.SaveToDrive({m:{id:'message'},index:0}));assert.equal(nodes(x.get()).some(n=>n.tag==='button'),false,'nothing offered while checking');hold.resolve();await drain();
+ const button=nodes(x.get()).find(n=>n.tag==='button');assert.equal(!!button,mode==='ready',mode+': offered only when a copy can be saved');assert.equal(statusCalls,1);if(mode==='ready'){assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false);
   assert(button.props.children.includes('Save a readable copy to Google Drive'));button.props.onClick();await drain();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,true);
   state={...state,contentRevision:2};x.render();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,true,'background status check retains confirmation');await drain();
-  nextStatus={enabled:false};state={...state,contentRevision:3};x.render();await drain();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false,'actual disable closes confirmation');
+  nextStatus={enabled:false};state={...state,contentRevision:3};x.render();await drain();assert.equal(nodes(x.get()).some(n=>n.tag==='Confirm'),false,'actual disable removes the offer and its confirmation');
   nextStatus={enabled:true,configured:true,connected:true,space:{}};state={...state,contentRevision:4};x.render();await drain();assert.equal(nodes(x.get()).find(n=>n.tag==='Confirm').props.open,false,'reenabling cannot reopen stale confirmation');
  }x.stop();
 }

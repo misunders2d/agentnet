@@ -330,7 +330,7 @@ CREATE TABLE reported(
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
 `, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema, heldCopySchema, retainedConversationStatusSchema, heldLogicalSchema, waitingConversationStatusSchema, topicMarkSyncSchema, skippedCopySchema, historyArchiveSchema, `
 ALTER TABLE quarantine ADD COLUMN relay_ingress INTEGER NOT NULL DEFAULT 0;
-`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema, groupCarrierLapseSchema, ViewCoverSchema, queuedFollowupSchema, blockSyncSchema, requestEditIndex, claudeChatSchema, codexChatSchema}
+`, deviceHistoryOriginalPeerSchema, groupPublicationBindingSchema, agentActionSchema, nativeApprovalSchema, attentionMarkSchema, sharedTopicTitleSchema, scheduledSendSchema, conversationResourcesSchema, directTopicSchema, reminderSyncSchema, sendRetryProofSchema, topicTransferSchema, steeringLifecycleSchema, helperWaitSchema, outboxLogicalIDSchema, outboxConvSubSchema, unreadDirtySchema, continuityGenerationSchema, queuedSendSchema, viewDirtySchema, proposalLookupSchema, unackedReceiptSchema, topicLookupSchema, groupCarrierLapseSchema, ViewCoverSchema, queuedFollowupSchema, blockSyncSchema, requestEditIndex, claudeChatSchema, codexChatSchema, historySourceSchema}
 
 // unsentReceipts runs on every wake. Without these it read all three tables
 // whole (about 96 ms on 200k rows, 0.02 ms with them).
@@ -1039,8 +1039,10 @@ func (s *store) quarantineDiagnostic(id, sender, reason string, raw []byte, why,
 
 // held returns envelopes quarantined for sender with reason, oldest first.
 // Rows stay in place until each is promoted.
+// held lists the rows held for reason from sender, or from every sender
+// when sender is "".
 func (s *store) held(sender, reason string) ([]envelope.Envelope, error) {
-	rows, err := s.db.Query(`SELECT envelope FROM quarantine WHERE sender = ? AND reason = ? ORDER BY received_at, id`, sender, reason)
+	rows, err := s.db.Query(`SELECT envelope FROM quarantine WHERE (? = '' OR sender = ?) AND reason = ? ORDER BY received_at, id`, sender, sender, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -1549,7 +1551,11 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, job) (*ExecutorS
 			changed = true
 			continue // no fallback; a removed identity cannot starve the next job
 		}
-		if _, err = tx.Exec(`UPDATE inbox SET state=?, responder=?, detail=NULL, attempts=attempts+1, last_attempt_at=unixepoch() WHERE id=? AND state=?`, stateRunning, responder, j.ID, previousState); err != nil {
+		// A claimed job is its own run: a handover the live run refused
+		// (whose mark kept it from being handed over again) never reports
+		// it steered.
+		if _, err = tx.Exec(`UPDATE inbox SET state=?, responder=?, detail=NULL, attempts=attempts+1, last_attempt_at=unixepoch(),
+			steering_parent=NULL, steering_attempt=NULL WHERE id=? AND state=?`, stateRunning, responder, j.ID, previousState); err != nil {
 			return job{}, false, err
 		}
 		changed = true

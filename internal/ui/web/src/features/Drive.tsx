@@ -77,10 +77,11 @@ export function SaveToDrive({ m, index }: { m: AnyMsg; index: number }) {
   const view = status?.value;
   const ready = !!(view?.enabled && view.configured && view.connected && !view.requires_reconnect && view.space && !view.pending);
   useEffect(() => { if (!ready) setOpen(false); }, [ready, conv]);
-  if (!dm?.peer.person) return null;
-  const unavailable = !store.host.drive ? "Google Drive unavailable" : status?.failed ? "Google Drive status unavailable" : !view ? "Checking Google Drive…" : !view.enabled ? "Google Drive off" : !ready ? "Set up Google Drive in Project space" : "";
+  // Offered only where a readable copy can be saved: an unavailable, off or
+  // unconfigured Drive shows nothing under the file rather than a dead link.
+  if (!dm?.peer.person || !ready) return null;
   return <>
-    <button type="button" className="min-h-11 rounded-lg px-2 text-left text-[13px] text-text-2 underline hover:bg-sunken" disabled={!ready} onClick={() => setOpen(true)}>{ready ? "Save a readable copy to Google Drive" : unavailable}</button>
+    <button type="button" className="min-h-11 rounded-lg px-2 text-left text-[13px] text-text-2 underline hover:bg-sunken" onClick={() => setOpen(true)}>Save a readable copy to Google Drive</button>
     <Confirm open={open && ready} onOpenChange={setOpen} title="Save to Google Drive?" ok="Save to Google Drive" danger={false}
       onOk={() => store.run(async () => {
         const provider = store.host.drive;

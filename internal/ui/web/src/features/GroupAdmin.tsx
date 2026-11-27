@@ -9,7 +9,7 @@ import { IconCrown, IconDoorExit, IconDotsVertical, IconPencil, IconUserMinus } 
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
 import { useStore, type PendingGroupChange } from "../store";
-import { personName } from "../model";
+import { myAgentsRoomId, personName } from "../model";
 import { usePortal } from "../owned";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -25,8 +25,14 @@ export function groupRights(t: T.DMThread | null, o: T.Overview | null) {
   const member = !!t && t.kind === "group" && !t.frozen && (!t.role || t.role === "member");
   const me = o?.person?.person;
   const admin = member && !!me && (t!.members || []).some((m) => m.person === me && m.admin);
-  return { member, admin };
+  // The person's built-in "My agents" room (client.MyAgentsRoom, MEL-713):
+  // exactly the one room their agents use, never a look-alike. It is never
+  // left (the server also refuses: its only member is its last admin).
+  const builtIn = member && t!.id === myAgentsRoomId(o);
+  return { member, admin, builtIn };
 }
+
+export const BUILT_IN_NOTE = "This is your built-in group where your own agents talk with you and each other. It can’t be renamed or left.";
 
 /** GroupChangeSheet asks for one group change in plain words and makes it. */
 export function GroupChangeSheet({ open, onOpenChange, t, action, member }: {
@@ -121,6 +127,7 @@ function GroupChangeCard({ p }: { p: PendingGroupChange }) {
     {error && <p role="alert" className="text-danger">{error}</p>}
     {(p.saved || p.error) && <Button size="sm" variant="ghost" disabled={checking} onClick={() => void check()}>{checking ? "Checking group…" : "Check group change"}</Button>}
     {p.error && <Button size="sm" variant="ghost" onClick={() => void store.api.manageGroup(p.change).catch(() => {})}>Try group change again</Button>}
+    {p.error && <Button size="sm" variant="ghost" onClick={() => store.dismissGroupChange(p.change.conv)}>Dismiss</Button>}
   </div>;
 }
 
@@ -157,12 +164,15 @@ export function MemberMenu({ t, member, me, onPick }: { t: T.DMThread; member: T
   );
 }
 
-/** GroupFooter: "Rename group…" for an admin and "Leave group…" for anyone in it. */
-export function GroupFooter({ admin, onPick }: { admin: boolean; onPick: (a: GroupAction) => void }) {
+/** GroupFooter: "Rename group…" for an admin and "Leave group…" for anyone
+ * in it; the built-in "My agents" group says what it is instead (its agents
+ * find it by name, so it keeps it: owner, 2026-11-27). */
+export function GroupFooter({ admin, builtIn = false, onPick }: { admin: boolean; builtIn?: boolean; onPick: (a: GroupAction) => void }) {
   return (
     <div className="mt-2.5 flex flex-wrap gap-2">
-      {admin && <Button size="sm" variant="outline" icon={<IconPencil size={18} />} onClick={() => onPick("rename")}>Rename group…</Button>}
-      <Button size="sm" variant="danger" icon={<IconDoorExit size={18} />} onClick={() => onPick("leave")}>Leave group…</Button>
+      {admin && !builtIn && <Button size="sm" variant="outline" icon={<IconPencil size={18} />} onClick={() => onPick("rename")}>Rename group…</Button>}
+      {builtIn ? <p className="w-full text-[13px] text-muted" data-built-in-group>{BUILT_IN_NOTE}</p>
+        : <Button size="sm" variant="danger" icon={<IconDoorExit size={18} />} onClick={() => onPick("leave")}>Leave group…</Button>}
     </div>
   );
 }

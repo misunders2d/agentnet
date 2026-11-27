@@ -1,9 +1,12 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -55,6 +58,29 @@ func currentOwnLegacyHistory(q dbq, sender, reader identity.Public) error {
 }
 
 func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, limit int, args ...any) ([]historySourceRow, error) {
+	// The page is picked, then read, in two statements: on the store they
+	// share one read snapshot, so every picked row is still there to read.
+	// Statement wrappers own no snapshot (a linked-device clear between the
+	// two once aborted a whole group selection); a caller's transaction
+	// keeps its own, as in controlMembers.
+	source := q
+	for {
+		if p, ok := source.(*preparedReads); ok {
+			source = p.dbq
+		} else if m, ok := source.(*membershipReads); ok {
+			source = m.dbq
+		} else {
+			break
+		}
+	}
+	if d, ok := source.(*storeDB); ok {
+		tx, err := d.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		q = tx
+	}
 	inVisible := "NOT " + erasedInFor("inbox")
 	outVisible := "NOT " + erasedOut
 	if own {
@@ -62,23 +88,66 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 		outVisible = "(" + outVisible + ` OR EXISTS(SELECT 1 FROM topic_shared_titles t WHERE t.conv=o.conv AND t.topic=coalesce(o.topic,'') AND t.lid=o.lid AND t.writer=? AND json_extract(o.topic_event,'$.action') IN ('rename','resources')))`
 	}
 
-	query := `
-		SELECT conv, ms, id, dir, sender, coalesce(verified_by, claimed_fp, '') AS verified_by, ts, kind, body, coalesce(reply_to, '') AS reply_to, coalesce(status, '') AS status, coalesce(sub, '') AS sub,
-		       coalesce(origin, '') AS origin, coalesce(emotion, '') AS emotion, coalesce(target, '') AS target, coalesce(pid, '') AS pid, lid, coalesce(ref_id, '') AS ref_id, coalesce(ref_fp, '') AS ref_fp, coalesce(agent_id, '') AS agent_id,coalesce(quote,'') AS quote,coalesce(topic,'') AS topic,coalesce(topic_event,'') AS topic_event,topic_done,arrival,outseq FROM (
-		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
-		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id,quote,topic,topic_event,topic_done,arrival,0 AS outseq
+	// The page is chosen from narrow columns first: the outbox keeps every
+	// envelope inline before conv, lid and sub, so ranking full rows read
+	// every copy's envelope, once per page (owner's laptop, November 27, 2026:
+	// ~115 MB per lookup, about 50 copied messages a minute to a new phone).
+	// Only the chosen rows are then read in full, in the same order.
+	visible := `
 		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('root-sync', 'history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
-		     AND ` + inVisible + `
-		  UNION ALL
-		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub IN ('status','reaction','revision','retraction')) AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done,0,o.rowid
+		     AND ` + inVisible
+	visibleOut := `
 		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('root-sync', 'history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
-		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND ` + outVisible + `) WHERE conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots) AND (` + filter + `) ORDER BY ` + order + ` LIMIT ?`
+		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND ` + outVisible
+	listed := ` WHERE conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots)`
+	narrow := `SELECT dir, id FROM (
+		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, sub, pid, lid, arrival, 0 AS outseq` + visible + `
+		  UNION ALL
+		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, o.sub, o.pid, o.lid, 0, +o.rowid` + visibleOut + `)` + listed + ` AND (` + filter + `) ORDER BY ` + order + ` LIMIT ?`
+	// Filters name these columns, as the full query below has them. The outbox
+	// side reads them all from outbox_history_source (+rowid keeps an outseq
+	// bound from choosing a scan of the table itself).
 	params := []any{a.Address, a.Self().Fingerprint(), a.Self().Fingerprint()}
 	if own {
 		params = append(params, a.Self().Fingerprint())
 	}
-	params = append(params, args...)
-	params = append(params, limit)
+	params = append(append(params, args...), limit)
+	picked, err := q.Query(narrow, params...)
+	if err != nil {
+		return nil, err
+	}
+	type key struct{ dir, id string }
+	rank := map[key]int{}
+	var ids []any
+	for picked.Next() {
+		var k key
+		if err = picked.Scan(&k.dir, &k.id); err != nil {
+			picked.Close()
+			return nil, err
+		}
+		if _, seen := rank[k]; !seen {
+			rank[k] = len(rank)
+			ids = append(ids, k.id)
+		}
+	}
+	if err = errors.Join(picked.Err(), picked.Close()); err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	betweenHistoryPickAndRead()
+	in := "?" + strings.Repeat(",?", len(ids)-1)
+	query := `
+		SELECT conv, ms, id, dir, sender, coalesce(verified_by, claimed_fp, '') AS verified_by, ts, kind, body, coalesce(reply_to, '') AS reply_to, coalesce(status, '') AS status, coalesce(sub, '') AS sub,
+		       coalesce(origin, '') AS origin, coalesce(emotion, '') AS emotion, coalesce(target, '') AS target, coalesce(pid, '') AS pid, lid, coalesce(ref_id, '') AS ref_id, coalesce(ref_fp, '') AS ref_fp, coalesce(agent_id, '') AS agent_id,coalesce(quote,'') AS quote,coalesce(topic,'') AS topic,coalesce(topic_event,'') AS topic_event,topic_done,arrival,outseq FROM (
+		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
+		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id,quote,topic,topic_event,topic_done,arrival,0 AS outseq` + visible + ` AND id IN (` + in + `)
+		  UNION ALL
+		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub IN ('status','reaction','revision','retraction')) AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done,0,o.rowid` + visibleOut + ` AND o.id IN (` + in + `))`
+	params = append([]any{}, ids...)
+	params = append(params, a.Address, a.Self().Fingerprint(), a.Self().Fingerprint())
+	if own {
+		params = append(params, a.Self().Fingerprint())
+	}
+	params = append(params, ids...)
 	rows, err := q.Query(query, params...)
 	if err != nil {
 		return nil, err
@@ -108,10 +177,32 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 		in.Conv = it.conv
 		it.pos.Conv = it.conv
 		it.pos.ID = in.ID
-		items = append(items, it)
+		if _, ok := rank[key{it.dir, in.ID}]; ok {
+			items = append(items, it)
+		}
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// A caller's own transaction may change rows between the two statements;
+	// a short page would end a snapshot early, so fail and let it retry.
+	if len(items) != len(rank) {
+		return nil, errHistorySourceMoved
+	}
+	slices.SortFunc(items, func(x, y historySourceRow) int { return rank[key{x.dir, x.in.ID}] - rank[key{y.dir, y.in.ID}] })
+	return items, nil
 }
+
+var errHistorySourceMoved = errors.New("history source changed while it was read")
+
+// betweenHistoryPickAndRead lets a test change the store between the two
+// statements of one history page.
+var betweenHistoryPickAndRead = func() {}
+
+// The narrow page choice reads every outbox column it needs from here, never
+// from the table row behind its inline envelope (owner's store: the busiest
+// chat's page 40 MB -> 8 MB, an older-history page 75 MB -> 17 MB).
+const historySourceSchema = `CREATE INDEX outbox_history_source ON outbox(conv, created_ms, sub, lid, pid, id, topic, topic_event);`
 
 // historyVia names the own device a received row came from as history or
 // device history ("" for an original received here, or one sent here). An

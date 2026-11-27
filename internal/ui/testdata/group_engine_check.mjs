@@ -1339,6 +1339,68 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   await w.receive(outside.ordinary);check(!await w.st.get('inbox',outside.ordinary.inner.id),'outside browser visitor cannot admit ordinary room plaintext');
   let visitorSendRefused=false;try{await w.e.sendDM({conv:outsideConv,body:'visitor cannot send'});}catch(e){visitorSendRefused=true;}check(visitorSendRefused&&(await w.st.all('outbox')).length===0,'outside browser visitor cannot send ordinary group turn or stage fallback');
   await w.reload();check((await w.e.groupThread(outsideConv)).role==='visitor','outside browser visitor role survives actual store reload');await w.close();
+  // MEL-841: the inviter's exact cancellation counts before the cancelled
+  // invitation is shown actionable, in either order and with no proof retry
+  // in between; the second, live invitation stays decidable; a dismissal that
+  // does not follow the invitation exactly, or names another admission, stays held.
+  for(const order of [['human-dismiss-wrong-admission','human-dismiss','human-dismiss-wrong-prev','human-invite'],['human-invite','human-dismiss-wrong-admission','human-dismiss','human-dismiss-wrong-prev']]){
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};const label=order[0]==='human-invite'?'invitation first':'cancellation first';
+   for(const name of [...order,'human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   const t=await w.e.groupThread(outsideConv),cancelled=t.guests.find(g=>g.pid===outside['human-pid']),live=t.guests.find(g=>g.pid===outside['human-pid-second']);
+   check(cancelled?.state==='dismissed'&&!cancelled.can_decide,'browser cancelled room invitation is not actionable once context arrives ('+label+')');
+   check(live?.state==='invited'&&live.can_decide,'browser second room invitation stays decidable ('+label+')');
+   check(!await w.st.get('held',outside['human-dismiss'].inner.id),'browser exact cancellation is not left held ('+label+')');
+   for(const name of ['human-dismiss-wrong-prev','human-dismiss-wrong-admission'])check((await w.st.get('held',outside[name].inner.id))?.reason==='proof_pending','browser '+name+' cancellation stays held before context ('+label+')');
+   let refused=false;try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept:true});}catch{refused=true;}
+   check(refused,'browser cancelled room invitation cannot be accepted ('+label+')');
+   await w.close();
+  }
+  // The decision's own guard: the exact cancellation still held when the
+  // decision is made counts first (nothing reconciled it at ingress here).
+  {
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};w.e.admitHeldDismissals=async()=>{};
+   for(const name of ['human-dismiss','human-invite','human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   const before=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(before?.state==='invited'&&(await w.st.get('held',outside['human-dismiss'].inner.id))?.reason==='proof_pending','browser fixture: cancellation still held when deciding');
+   delete w.e.admitHeldDismissals;
+   try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept:true});}catch{}
+   const after=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(after?.state==='dismissed'&&!after.can_decide&&!await w.st.get('held',outside['human-dismiss'].inner.id),'browser decision counts the held exact cancellation first');
+   check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser decision of a cancelled room invitation sends nothing');
+   await w.close();
+  }
+  // The other member's cancellation (not the inviter device's) came first
+  // and waits held; the decision counts it first, before any proof retry.
+  {
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};
+   for(const name of ['human-dismiss-member','human-invite','human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   const before=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(before?.state==='invited'&&(await w.st.get('held',outside['human-dismiss-member'].inner.id))?.reason==='proof_pending','browser fixture: the other member\'s cancellation still held when deciding');
+   let refused=false;try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept:true});}catch{refused=true;}
+   const after=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(refused&&after?.state==='dismissed'&&!after.can_decide&&!await w.st.get('held',outside['human-dismiss-member'].inner.id),'browser decision counts the other member\'s held cancellation first');
+   check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser decision of a room invitation another member cancelled sends nothing');
+   await w.close();
+  }
+  // A cancellation that lands after the decision's checks and before its
+  // write: the send's own transaction refuses it (client decide, MEL-841).
+  for(const accept of [true,false]){
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};
+   for(const name of ['human-invite','human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   check((await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid'])?.can_decide,'browser fixture: invitation decidable before the late cancellation');
+   const send=w.e.sendExternal.bind(w.e);let landed=false;
+   w.e.sendExternal=async(...args)=>{if(!landed){landed=true;await w.e.onMessage(outside['human-dismiss'].envelope);}return send(...args);};
+   let why='';try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept});}catch(e){why=e.message;}
+   const after=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(landed&&/dismissed, not waiting for a decision/.test(why),'browser late cancellation refuses the decision (accept='+accept+'): '+why);
+   check(after?.state==='dismissed'&&!after.can_decide,'browser late cancellation leaves the invitation dismissed (accept='+accept+')');
+   check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser late-cancelled decision sends nothing (accept='+accept+')');
+   await w.close();
+  }
   w=await world();const ownRoster=await wire.parseRoster(v.challenge.rosters[0]),ownNext={...ownRoster,seq:1,prev:await wire.rosterHash(ownRoster),devices:[...ownRoster.devices,pub],by:await wire.fingerprint(alicePub),sig:null,join:await wire.joinConsent(keys,address,ownRoster.person,1,await wire.rosterHash(ownRoster))};
   const ownUnsigned=JSON.parse(wire.rosterJSON(ownNext));delete ownUnsigned.sig;delete ownUnsigned.join;ownNext.sig=new Uint8Array(await crypto.subtle.sign('Ed25519',aliceKeys.sign,new TextEncoder().encode('agentnet-person-v2\n'+JSON.stringify(ownUnsigned))));
   await wire.verifyNext(ownNext,ownRoster);w.extraChains.set(ownRoster.person,[ownRoster,ownNext].map(r=>JSON.parse(wire.rosterJSON(r))));w.e.me=await w.e.personRecord([ownRoster,ownNext],'self',null);await w.st.write([{s:'kv',k:'person',v:w.e.me}]);await w.e.pinDevices(w.e.me);

@@ -75,6 +75,13 @@ export function AppControls({ command = false }: { command?: boolean }) {
     </Card>;
     return error ? <p role="alert" className="text-danger">{error}</p> : null;
   }
+  // A store install (Google Play) updates itself through the store: no APK
+  // instructions and no check button, only where updates come from.
+  if (android && !status.app_update_supported) return <Card className="space-y-2 p-4">
+    <h3 className="font-bold">Update this phone</h3>
+    <p>{status.problem || "Updates are unavailable in this installation."}</p>
+    <Hint>Installed app: {status.version}.</Hint>
+  </Card>;
   const available = !command && checked?.state === "available" ? checked.latest : "";
   const update = <Button variant="act" disabled={busy || checking || !status.app_update_supported || !host.appUpdate || (!!checked && checked.state !== "available")} onClick={() => void act(false)}>{busy ? "Updating…" : "Update AgentNet"}</Button>;
   return <Card tone={available ? "agent" : "surface"} className="space-y-2 p-4">

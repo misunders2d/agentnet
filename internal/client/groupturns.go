@@ -190,8 +190,70 @@ func sameGroupRoot(a, b protocol.ConvRoot) bool {
 	return bytes.Equal(x, y)
 }
 
+// groupReaderBehind: this device is not listed by its own current context.
+// That context may be older than the sender's: a new member's first turn
+// can come before the context that admits it (carriers wait for their
+// upload, a turn does not). The turn waits for context and is checked again,
+// never admitted before. Only the reader's own device: a sender its context
+// does not list stays refused, and so does a reader its context removed.
+type groupReaderBehind struct{ error }
+
+// errGroupReaderRemoved: a member turn reaching a reader its installed
+// context removed (or that left by itself); refused for good.
+var errGroupReaderRemoved = errors.New("group: written while this reader was removed")
+
+// groupTurnPreCommit, set only by tests, runs after a group turn's checks
+// and before the transaction that stores it.
+var groupTurnPreCommit func()
+
+func (e groupReaderBehind) Unwrap() error { return e.error }
+
 func groupTurnCheck(q dbq, packet GroupContext, address, fp string) error {
 	return groupDeliveryRecipient(q, packet, address, fp)
+}
+
+// soloGroup reports whether m is a group whose every current member is the
+// person of this device (address with key fp), with no other device: theirs
+// alone on this one device, so a turn there needs no copy for anyone else
+// (sendGroupTurn's !others). A member not resolvable here is never assumed
+// to be this person.
+func soloGroup(q dbq, m dmMembers, address, fp string) (bool, error) {
+	if m.group == nil {
+		return false, nil
+	}
+	members, err := logicalGroupMembers(q, *m.group)
+	if err != nil || len(members) == 0 {
+		return false, err
+	}
+	for _, member := range members {
+		p, ok, err := messagingPersonIn(q, member.Person)
+		if err != nil {
+			return false, err
+		}
+		if !ok || !p.has(address, fp) || slices.ContainsFunc(p.roster.Devices, func(d identity.Public) bool { return d.Address != address }) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// soloGroupStill is soloGroup again in the write that stores a self-only
+// copy, on the members current there: a member or device that joined after
+// the copy was chosen would get nothing, so the send is built again
+// (errGroupRosterMoved, SendConv) and the new audience gets its copies.
+func soloGroupStill(tx *sql.Tx, conv, address, fp string) error {
+	members, err := membersIn(tx, conv)
+	if err != nil {
+		return err
+	}
+	solo, err := soloGroup(tx, members, address, fp)
+	if err != nil {
+		return err
+	}
+	if !solo {
+		return errGroupRosterMoved
+	}
+	return nil
 }
 
 func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, binding *replyBinding) (ConvSent, error) {
@@ -345,6 +407,20 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			seals = append(seals, sealing{recipient, notify && !in.Replica && asksAttention(in) && in.TopicEvent == nil, protocol.NotifyChannel(conv, device.Fingerprint())})
 		}
 	}
+	// A group that is this person's alone, on this one device (their own
+	// agents may run here): nobody else needs a copy. As a control does
+	// (controls.go), keep one signed local-only copy, stored here as
+	// delivered and never posted to the relay.
+	if len(copies) == 0 && len(skipped) == 0 && !others {
+		recipient, e := a.Self().Recipient()
+		if e != nil {
+			return ConvSent{}, e
+		}
+		fan := []envelope.Fan{{Person: me.roster.Person, Roster: me.roster.Hash()}}
+		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Quote: quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Origin: m.Origin, Emotion: m.Emotion, Replica: true, Fan: fan}
+		copies = append(copies, outCopy{in: in, state: protocol.StateDelivered, required: protocol.CapGroup, recipientFP: a.Self().Fingerprint(), groupAdmission: admission.Hash()})
+		seals = append(seals, sealing{recipient: recipient})
+	}
 	// Not sent at all only when no device of another member can get it
 	// (and none of this person's when the group is theirs alone).
 	if len(copies) == 0 || len(skipped) > 0 && others && !slices.ContainsFunc(copies, func(c outCopy) bool { return !c.in.Replica }) {
@@ -366,6 +442,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if err = a.spoolAndSeal(copies, seals, m.Files); err != nil {
 		return ConvSent{}, err
 	}
+	a.dropLocalSpool(copies)
 	if err = a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
 	}
@@ -431,14 +508,14 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered}
 	var sending []envelope.Envelope
 	for _, copy := range copies {
-		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here
+		if copy.state != stateConvWaiting && copy.state != protocol.StateDelivered { // waiting: released by releaseConv; delivered: the local-only copy
 			sending = append(sending, copy.env)
 		}
 	}
 	results, errs := a.deliverEach(ctx, sending)
 	for _, copy := range copies {
 		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state, Detail: copy.why}
-		if copy.state != stateConvWaiting {
+		if copy.state != stateConvWaiting && copy.state != protocol.StateDelivered {
 			r, e := results[0], errs[0]
 			results, errs = results[1:], errs[1:]
 			if e != nil {
@@ -474,6 +551,24 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	if !sameGroupRoot(packet.Root, root) {
 		return hold(reasonInvalid, "group: root differs from verified current context")
 	}
+	// A member turn reaching a reader its installed context removed, or an
+	// administrator reader that left by itself (that context's actor, no
+	// longer listed: only an administrator signs as actor), is refused for
+	// good, before anything (a newer proof head, a refresh) can hold it for a
+	// retry that a later rejoin would pass (MEL-841).
+	removedReader := func(q dbq, current GroupContext) error {
+		_, listed := current.State.Member(me.roster.Person)
+		left := !listed && current.State.Actor == me.roster.Person
+		// A member that left by its own withdrawal is still listed, withdrawn.
+		withdrawn := listed && errors.Is(groupRecipientListed(q, current, a.Address, a.Self().Fingerprint()), errGroupRecipientWithdrawn)
+		if in.Human == nil && (left || withdrawn || groupRemovalNotice(q, current, me.roster.Person) != "") {
+			return errGroupReaderRemoved
+		}
+		return nil
+	}
+	if err = removedReader(a.store.db, packet); err != nil {
+		return hold(reasonInvalid, err.Error())
+	}
 	persons := groupMemberPersons(packet.State.Members)
 	for i, e := range a.refreshAdmitting(ctx, persons) {
 		if e != nil {
@@ -500,8 +595,18 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		if e != nil {
 			return e
 		}
-		for _, d := range []identity.Public{a.Self(), sender} {
+		if e = removedReader(q, current); e != nil {
+			return e
+		}
+		// The sender first: one this context does not list is refused for
+		// good, whatever context comes later; only then may this device's own
+		// absence wait for a newer context (groupReaderBehind). A removed
+		// reader was refused above.
+		for i, d := range []identity.Public{sender, a.Self()} {
 			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
+				if i == 1 && errors.Is(e, errGroupRecipientNotCurrent) {
+					return groupReaderBehind{e}
+				}
 				return e
 			}
 		}
@@ -537,11 +642,18 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		return nil
 	}
-	if err = check(a.store.db); err != nil {
-		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) {
+	// What check refuses is held the same way before the transaction and
+	// inside it: a change that commits in between (this reader's removal)
+	// is refused for good, never left waiting for proof (MEL-841).
+	holdCheck := func(err error) error {
+		var behind groupReaderBehind
+		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errOrganizationGrantProof) || errors.As(err, &behind) {
 			return hold(reasonProof, err.Error())
 		}
 		return hold(reasonInvalid, err.Error())
+	}
+	if err = check(a.store.db); err != nil {
+		return holdCheck(err)
 	}
 	now := time.Now()
 	var admission protocol.GroupAdmission
@@ -552,14 +664,18 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		forward = a.forwardStale(me, in, sender.Fingerprint(), in.Root, admission.Hash())
 	}
+	if groupTurnPreCommit != nil {
+		groupTurnPreCommit()
+	}
+	var checkErr error
 	result, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
 		if in.Human != nil {
 			if e := insertHumanProof(tx, in.Human); e != nil {
 				return e
 			}
 		}
-		if e := check(tx); e != nil {
-			return e
+		if checkErr = check(tx); checkErr != nil {
+			return checkErr
 		}
 		if in.Human != nil {
 			if e := humanTurnAuthorization(tx, in, sender.Address, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false); e != nil {
@@ -611,6 +727,9 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	})
 	if errors.Is(err, ErrSharedTopicTitleConflict) {
 		return hold(reasonInvalid, err.Error())
+	}
+	if err != nil && checkErr != nil && errors.Is(err, checkErr) {
+		return holdCheck(checkErr) // the transaction rolled back; held as before it
 	}
 	if err != nil && in.Human != nil {
 		return hold(reasonProof, err.Error()) // as a DM's captured turn: authority waits for its evidence

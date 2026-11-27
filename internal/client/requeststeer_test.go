@@ -97,6 +97,22 @@ func TestStrictSteerRefusalQueuesNextTurn(t *testing.T) {
 			if state == stateNeedHuman || state == stateRunning {
 				t.Fatal("a steer the run did not take is not queued", state)
 			}
+			// An explicit follow-up has no queued_followup_parent; claimed as
+			// its own turn once the original ends, it is not a steered one.
+			var queuedFor string
+			if err := a.store.db.QueryRow(`SELECT coalesce(queued_followup_parent,'') FROM inbox WHERE id=?`, id).Scan(&queuedFor); err != nil || queuedFor != "" || steeringOf(t, a, id) == "" {
+				t.Fatal("fixture: not a refused explicit follow-up", queuedFor, err)
+			}
+			if _, err := a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, parent.ID); err != nil {
+				t.Fatal(err)
+			}
+			next, found, _, _, err := a.store.claimAgentPage("agentstub", a.Address, a.Self().Fingerprint(), 0, agentPage)
+			if err != nil || !found || next.ID != id {
+				t.Fatal("the follow-up was not the next turn", next.ID, found, err)
+			}
+			if steeringOf(t, a, id) != "" {
+				t.Fatal("the follow-up was claimed as its own turn still marked steered")
+			}
 		})
 	}
 }

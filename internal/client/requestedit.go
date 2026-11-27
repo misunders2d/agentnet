@@ -211,15 +211,26 @@ func (a *Agent) queueEditAfterCompletion(c nativeFollowupClaim) bool {
 	return true
 }
 
-func editStateWord(state string) string {
+// editStateWord is the requester's view of an edit job (MEL-825): queued as
+// a follow-up, being handed to the live run (handover: it was claimed for
+// the running request), taken by that run, running or answered as its own
+// follow-up turn, or not applied. A correction the live run took stays
+// "steered" once that run answers.
+func editStateWord(state string, handover bool) string {
 	switch state {
 	case stateAgentWaiting, statePending, stateAccepted:
 		return "queued"
 	case stateRunning, stateHelpersWaiting, stateCancelReq:
-		return "running"
+		if handover {
+			return "running"
+		}
+		return "followup"
 	case stateSteered:
 		return "steered"
 	case stateAnswered:
+		if handover {
+			return "steered"
+		}
 		return "answered"
 	default:
 		return "failed"
@@ -238,7 +249,7 @@ func parseEditStatus(detail string) (id, phase string) {
 		return "", ""
 	}
 	switch phase {
-	case "queued", "running", "steered", "answered", "failed":
+	case "queued", "running", "followup", "steered", "answered", "failed":
 		return id, phase
 	}
 	return "", ""
@@ -247,7 +258,7 @@ func parseEditStatus(detail string) (id, phase string) {
 // projectLocalEditStatuses supplies the same view at the executing host,
 // including an own-agent run whose status never needs a relay round trip.
 func (s *store) projectLocalEditStatuses(rows []controlRow, conv, peer string) ([]controlRow, error) {
-	jobs, err := s.db.Query(`SELECT c.id,coalesce(p.lid,p.id),p.verified_by,c.ref_id,c.state
+	jobs, err := s.db.Query(`SELECT c.id,coalesce(p.lid,p.id),p.verified_by,c.ref_id,c.state,c.steering_parent IS NOT NULL
 		FROM inbox c JOIN inbox p ON p.id=c.reply_to
 		WHERE c.conv IS nullif(?,'') AND (?='' OR c.sender=?) AND c.sub='`+requestEditJob+`'`, conv, peer, peer)
 	if err != nil {
@@ -257,10 +268,11 @@ func (s *store) projectLocalEditStatuses(rows []controlRow, conv, peer string) (
 	for jobs.Next() {
 		var row controlRow
 		var edit, state string
-		if err := jobs.Scan(&row.id, &row.refID, &row.refFP, &edit, &state); err != nil {
+		var handover bool
+		if err := jobs.Scan(&row.id, &row.refID, &row.refFP, &edit, &state, &handover); err != nil {
 			return nil, err
 		}
-		body, _ := json.Marshal(envelope.Status{N: 1 << 62, Detail: editStatusDetail(edit, editStateWord(state))})
+		body, _ := json.Marshal(envelope.Status{N: 1 << 62, Detail: editStatusDetail(edit, editStateWord(state, handover))})
 		row.sub, row.body = envelope.SubStatus, string(body)
 		rows = append(rows, row)
 	}

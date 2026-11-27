@@ -27,6 +27,9 @@ func TestAgyProcessHelper(t *testing.T) {
 		t.Skip("native stand-in only")
 	}
 	args := os.Args[slices.Index(os.Args, "--")+1:]
+	if len(args) > 0 && args[0] == "acp" {
+		os.Exit(1) // this stand-in is an agy without the ACP server
+	}
 	if os.Getenv("AGENTNET_TEST_AGY_MODE") == "authearly" {
 		// A sign-in failure before agy reads its message.
 		if f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {

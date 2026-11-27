@@ -681,7 +681,7 @@ export const TOPICS = Object.freeze({
 // a connected host's word is old news (client ExecRunningMaxAge, pinned by
 // internal/ui topics_browser_test.go).
 export const EXEC_RUNNING_MAX_AGE = 3600;
-const requestEditStatus = (detail) => /^request-edit ([0-9a-f]{32}) (queued|running|steered|answered|failed)$/.exec(detail || "");
+const requestEditStatus = (detail) => /^request-edit ([0-9a-f]{32}) (queued|running|followup|steered|answered|failed)$/.exec(detail || "");
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting", "helpers_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined", "not_delivered"]);
 // replyCloses: an answer or result is its request's last word unless it says
@@ -5869,6 +5869,9 @@ export class Engine {
   async manageGroup(change) {
     if(!change||typeof change!=="object"||Array.isArray(change)||Object.keys(change).some(k=>!["conv","action","title","person"].includes(k))||!["rename","promote","demote","remove","leave"].includes(change.action))throw Error("Unknown group action.");
     if(change.action==="rename"?change.person:change.action==="leave"?change.person||change.title:change.title||!change.person)throw Error("Group action has unexpected target fields.");
+    // The person's "My agents" room keeps its name and its person: their
+    // agents find it by name (owner, 2026-11-27; client.ErrBuiltInGroup).
+    if((change.action==="rename"||change.action==="leave")&&await this.builtInGroup(change.conv))throw Error("My agents is your built-in group for your own agents: it can't be renamed or left.");
     if(change.action==="leave")return this.leaveGroup(change.conv);
     const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
     if(!member?.admin)throw Error("Current person administrator required.");
@@ -5886,6 +5889,15 @@ export class Engine {
     const next={root:packet.root,proof:null,state:await wire.signGroupState(this.keys,state),withdrawals};
     const terminal=change.action==="remove"&&change.person!==me.person?await this.prepareGroupTerminal(packet,next,change.person,g,checks,packet.withdrawals):null;
     await this.publishGroupPacket(next,null,checks,terminal);return {queued:false};
+  }
+
+  // builtInGroup: conv is the person's "My agents" room, chosen as
+  // client.MyAgentsRoom chooses it (the oldest solo group of theirs by that title).
+  async builtInGroup(conv) {
+    const o=await this.overview(),me=o.person?.person;if(!me)return false;
+    const at=d=>Date.parse(d.created)||0;
+    const room=(o.dms||[]).filter(d=>d.kind==="group"&&d.title==="My agents"&&!d.frozen&&d.members?.length===1&&d.members[0].person===me).sort((a,b)=>at(a)-at(b)||(a.id<b.id?-1:1))[0];
+    return !!room&&room.id===conv;
   }
 
   async leaveGroup(conv) {
@@ -6322,16 +6334,27 @@ export class Engine {
       const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",chan,replica,fan,attachments:sealed.map(f=>f.attachment),receiver_route:prepared?.route},this.keys,publicKey);
       copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:why?"waiting":"queued",...(why?{detail:why}:{}),required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{}),...(prepared?{receiver_route:prepared.route}:{})});
     }
-    if(!copies.length&&wire.conversationResources(topic_event)&&members.length===1&&members[0].person===me.person) {
-      // Like a sole member's controls, retain a signed local original for
-      // durable metadata and later own-device history, not remote delivery.
-      const fan=[{person:me.person,roster:me.hash}];
-      const envelope=await wire.seal({v:wire.Version2,id:firstID,from:this.address,to:this.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",replica:true,fan,attachments:[]},this.keys,await wire.publicEntry(this.keys,this.address));
-      copies.push({id:firstID,lid,conv:c.id,kind:"message",body,topic,topic_event,origin:"ui",from:this.address,to:this.address,person:me.person,own:true,replica:true,at,envelope,attachments:[],state:"delivered",required_cap:wire.CapGroup,recipient_fp:this.fp,group_admission:stamp});
+    const keptOps=[]; // a local-only copy's files: kept in the same write as the copy, or neither is
+    if(!copies.length&&(!skipped.length||wire.conversationResources(topic_event))&&!prepared&&members.length&&members.every(m=>m.person===me.person)) {
+      // A group that is this person's alone, on this one device (client
+      // sendGroupTurn's !others): like a sole member's controls, retain one
+      // signed local original, stored as delivered and never posted, for
+      // the turn itself, its files (sealed to self) and later own-device
+      // history. groupTurnEvidence's checks fence it against a member who
+      // joins before it is stored. Nothing else holds its files' bytes, so
+      // they are kept (as keepSent keeps them) in that same write.
+      const fan=[{person:me.person,roster:me.hash}], self=await wire.publicEntry(this.keys,this.address), sealed=[];
+      for(const f of plain) {
+        const e=await wire.encryptFile(f.bytes,f.name,self),key="kept/"+wire.hex(await wire.sha256(f.bytes));sealed.push(e);
+        if(!await this.groupRead(checks,"files",key)&&!keptOps.some(o=>o.k===key))keptOps.push({s:"files",k:key,v:{attachment:e.attachment,ct:e.ct}});
+      }
+      const attachments=sealed.map(f=>f.attachment);
+      const envelope=await wire.seal({v:wire.Version2,id:firstID,from:this.address,to:this.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",replica:true,fan,attachments},this.keys,self);
+      copies.push({id:firstID,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:this.address,person:me.person,own:true,replica:true,at,envelope,attachments,state:"delivered",required_cap:wire.CapGroup,recipient_fp:this.fp,group_admission:stamp,...(organization_review?{organization_review}:{}),...(contribution_review?{contribution_review}:{})});
     }
     if(!copies.length||skipped.length&&members.some(m=>m.person!==me.person)&&!copies.some(r=>!r.replica))throw Error("Group has no other current device to receive a copy."+skipped.map(x=>" "+x.detail).join(""));
     if(skipped.length)for(const rec of copies)rec.skipped=skipped; // kept with the message: it lists them, and its delivery is never everyone's
-    const roomOps=await this.roomStoredOps(c.id,checks,{lid},this.fp,null,null,packet);
+    const roomOps=[...await this.roomStoredOps(c.id,checks,{lid},this.fp,null,null,packet),...keptOps];
     if(organization_batch){organization_batch.copies.push(...copies);organization_batch.checks.push(...checks);organization_batch.ops.push(...roomOps);const least=sentLeast(copies,skipped);return {id:copies[0].id,lid,state:least.state,detail:least.detail||"",copies:[...copies,...skipped].map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail||""}))};}
     await this.commitReceiverCopies(copies,prepared,checks,roomOps,queued,beforeStore);this.changed();await this.keepSent(plain);
     if(queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for(const rec of copies)if(rec.state==="queued")await this.post(rec);
@@ -6439,7 +6462,24 @@ export class Engine {
       await this.convEvents(n.conv,checks,n.pid);
       const key=pin.fingerprint+"/"+n.lid,hash=await wire.groupHistoryContentHash(n.conv,n),seen=await this.groupRead(checks,"lids",key);
       if(seen&&seen.hash!==hash)throw new Hold("conflicting_duplicate","Visitor invitation logical conflict.");
-      const ops=seen?[]:[{s:"kv",k:"group/"+n.conv,v:next},{s:"inbox",k:env.id,v:{...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,replica:false,own:false,target:null,read:true}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;ops.groupCarrier=true;return ops;
+      const ops=seen?[]:[{s:"kv",k:"group/"+n.conv,v:next},{s:"inbox",k:env.id,v:{...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,replica:false,own:false,target:null,read:true}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;ops.groupCarrier=true;
+      ops.visitorInvite={from:e.author.address,conv:n.conv,pid:n.pid};return ops; // its cancellation may have come first (admit)
+    }
+    // The exact inviter device's signed cancellation of this device's own
+    // pending visitor invitation counts before context (client
+    // admitGroupVisitorCancel, MEL-841): otherwise the cancelled invitation
+    // becomes decidable once context comes. Anything else waits for context.
+    if(!g?.context && record?.e.type==="dismiss" && record.e.author.address===env.from && record.e.author.fingerprint===pin.fingerprint) {
+      let inv=null;try{inv=await this.groupVisitorInvite(root,n.pid,checks,this.address,this.fp,admission);}catch(err){if(!(err instanceof Hold))throw err;}
+      const e=record.e,a=inv?.e.author;
+      if(inv&&e.prev===inv.hash&&e.author.person===a.person&&e.author.address===a.address&&e.author.fingerprint===a.fingerprint&&!!e.author.group_admission&&e.author.group_admission===a.group_admission) {
+        const author=await this.personOf(env.from,pin, admission);
+        if(author.person===e.author.person&&author.hashes.includes(e.author.roster)) {
+        const key=pin.fingerprint+"/"+n.lid,hash=await wire.groupHistoryContentHash(n.conv,n),seen=await this.groupRead(checks,"lids",key);
+        if(seen&&seen.hash!==hash)throw new Hold("conflicting_duplicate","Visitor cancellation logical conflict.");
+        const ops=seen?[]:[{s:"inbox",k:env.id,v:{...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,replica:false,own:false,target:null,read:true}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;return ops;
+        }
+      }
     }
     if(!g?.context)throw new Hold("proof_pending","Group PID current context is missing.");
     const events=await this.convEvents(n.conv,checks);if(n.human)events.push(...await Promise.all(n.human.proof.map(async e=>({e,hash:await wire.eventHash(e)}))));if(record)events.push(record);
@@ -7425,6 +7465,7 @@ export class Engine {
       if (ops.syncCarrier) ops.push({ s: "kv", k: "sync-carrier/" + env.id, v: true });
       await this.removeReceivePending(data,env,ops,ops.checks);
       await this.store.write(ops, ops.checks);
+      if (ops.visitorInvite) await this.admitHeldDismissals(ops.visitorInvite.from, ops.visitorInvite.conv, ops.visitorInvite.pid).catch(() => {}); // before it is shown (MEL-841)
       if (fromHeld) this.flushReceipts().catch(() => {});
       if (ops.some((o) => o.s === "erased")) await this.loadErased();
       this.changed(true);
@@ -8163,6 +8204,33 @@ export class Engine {
     } finally {
       this.retrying = null;
       this.discloseHumanAudience(); // group ends also follow fresh membership evidence
+    }
+  }
+
+  // admitHeldDismissals admits now, with every usual check, the dismissals
+  // of pid in conv from the device from (every device when from is null)
+  // that wait held for proof (client admitHeldDismissals, MEL-841): a
+  // cancellation that came before its invitation would otherwise wait for
+  // the next proof retry while the cancelled invitation is shown and
+  // decidable. Each goes through the usual admission; anything it does not
+  // admit stays held as it was. Failing to reach the server is thrown.
+  async admitHeldDismissals(from, conv, pid) { // from null: every sender's (another inviter device, another administrator; client decide)
+    for (let pos = "";;) {
+      const page = await this.store.after("held", pos, heldPage);
+      for (const h of page) {
+        pos = h.id;
+        if (h.reason !== "proof_pending" || from != null && h.from !== from) continue;
+        const pin = await this.store.get("pins", h.from);
+        if (!pin || pin.pending) continue;
+        let env;
+        try {
+          env = wire.parseEnvelope(h.envelope);
+          const n = await wire.open(h.envelope, this.keys, this.address, await this.pubOf(pin));
+          if (n.v !== wire.Version2 || n.conv !== conv || n.pid !== pid || n.sub !== "event" || wire.parseEvent(n.body).type !== "dismiss") continue;
+        } catch (_) { continue; }
+        await this.admit(h.envelope, env, true, false, { ...(h.relay_ingress ? {[relayIngress]:env.id} : {}), checks:[], state:{deferred:false}, missingPersons:new Set() });
+      }
+      if (page.length < heldPage) return;
     }
   }
 
@@ -11296,7 +11364,11 @@ export class Engine {
       return this.inviteHuman(body);
     }
     if (!wire.validID(body.pid) || action === "decide" && typeof body.accept !== "boolean") throw new Error("Choose one exact human participation action.");
-    const { c, info } = await this.agentConv(body.pid);
+    let { c, info } = await this.agentConv(body.pid);
+    if (action === "decide" && info.state === "invited") { // a cancellation that came before the invitation counts first (MEL-841)
+      const invite = (await this.convEvents(c.id, [], info.pid)).find(x => x.e.type === "invite" && x.hash === info.invite);
+      if (invite) { await this.admitHeldDismissals(null, c.id, info.pid); ({ c, info } = await this.agentConv(body.pid)); }
+    }
     const members=await this.dmMembers(c), member=members.has(this.me?.person);
     if (info.role !== "human") throw new Error("This action requires a human participation, not an agent.");
     const view = this.guestView(info, member);
@@ -11780,6 +11852,13 @@ export class Engine {
     const checks=[];
     events=await this.convEvents(c.id,checks);if(n.sub==="event")events.push(await this.eventRecord(n.body));
     members = await this.dmMembers(c, events, checks); info = this.resolveAgent(n.pid, events, members);
+    if(n.sub==="event") { // this host's decision counts only on an invitation still waiting for it in this write (client decide, MEL-841)
+      const d=wire.parseEvent(n.body);
+      if(["accept","decline"].includes(d.type)&&d.author.address===this.address&&d.author.fingerprint===this.fp) {
+        const waiting=this.resolveAgent(n.pid,events.slice(0,-1),members);
+        if(waiting.invite!==d.prev||waiting.state!=="invited"||waiting.held)throw new Error(`The invite is ${waiting.state}, not waiting for a decision.`);
+      }
+    }
     if(members.group && (info.member||info.parent) && !n.sub && !n.human) n={...n,human:await this.roomPlan(c,events,members,n.topic||"")};
     await this.externalRole({...n,conv:c.id}, info, members, this.address, this.fp,checks);
     checkFiles(n.files || []);

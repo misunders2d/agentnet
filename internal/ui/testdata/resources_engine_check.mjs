@@ -6,10 +6,9 @@ const caps=[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapExternalPa
 const w=await world();
 async function ready(){for(const e of w.users){e.realm='f'.repeat(32);e.featureList=null;const fetch=e.fetch;e.fetch=async(url,o)=>new URL(url).pathname==='/v1/version'?new Response(JSON.stringify({features:['env2','env3','person2','caps','notify1'],realm_id:'f'.repeat(32)})):fetch(url,o);await w.caps(e,caps);}}
 await ready();const {alice:a,bob:b,carol:g}=w;
-// A group starts with just its creator. Metadata is durable even though an
-// ordinary message still needs another recipient.
+// A group starts with just its creator. Metadata is durable with no other
+// recipient (an ordinary solo turn is solo_group_engine_check.mjs).
 const solo=await a.createGroup('Local shared links');
-await assert.rejects(()=>a.sendDM({conv:solo,body:'No remote recipient'}),/no other current device/i);
 const soloLinks=[{name:'Local notes',url:'https://example.com/local'}];
 const soloResources=await a.api('/api/dm/resources',{conv:solo,links:soloLinks,rev:0,writer:''});
 assert.deepEqual(soloResources.links,soloLinks);

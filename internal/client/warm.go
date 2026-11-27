@@ -379,6 +379,12 @@ func nativeInterrupt(harness, thread, turn string) any {
 		return map[string]any{"type": "abort"}
 	case "claude":
 		return map[string]any{"type": "control_request", "request_id": "agentnet-interrupt", "request": map[string]any{"subtype": "interrupt"}}
+	case "agy":
+		// Over ACP only (the conversation is known); stream-json agy is
+		// sent a termination signal instead (end).
+		if thread != "" {
+			return map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]string{"sessionId": thread}}
+		}
 	case "codex":
 		if thread != "" && turn != "" {
 			return map[string]any{"id": "agentnet-interrupt", "method": "turn/interrupt", "params": map[string]any{"threadId": thread, "turnId": turn}}

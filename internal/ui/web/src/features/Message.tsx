@@ -397,12 +397,14 @@ function Under({ m, ctx, all, who, status, answer, onDetails, onJump }: { m: Any
   );
 }
 
+// MEL-825: whether the correction reached the live run or is a follow-up.
 function editOutcome(state?: string) {
   switch (state) {
-    case "queued": return "Edit queued for the agent";
-    case "running": return "Agent processing the edit";
+    case "queued": return "Edit queued as a follow-up";
+    case "running": return "Sending the edit to the running agent";
+    case "followup": return "Agent answering the edit as a follow-up";
     case "steered": return "Edit reached the running agent";
-    case "answered": return "Agent replied to the edit";
+    case "answered": return "Agent replied to the edit as a follow-up";
     case "failed": return "Edit could not be applied to the agent’s work";
     default: return "";
   }
@@ -479,7 +481,8 @@ function EventDivider({ m, ctx, all }: { m: T.DMMessage; ctx: Ctx; all: AnyMsg[]
     if (k.kind === "joined") {
       divider = true;
       line = <><b>{name}</b> joined to help</>;
-      sub = (n ? "saw " + n + (n === 1 ? " message" : " messages") : "saw nothing") + " · invited by " + invitedBy;
+      // "saw 17 messages" is itself the link to what it saw (below).
+      sub = (n ? "" : "saw nothing · ") + "invited by " + invitedBy;
     } else if (k.kind === "invited") {
       line = <><b>{k.by ? cap(by(k.by)) : "Someone"}</b> invited {lower(name)}</>;
       sub = n ? n + " earlier " + (n === 1 ? "message" : "messages") + " to share" : "";
@@ -495,38 +498,24 @@ function EventDivider({ m, ctx, all }: { m: T.DMMessage; ctx: Ctx; all: AnyMsg[]
       line = <><b>{name}</b> left{k.by && " · dismissed by " + by(k.by)}</>;
     }
   }
-  if (!divider) {
-    // Invitations, refusals and records this page can't read are quiet lines; joining and leaving are the dividers.
-    return (
-      <p data-mid={m.id} role="note" className="mx-auto my-2 max-w-[min(92%,520px)] px-4 text-center text-[13px] leading-snug text-muted [overflow-wrap:anywhere]">
-        {line}{sub && <span> · {sub}</span>}<span className="whitespace-nowrap"> · {stampOf(m.at)}</span>
-      </p>
-    );
-  }
-  const joined = k!.kind === "joined";
-  const seen = visit!.shared.length + visit!.missing;
-  return (
-    <div data-mid={m.id} role="note" className="my-3 flex items-center gap-2 px-3 sm:px-4">
-      <span className="h-0 flex-1 border-t-[1.5px] border-dashed border-outline/25" aria-hidden="true" />
-      <div className={"flex max-w-[min(92%,460px)] items-center gap-2.5 rounded-2xl border-[1.5px] px-3 py-1.5 text-[13px] leading-snug "
-        + (joined ? "border-outline/60 bg-guest-bg text-ink" : "border-hairline bg-surface text-text-2")}>
-        {a && <AgentAvatar seed={a.agent_id || a.host.address} size={28} guest={joined} mood={joined ? "neutral" : "asleep"} />}
-        {g && !a && <PersonAvatar name={personName(g.host)} seed={g.host.person || g.host.address} size={28} guest={joined} />}
-        <span className="min-w-0">
-          <span className="block text-[14px] [overflow-wrap:anywhere]">{line}<span className="text-muted"> · {stampOf(m.at)}</span></span>
-          {sub && <span className="block text-muted">{sub}</span>}
-          {joined && seen > 0 && (
-            <button type="button" onClick={() => setSaw(true)}
-              className="relative inline-flex items-center gap-1 font-semibold text-agent-ink underline decoration-agent-ink/40 underline-offset-2 before:absolute before:-inset-x-1 before:top-1/2 before:h-11 before:-translate-y-1/2 before:content-[''] hover:decoration-agent-ink">
-              <IconEye size={15} />{name === "You" ? "See what you saw" : "See what " + lower(name) + " saw"}
-            </button>
-          )}
-        </span>
-      </div>
-      <span className="h-0 flex-1 border-t-[1.5px] border-dashed border-outline/25" aria-hidden="true" />
-      {saw !== null && ctx.dm && <WhatTheySaw t={ctx.dm} g={visit!} open={saw} onOpenChange={setSaw} />}
-    </div>
-  );
+  // Every participation record is one quiet line, as messengers show service
+  // messages (Telegram: one small centered line, no card). Owner, 2026-11-27:
+  // the joined/left cards took the whole screen.
+  const joined = divider && k!.kind === "joined";
+  const seen = joined ? visit!.shared.length + visit!.missing : 0;
+  const sawText = "saw " + seen + (seen === 1 ? " message" : " messages");
+  return (<>
+    <p data-mid={m.id} role="note" data-event={divider ? k!.kind : undefined}
+      className={(joined && seen > 0 ? "my-2" : "my-1") + " mx-auto max-w-[min(94%,680px)] px-4 text-center text-[13px] leading-snug text-muted [overflow-wrap:anywhere]"}>
+      {line}{sub && <span> · {sub}</span>}<span className="whitespace-nowrap"> · {stampOf(m.at)}</span>
+      {joined && seen > 0 && <>{" · "}
+        <button type="button" data-event-action onClick={() => setSaw(true)} aria-label={name + " " + sawText + ", show them"}
+          className="relative inline-flex items-baseline gap-1 font-semibold text-agent-ink underline decoration-agent-ink/40 underline-offset-2 before:absolute before:-inset-x-1 before:top-1/2 before:h-6 before:-translate-y-1/2 before:content-[''] hover:decoration-agent-ink">
+          <IconEye size={14} className="self-center" aria-hidden="true" />{sawText}
+        </button></>}
+    </p>
+    {saw !== null && ctx.dm && <WhatTheySaw t={ctx.dm} g={visit!} open={saw} onOpenChange={setSaw} />}
+  </>);
 }
 
 /** useVisit: one participation as the room panel reads it (what it was shown,

@@ -86,7 +86,7 @@ function UpdateRequired({ required, app, reload, unsent }: { required: T.UpdateR
     catch (e) { if (store.isActive()) setNote(errorText(e)); }
     finally { if (store.isActive()) setBusy(false); }
   };
-  const how = host.platform === "android" ? "Install the newer AgentNet APK over this app to keep your chats and identity. Do not uninstall it." : required.auto || (reload && unsent ? "Send or clear your drafts here: the page then reloads with your server's current version. What you send waits in this browser until then."
+  const how = host.platform === "android" ? (supported?.ok === false && supported.problem) || "Install the newer AgentNet APK over this app to keep your chats and identity. Do not uninstall it." : required.auto || (reload && unsent ? "Send or clear your drafts here: the page then reloads with your server's current version. What you send waits in this browser until then."
     : browser ? "This page reloads with your server's current version." : canUpdate || (app && !supported) ? "" : app ? supported?.problem || "This app can’t update itself here: install the new version over it." : "Run agentnet update on this computer.");
   return (
     <div role="alert" className="flex flex-wrap items-center gap-3 border-b-[1.5px] border-outline bg-danger-bg px-4 py-3 text-danger">

@@ -233,7 +233,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
         ))}
       </ul>
       {t.kind === "group" && t.frozen && <p className="mt-1 text-[13px] text-muted">The last members this computer could confirm.</p>}
-      {rights.member && (!pendingChange || pendingChange.error) && <GroupFooter admin={rights.admin} onPick={(a) => change.pick(a)} />}
+      {rights.member && (!pendingChange || pendingChange.error) && <GroupFooter admin={rights.admin} builtIn={rights.builtIn} onPick={(a) => change.pick(a)} />}
       {change.sheet}
 
       {r.guests.some(g => g.member) && <><Label n={r.guests.filter(g => g.member).length}>Agents</Label><div className="flex flex-col gap-2.5">{r.guests.filter(g => g.member).map(g => <GuestCard key={g.key} g={g} t={t} busy={busy === g.key} onAct={act} />)}</div></>}

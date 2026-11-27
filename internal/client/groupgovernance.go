@@ -14,6 +14,11 @@ var ErrGroupLastAdmin = errors.New("group: last administrator cannot demote, rem
 // Each governance action signs one exact current CAS transition. Admissions
 // remain byte-for-byte consented; a conflicting CAS is never silently rebuilt.
 func (a *Agent) RenameGroup(ctx context.Context, conv, title string) (GroupContext, error) {
+	if built, err := a.builtInGroup(conv); err != nil {
+		return GroupContext{}, err
+	} else if built {
+		return GroupContext{}, ErrBuiltInGroup
+	}
 	return a.governGroup(ctx, conv, "rename", strings.TrimSpace(title))
 }
 func (a *Agent) PromoteGroupMember(ctx context.Context, conv, person string) (GroupContext, error) {
@@ -133,6 +138,11 @@ type GroupLeaveResult struct {
 
 func (a *Agent) LeaveGroup(ctx context.Context, conv string) (GroupLeaveResult, error) {
 	var out GroupLeaveResult
+	if built, err := a.builtInGroup(conv); err != nil {
+		return out, err
+	} else if built {
+		return out, ErrBuiltInGroup
+	}
 	packet, err := a.GroupContext(conv)
 	if err != nil {
 		return out, err

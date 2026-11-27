@@ -687,6 +687,13 @@ func TestDirectMissedSteerRunsOnceAsNextTurn(t *testing.T) {
 					t.Fatalf("a steer the run could not take dead-ended: %s", s)
 				}
 			}
+			if tc.mode == "ended" {
+				// A row an earlier release left with a handover mark: its
+				// claim as the next turn must not report it steered.
+				if _, err := a.store.db.Exec(`UPDATE inbox SET steering_parent=?,steering_attempt=1 WHERE id=?`, parent.ID, id); err != nil {
+					t.Fatal(err)
+				}
+			}
 			state := stateAnswered
 			if tc.mode == "cancelled" {
 				state = stateCancelled
@@ -698,6 +705,9 @@ func TestDirectMissedSteerRunsOnceAsNextTurn(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if found && steeringOf(t, a, child.ID) != "" {
+				t.Fatal("the next turn was claimed as a steered correction")
+			}
 			if found {
 				a.runJob(tctx(t), child, &Responder{Harness: "stub", Dir: st.dir, Timeout: time.Second}, nil)
 			}
@@ -707,6 +717,14 @@ func TestDirectMissedSteerRunsOnceAsNextTurn(t *testing.T) {
 			waitState(t, a, id, tc.want)
 		})
 	}
+}
+
+func steeringOf(t *testing.T, a *Agent, id string) (parent string) {
+	t.Helper()
+	if err := a.store.db.QueryRow(`SELECT coalesce(steering_parent,'') FROM inbox WHERE id=?`, id).Scan(&parent); err != nil {
+		t.Fatal(err)
+	}
+	return parent
 }
 
 func TestDirectNativeFollowupOwnedWorkerProcess(t *testing.T) {
@@ -1090,6 +1108,9 @@ func TestBackToBackRemoteAsksQueueOnceWhenNativeCannotSteer(t *testing.T) {
 	next, found, _, _, err := a.store.claimAgentPage("agentstub", a.Address, a.Self().Fingerprint(), 0, agentPage)
 	if err != nil || !found || next.ID != second {
 		t.Fatal("next turn was not selected", next.ID, found, err)
+	}
+	if steeringOf(t, a, second) != "" {
+		t.Fatal("the refused follow-up was claimed as its own turn still marked steered")
 	}
 	a.runJob(tctx(t), next, &Responder{Harness: "agentstub", Dir: stub.dir, Timeout: 5 * time.Second}, nil)
 	waitState(t, a, second, stateAnswered)

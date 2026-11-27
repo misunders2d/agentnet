@@ -159,6 +159,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/reply-sessions", s.replySessions)
 	mux.HandleFunc("GET /api/agents", s.agentCatalog)
 	mux.HandleFunc("POST /api/agents", s.changeAgent)
+	mux.HandleFunc("GET /api/desktop-chats", s.desktopChats)
+	mux.HandleFunc("POST /api/desktop-chats", s.connectDesktopChat)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
 	// liveworkspacename.go: the workspace's own name; renaming it for

@@ -4,7 +4,7 @@ import { AgentModelReport } from "./AgentModelReport";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { errorText, type Api, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentHistoryThread, concreteAgentLabel, concreteAgentName, currentCatalogAgents, niceDevice, runsAgent, threadAgentHost } from "../model";
+import { agentHistoryThread, concreteAgentLabel, concreteAgentName, currentCatalogAgents, MY_AGENTS, myAgentsRoomId, niceDevice, runsAgent, threadAgentHost } from "../model";
 import { sendID } from "../optimistic.mjs";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -62,18 +62,13 @@ export async function ownAgentChatTargets(api: Api, o: T.Overview, includeLocal:
   return {targets, problems};
 }
 
-/** The person's "My agents" room (MEL-713), chosen as client.MyAgentsRoom
- *  chooses it so the app and terminals share one: the oldest current group
- *  of theirs by that title with no other person; created when none has
+/** The person's "My agents" room (myAgentsRoomId); created when none has
  *  reached this device. */
-export const MY_AGENTS = "My agents";
+export { MY_AGENTS };
 export async function myAgentsRoom(api: Api, known?: T.Overview | null): Promise<string> {
-  const o = known?.person?.person ? known : await api.overview(), me = o.person?.person;
-  if (!me) throw Error("Set up your person first. Nothing sent.");
-  const at = (d: T.DMSummary) => Date.parse(d.created) || 0;
-  const room = (o.dms || []).filter(d => d.kind === "group" && d.title === MY_AGENTS && !d.frozen && d.members?.length === 1 && d.members[0].person === me)
-    .sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1))[0];
-  return room ? room.id : (await api.newGroup(MY_AGENTS)).id;
+  const o = known?.person?.person ? known : await api.overview();
+  if (!o.person?.person) throw Error("Set up your person first. Nothing sent.");
+  return myAgentsRoomId(o) || (await api.newGroup(MY_AGENTS)).id;
 }
 
 /** ownAgentTopic brings the exact agent into topic of room, as a terminal's

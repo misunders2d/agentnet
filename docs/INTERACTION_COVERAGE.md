@@ -31,6 +31,13 @@ a follow-up with earlier result context, delivery after a transport outage,
 and the stopped-run boundary. The retry uses the exact edit job's stored
 result and checks participation again while quoting the original turn.
 `TestEditFollowsUpCompletedRequest` exercises the direct worker path.
+Antigravity steers over ACP like Pi, Claude and Codex (docs/revival/M4.md);
+`TestAgyACP*` cover an edit reaching agy's running turn with one answer,
+a correction refused while agy waits, a lost process, permission denial and
+conversation resume. The edit status now tells the paths apart: "Edit queued
+as a follow-up", "Sending the edit to the running agent", "Edit reached the
+running agent" (kept once that run answers), "Agent answering the edit as a
+follow-up", "Agent replied to the edit as a follow-up", or not applied.
 `TestLocalChangesRendered` checks immediate editing under a held write,
 failure, retry, concurrent linked-device text, and all five edit outcomes at
 desktop and phone sizes with 100 and 1000 messages. `TestListPanelCollapseResizeRendered`
@@ -4406,3 +4413,42 @@ rendered regression exercised Antigravity alone at 1280 px and alongside
 Claude at 390 px in both interfaces. Antigravity was selectable, its agent
 was created in the chosen folder, and the mixed flow sent only Claude to
 native review and apply. A tool with neither route remained disabled.
+
+## Desktop chats in Settings and a quiet Drive offer (November 27, 2026)
+
+Settings > Coding agents > Desktop chats lists the open Claude chats and
+recent Codex Desktop chats on this computer (Linux), as `agentnet
+claude-chat|codex-chat connect` finds them, and connects one as a named
+agent. Reuse: the existing Confirm dialog (Message.actions, now with an
+optional cancel label), the Settings card and hint parts, and the agent
+name field's limit and style from Connect an agent. AgentNet-specific: the
+connect itself is the existing client call; the chat stays owner-only.
+
+`TestDesktopChatsConnectRendered` (light and dark, 1280 px, Chromium):
+Connect opens the confirm with the folder or chat name filled in; Cancel
+sends nothing; an empty name shows its error locally and sends nothing;
+Connect shows a disabled “Connecting…” within 47 ms while the backend takes
+1.5 s, another row stays usable meanwhile, and the row then says
+“Connected as …”. A refused connect shows the reason and Try again and is
+never shown as connected. A chat that can't receive requests has Connect
+disabled with the reason; a connected chat shows its agent name and no
+button. The fixture records exactly one success and one refused call per
+pass. `TestDesktopChatsRoutesGuarded` checks the token and origin guard;
+`TestLiveDesktopChatsListAndRefuse` lists a real Codex Desktop rollout and
+shows a refused connect creates no agent.
+
+Under a file, “Save a readable copy to Google Drive” now appears only when
+that copy can be saved; an off, unconfigured or unavailable Drive shows
+nothing instead of a dead “Google Drive off” label
+(`review_topics_ui_check.mjs`, `review_unread_rendered.cjs`).
+
+## Participation service rows (v0.11.13)
+
+Owner, 2026-11-27: joined/left/invited records filled the screen as cards. Reused
+pattern: Telegram service messages (one small centered line, no avatar or card).
+`TestServiceRowsRendered` (`internal/ui/testdata/service_rows_rendered.cjs`) renders
+nine records in Comic and Office at 1440 and 390 px: each row is a 13 px line
+without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
+161 px desktop), and the inline "saw N messages" control opens What it saw and
+closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
+

@@ -92,6 +92,7 @@ fn main() {
             let handle = app.handle().clone();
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .initialization_script(clipboard::init_script())
+                .initialization_script(include_str!("contextmenu.js"))
                 .initialization_script(if cfg!(target_os = "linux") { include_str!("droppedfiles.js") } else { "" })
                 .initialization_script(if cfg!(target_os = "linux") { concat!("window.__agentnetLinuxDownloads=true;", include_str!("download.js")) } else { include_str!("download.js") });
             // Windows needs HTML5 handling. Linux WebKit supplies URI strings
@@ -271,6 +272,13 @@ fn same_origin(a: &Url, b: &Url) -> bool {
 /// page and the program's loopback page. Other web pages open in the
 /// system browser; nothing else loads.
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
+    let shell = app.state::<Shell>();
+    // History Back (mouse button, Alt+Left) must not leave the messenger for
+    // the starting page: nothing would bring the page back. Only show_error
+    // returns there, and it forgets the page first.
+    if navigation::back_to_start(url, shell.splash.lock().unwrap().as_ref(), shell.page.lock().unwrap().is_some()) {
+        return false;
+    }
     // The first callback can precede build() returning and splash being set.
     // In particular, Windows serves the starting page at http://tauri.localhost.
     if navigation::app_origin(url) {
@@ -279,7 +287,6 @@ fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
         }
         return true;
     }
-    let shell = app.state::<Shell>();
     if let Some(splash) = shell.splash.lock().unwrap().as_ref() {
         if same_origin(url, splash) {
             if url.query_pairs().any(|(k, _)| k == "retry") {

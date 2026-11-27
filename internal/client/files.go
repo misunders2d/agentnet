@@ -287,6 +287,26 @@ func (a *Agent) spoolAndSeal(copies []outCopy, seals []sealing, files []Outgoing
 	return nil
 }
 
+// dropLocalSpool removes the spooled ciphertext of local-only copies (sent
+// to this device itself, stored as delivered, never posted): nothing ever
+// uploads it, and the kept copy (keepSent) with sent_attachments serves this
+// device's reads, its own runs and later own-device history.
+func (a *Agent) dropLocalSpool(copies []outCopy) {
+	for _, c := range copies {
+		if localOnlyCopy(c) {
+			for _, att := range c.in.Attachments {
+				os.Remove(a.spoolPath(att.Blob.ID))
+			}
+		}
+	}
+}
+
+// localOnlyCopy is a copy this device keeps for itself alone: sealed to
+// itself, stored as delivered, never posted.
+func localOnlyCopy(c outCopy) bool {
+	return c.state == protocol.StateDelivered && c.in.To == c.in.From
+}
+
 func (a *Agent) releaseSpool(env envelope.Envelope) {
 	for _, b := range env.Blobs {
 		os.Remove(a.spoolPath(b.ID))

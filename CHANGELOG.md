@@ -6,6 +6,43 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Your own agents work in "My agents" when you have only one device
+  (MEL-840). With only you in the group and your agent on the same
+  computer, messages, inviting the agent and asking it all failed with
+  "no recipient". They now go through.
+- A cancelled invitation disappears right away, even before you have joined
+  the group (MEL-841). Before, the cancellation waited until you accepted,
+  so a cancelled invitation still showed and could be accepted.
+- "My agents" is your built-in group for your agents. It can no longer be
+  left or renamed, since your agents find it by name, and it says what it is
+  (MEL-842). A group change that was refused can
+  now be dismissed instead of staying on screen.
+- Settings → Coding agents → Desktop chats connects an open Claude chat or a
+  recent Codex Desktop chat as one of your agents, with a confirmation
+  (Linux; MEL-829, MEL-830).
+- The message box at the bottom is one clean frame, without the doubled
+  line.
+- "Save a readable copy to Google Drive" shows under a file only when it
+  can actually save one; the dead "Google Drive off" label is gone.
+- Agent and guest updates in a chat ("joined to help", "left", "invited")
+  are one small line each instead of a large card, so a few of them no longer
+  fill the screen. "saw 17 messages" opens what the agent or guest saw.
+- The desktop app no longer shows the browser's own right-click menu (Back,
+  Refresh, Save as, Print). Its Back left a blank window on Windows. Back
+  from the mouse or keyboard can no longer leave the chats either. Text
+  boxes and selected text keep Cut, Copy and Paste.
+- Editing a question while Antigravity (agy) is still answering it now
+  reaches the running answer (MEL-825). An edit that arrives as the answer
+  finishes is never run twice: if it may already have been taken, it asks
+  you instead of running again.
+- Someone who left or was removed from a group and is invited back without
+  history no longer receives messages sent while they were away.
+- The Google Play version of the Android app says on About that it updates
+  through Google Play, instead of showing "Invalid native request."
+- Copying your history to a newly linked device is several times faster.
+  The device that holds the history reads far less of its database per page
+  (about 40 MB down to 8 MB for a busy chat), using a new index.
+
 - Photos attached to the same message can be browsed in one viewer. Use
   Previous and Next, the arrow keys, or swipe at fit zoom.
 - Office gives long messages more room and uses smaller, quieter desktop

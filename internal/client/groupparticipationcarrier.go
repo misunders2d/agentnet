@@ -169,6 +169,9 @@ func (a *Agent) admitGroupVisitorInvite(ctx context.Context, env envelope.Envelo
 	if err != nil {
 		return true, hold(reasonInvalid, err.Error())
 	}
+	if ev.Type == protocol.EventDismiss {
+		return a.admitGroupVisitorCancel(env, in, root, sp, sender, fromQuarantine, hold)
+	}
 	if ev.Type != protocol.EventInvite || ev.Group == nil || ev.Group.HostRole != "visitor" || ev.Host == nil || ev.Host.Address != a.Address || ev.Host.Fingerprint != a.Self().Fingerprint() || ev.Host.Person != me.info.Person {
 		return false, nil
 	}
@@ -200,11 +203,86 @@ func (a *Agent) admitGroupVisitorInvite(ctx context.Context, env envelope.Envelo
 		return true, hold(reasonDuplicate, "group: visitor invitation logical conflict")
 	}
 	if err == nil {
+		// Its cancellation may have come first: recorded now, before the
+		// invitation is shown or its context arrives (MEL-841).
+		if e := a.admitHeldDismissals(ctx, ev.Author.Address, in.Conv, in.PID); e != nil {
+			a.Logf("held cancellation of invitation %s: %v", in.PID, e)
+		}
 		a.convWork.due(convRetry)
 		a.kickNow()
 		a.wakeWorker()
 	}
 	return true, err
+}
+
+// admitGroupVisitorCancel records, before any group context is held, the
+// exact inviter device's signed dismissal of this device's own pending
+// visitor invitation (MEL-841): otherwise it waits for context while the
+// cancelled invitation stays acceptable. It is evidence only, resolved with
+// all usual checks once context is held; anything else takes the usual path.
+func (a *Agent) admitGroupVisitorCancel(env envelope.Envelope, in envelope.Inner, root protocol.ConvRoot, sp personRow, sender identity.Public, fromQuarantine bool, hold func(string, string) error) (bool, error) {
+	if _, err := groupTurnPacketIn(a.store.db, in.Conv); !errors.Is(err, ErrGroupContextPending) {
+		return false, err
+	}
+	inv, err := groupVisitorInvite(a.store.db, root, in.PID, a.Address, a.Self().Fingerprint())
+	if err != nil {
+		return false, nil
+	}
+	ev, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+	if err != nil {
+		return true, hold(reasonInvalid, err.Error())
+	}
+	if ev.Prev != inv.Hash() || ev.Author.Person != inv.Author.Person || ev.Author.Address != inv.Author.Address || ev.Author.Fingerprint != inv.Author.Fingerprint || ev.Author.Person != sp.info.Person || !sp.has(env.From, sender.Fingerprint()) {
+		return false, nil
+	}
+	// As the invitation's author counts once context is held (dmMembers
+	// author): a pinned roster step and the invitation's admission. Recorded
+	// otherwise, it would never count and hold the invitation for good.
+	if ev.Author.GroupAdmission == "" || ev.Author.GroupAdmission != inv.Author.GroupAdmission {
+		return false, nil
+	}
+	if chained, err := inChainIn(a.store.db, ev.Author.Person, ev.Author.Roster); err != nil || !chained {
+		return false, err
+	}
+	result, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, []byte(in.Body)) })
+	if err == nil && result == admitConflict {
+		return true, hold(reasonDuplicate, "group: visitor cancellation logical conflict")
+	}
+	if err == nil {
+		a.convWork.due(convRetry)
+		a.kickNow()
+	}
+	return true, err
+}
+
+// admitHeldDismissals admits now, with every usual check, the dismissals
+// of pid in conv from the device from (every device when from is "") that
+// wait held for proof (MEL-841): a cancellation that came before its
+// invitation would otherwise wait for the next proof retry while the
+// cancelled invitation is shown and acceptable. Before context only the
+// exact inviter's signed dismissal of that exact invitation counts
+// (admitGroupVisitorCancel); once context is held, any dismissal the usual
+// path admits (another device of the inviter, another administrator).
+// Anything else stays held as it was. A transient failure is returned.
+func (a *Agent) admitHeldDismissals(ctx context.Context, from, conv, pid string) error {
+	envs, err := a.store.held(from, reasonProof)
+	if err != nil {
+		return err
+	}
+	only := func(in envelope.Inner) bool {
+		if in.V != envelope.Version2 || in.Conv != conv || in.PID != pid || in.Sub != envelope.SubEvent {
+			return false
+		}
+		ev, e := protocol.ParseParticipationEvent([]byte(in.Body))
+		return e == nil && ev.Type == protocol.EventDismiss
+	}
+	ctx = context.WithValue(ctx, receivePageKey{}, nil) // its own write, never staged with the message that led here
+	for _, env := range envs {
+		if _, checked, err := a.recheckHeld(ctx, env, only); checked && err != nil && transient(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) acceptGroupVisitorContext(ctx context.Context, packet GroupContext, in envelope.Inner, sender identity.Public) error {
