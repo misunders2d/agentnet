@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -72,6 +73,10 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 		{Index: 2, Name: "wide.png", Size: int64(len(f.images[0])), Openable: true},
 		{Index: 5, Name: "tall.png", Size: int64(len(f.images[1])), Openable: true},
 		{Index: 6, Name: "last.png", Size: int64(len(f.images[0])), Openable: true},
+	}
+	// MEL-856: videos sent together form an album, so each video card under
+	// test arrives in its own message ("video-" + its index).
+	videos := []FileView{
 		{Index: 8, Name: "received.webm", Size: int64(len(f.video)), Openable: true},
 		{Index: 9, Name: "spoof.mp4", Size: 16, Openable: true},
 		{Index: 10, Name: "broken.webm", Size: 4, Openable: true},
@@ -81,15 +86,21 @@ func (f *imageViewerFixture) DM(id string) (DMThread, error) {
 		{Index: 14, Name: "late.webm", Size: int64(len(f.video)), Openable: true},
 		{Index: 15, Name: "unavailable.webm", Size: 4, Openable: true},
 	}
+	if len(f.mp4) > 0 {
+		videos = append(videos, FileView{Index: 16, Name: "received.mp4", Size: int64(len(f.mp4)), Openable: true, Fetch: "wait"})
+	}
+	for _, v := range videos {
+		id := fmt.Sprintf("video-%d", v.Index)
+		dm.Messages = append(dm.Messages, DMMessage{ID: id, LID: id, Dir: "in", From: "bob/desk", Kind: "message", Body: "Clip " + v.Name, At: f.now(), State: "received", Attachments: []FileView{v}})
+	}
 	topic := strings.Repeat("e", 32)
 	dm.Topics = []ThreadSummary{{ID: topic, Conv: id, Title: "Video topic", Count: 1, State: "active", LastAt: f.now()}}
 	// MEL-750: a sent video whose copy this device kept.
 	dm.Messages = append(dm.Messages, DMMessage{ID: "sent-video-message", LID: "sent-video-message", Dir: "out", From: "alice/desk", Kind: "message", Body: "Sent clip", At: f.now(), State: "delivered",
 		Attachments: []FileView{{Index: 0, Name: "sent.webm", Size: int64(len(f.video)), Openable: true}}})
 	if len(f.mp4) > 0 {
-		dm.Messages[0].Attachments = append(dm.Messages[0].Attachments, FileView{Index: 16, Name: "received.mp4", Size: int64(len(f.mp4)), Openable: true, Fetch: "wait"})
-		sent := &dm.Messages[len(dm.Messages)-1]
-		sent.Attachments = append(sent.Attachments, FileView{Index: 1, Name: "sent.mp4", Size: int64(len(f.mp4)), Openable: true})
+		dm.Messages = append(dm.Messages, DMMessage{ID: "sent-mp4-message", LID: "sent-mp4-message", Dir: "out", From: "alice/desk", Kind: "message", Body: "Sent mp4", At: f.now(), State: "delivered",
+			Attachments: []FileView{{Index: 1, Name: "sent.mp4", Size: int64(len(f.mp4)), Openable: true}}})
 	}
 	dm.Messages = append(dm.Messages, DMMessage{ID: "topic-video-message", LID: "topic-video-message", Dir: "in", From: "bob/desk", Kind: "message", Body: "Another topic", At: f.now(), State: "received", Topic: topic})
 	return dm, err
@@ -99,10 +110,10 @@ func (f *imageViewerFixture) OpenFile(_ context.Context, dir, id string, index i
 	if dir == "out" && id == "sent-video-message" && index == 0 {
 		return io.NopCloser(bytes.NewReader(f.video)), "sent.webm", nil
 	}
-	if dir == "out" && id == "sent-video-message" && index == 1 && len(f.mp4) > 0 {
+	if dir == "out" && id == "sent-mp4-message" && index == 1 && len(f.mp4) > 0 {
 		return io.NopCloser(bytes.NewReader(f.mp4)), "sent.mp4", nil
 	}
-	if dir != "in" || id != "picture-message" {
+	if dir != "in" || id != "picture-message" && id != fmt.Sprintf("video-%d", index) || id == "picture-message" && index > 6 {
 		return nil, "", ErrNotFound
 	}
 	switch index {

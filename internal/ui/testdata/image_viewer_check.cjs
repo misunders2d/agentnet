@@ -68,7 +68,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   assert(geometry.width <= (phone ? 390 : 1440) && geometry.height <= (phone ? 844 : 900)*.6+1);
   assert.equal(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   if (process.env.AGENTNET_SCREENSHOTS) await p.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,`video-${phone?'390':'1440'}.png`)});
-  const original = await ctx.request.get(base + '/api/files/picture-message/8?dir=in');
+  const original = await ctx.request.get(base + '/api/files/video-8/8?dir=in');
   const download = p.waitForEvent('download');
   await card('received.webm').getByRole('button',{name:'Download received.webm',exact:true}).click();
   const saved = await download;
@@ -141,17 +141,17 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
 
   let resume;
   const gate = new Promise(resolve => { resume=resolve; });
-  await p.route('**/api/files/picture-message/14?dir=in',async route => { await gate; await route.continue(); });
+  await p.route('**/api/files/video-14/14?dir=in',async route => { await gate; await route.continue(); });
   await file('late.webm').click();
   await card('late.webm').getByRole('status').filter({hasText:'Loading video…'}).waitFor();
   const before = await p.evaluate(() => window.videoResources.created.length);
   await close('late.webm').click();
-  const finished = p.waitForResponse(r => r.url().endsWith('/api/files/picture-message/14?dir=in'));
+  const finished = p.waitForResponse(r => r.url().endsWith('/api/files/video-14/14?dir=in'));
   resume(); await (await finished).finished();
   await p.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await p.evaluate(() => window.videoResources.created.length),before,'late read after Close creates no Blob');
   assert.equal(await card('late.webm').locator('video').count(),0);
-  await p.unroute('**/api/files/picture-message/14?dir=in');
+  await p.unroute('**/api/files/video-14/14?dir=in');
 
   for(const cause of ['pagehide','hidden',...(phone?['android']:[])]) {
     await file('received.webm').click();
@@ -226,7 +226,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   // Finish a held real file response during the connected leaving interval.
   let releaseLate,arrive;
   const arrived=new Promise(resolve=>{arrive=resolve;});
-  await p.route('**/api/files/picture-message/14?dir=in',async route=>{
+  await p.route('**/api/files/video-14/14?dir=in',async route=>{
     const response=await route.fetch(),body=await response.body();
     await new Promise(resolve=>{releaseLate=async()=>{await route.fulfill({response,body});resolve();};arrive();});
   });
@@ -234,7 +234,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   const lateNode=await card('late.webm').elementHandle(),lateBefore=await p.evaluate(()=>window.videoResources.created.length),lateStart=await p.evaluate(()=>performance.now());
   await navigate();
   const latePhase=await phaseGate(lateNode,lateStart,'late');
-  const finishing=p.waitForResponse(r=>r.url().endsWith('/api/files/picture-message/14?dir=in'));
+  const finishing=p.waitForResponse(r=>r.url().endsWith('/api/files/video-14/14?dir=in'));
   await releaseLate();await(await finishing).finished();
   await p.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
   const late={phase:latePhase,after:await measure(lateNode,lateStart,'late-after-response'),created:await p.evaluate(()=>window.videoResources.created.length)};
@@ -243,7 +243,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   else assert.equal(late.after.connected,false,'late completion after direct unmount is separately classified');
   assert.equal(late.after.mediaCount,0,'late bytes never mount media');assert.equal(late.after.src,null,'late bytes never set a source');
   assert.equal(late.created,lateBefore,'late completion while leaving creates no URL');
-  await p.unroute('**/api/files/picture-message/14?dir=in');await p.waitForFunction(node=>!node.isConnected,lateNode);await back();
+  await p.unroute('**/api/files/video-14/14?dir=in');await p.waitForFunction(node=>!node.isConnected,lateNode);await back();
 
   // A topic selection replaces the keyed Timeline immediately, without a
   // leave window; exercise its existing unmount cleanup rather than invent one.
@@ -264,7 +264,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
   const denied=await p.evaluate(async () => {
     const got=[];const listener=e=>{if(e.effectiveDirective==='media-src')got.push(e.blockedURI);};
     document.addEventListener('securitypolicyviolation',listener);
-    const urls=['/api/files/picture-message/8?dir=in','https://media.invalid/forbidden.webm'];
+    const urls=['/api/files/video-8/8?dir=in','https://media.invalid/forbidden.webm'];
     const nodes=urls.map(src=>{const v=document.createElement('video');v.src=src;v.preload='auto';document.body.append(v);v.load();return v;});
     await new Promise((resolve,reject)=>{const end=Date.now()+3000;const check=()=>{if(got.length>=2)resolve();else if(Date.now()>end)reject(Error('missing media CSP violations'));else setTimeout(check,10);};check();});
     for(const v of nodes){v.removeAttribute('src');v.load();v.remove();}document.removeEventListener('securitypolicyviolation',listener);return got;
@@ -316,7 +316,7 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
         const name=new URL(r.url()).pathname.match(/^\/assets\/skins\/comic\/(entry\.mjs|style\.css|document\.css)$/)?.[1];
         if(name)assetBodies.push(r.body().then(b=>({name,url:r.url(),sha256:createHash('sha256').update(b).digest('hex')})));
       });
-      p.on('request', r => { const m = r.url().match(/\/api\/files\/picture-message\/(\d+)\?dir=(in|out)$/); if (m && +m[1] >= 8) {reads.push([+m[1],m[2]]);if(+m[1]===15)probes.urls.add(r.url());} });
+      p.on('request', r => { const m = r.url().match(/\/api\/files\/(?:picture-message|video-\d+)\/(\d+)\?dir=(in|out)$/); if (m && +m[1] >= 8) {reads.push([+m[1],m[2]]);if(+m[1]===15)probes.urls.add(r.url());} });
       p.setDefaultTimeout(10000);
       p.on('pageerror', e => errors.push(String(e)));
       p.on('console', m => { if (m.type() === 'error') {const e={text:m.text(),url:m.location().url};// This fixture lacks Drive and topic transfer: those lookups answer 404.
@@ -338,9 +338,11 @@ async function checkVideos(p, ctx, phone, base, errors, reads, probes) {
         await thumb.scrollIntoViewIfNeeded();
         await thumb.locator('img').waitFor();
         await thumb.locator('img').evaluate(im => im.decode());
-        const preview = await thumb.locator('img').evaluate(im => ({ width: im.clientWidth, height: im.clientHeight, natural: im.naturalWidth / im.naturalHeight }));
+        const preview = await thumb.locator('img').evaluate(im => ({ width: im.clientWidth, height: im.clientHeight, fit: getComputedStyle(im).objectFit, tile: [im.parentElement.clientWidth, im.parentElement.clientHeight] }));
         assert(preview.width > 0 && preview.height > 0, 'preview remains visible');
-        assert(Math.abs(preview.width / preview.height - preview.natural) < .02, 'portrait and landscape previews retain whole original ratio');
+        // MEL-856: the three pictures form a Telegram album; each fills its tile.
+        assert.equal(preview.fit, 'cover');
+        assert.deepEqual([preview.width, preview.height], preview.tile, 'album tile shows its picture edge to edge');
         assert(preview.height <= (phone ? 844 : 900) * .6 + 1, 'media preview remains bounded by viewport');
         await thumb.click();
         const dialog = p.getByRole('dialog', { name, exact: true }), image = dialog.getByRole('img', { name, exact: true });

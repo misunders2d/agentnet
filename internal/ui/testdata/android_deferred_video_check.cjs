@@ -32,7 +32,7 @@ const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT);
     const fetch = new Promise(resolve => { finishFetch = resolve; });
     const complete = new Promise(resolve => { finishProgress = resolve; });
     let attempts = 0, reads = 0;
-    const ref = '**/api/files/picture-message/16';
+    const ref = '**/api/files/video-16/16';
     await page.route(ref + '?dir=in', route => { reads++; return route.continue(); });
     await page.route(ref + '/fetch?dir=in', async route => {
       assert.equal(route.request().method(), 'POST');

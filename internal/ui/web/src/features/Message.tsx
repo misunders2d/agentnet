@@ -28,7 +28,7 @@ import { useStore } from "../store";
 import { Markdown, MessageLinks, type RenderMention } from "./Markdown";
 import { AssignMessage } from "./Message.assign";
 import { ReportSheet } from "./Report";
-import { MessageFiles } from "./Message.files";
+import { MessageFiles, hasFiles } from "./Message.files";
 import { EmojiDialog, Reactions, ReactionTargets } from "./Message.reactions";
 import { ActionSheet, DeleteMessage, DetailsSheet, EditBox, Toolbar, inside, useTouchGestures, discardEditDraft, type Acts, type Can } from "./Message.actions";
 import {
@@ -152,6 +152,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
 
   const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
   const editWidth = editing ? " w-full" : "";
+  // Telegram shows a message's text under its photos and files, as the
+  // caption of the last group (send_files_box.cpp), so attachments come first.
+  const filesFirst = !m.deleted && !editing && !approved && hasFiles(m);
   const body = (
     <div data-message-bubble data-part="bubble" tabIndex={(wide || tabStop !== undefined) && (live || attention) && !selecting ? tabStop === false ? -1 : 0 : undefined} role={(wide || tabStop !== undefined) && (live || attention) ? "group" : undefined} aria-label={(wide || tabStop !== undefined) && (live || attention) ? who.name + ", " + formatTime(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + editWidth + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
@@ -166,6 +169,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
       {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
+      {filesFirst && <MessageFiles m={m} className="" />}
       {editing ? <EditBox m={m} ctx={ctx} wide={wide} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">{m._change?.status === "pending" ? "Deleting message…" : "Message deleted"}{time}</p>
           : approved ? <>
@@ -176,9 +180,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
               {m.edited && <><p className="mt-2 text-[13px] text-muted">Edited message</p><Markdown text={shownText(m)} mention={mention} spoilers="reveal" /></>}
             </details>
             <div className="flow-root">{time}</div>
-          </> : !compact && text ? <Markdown text={text} mention={mention} tail={time} spoilers="reveal" />
+          </> : !compact && text ? <Markdown text={text} mention={mention} tail={time} spoilers="reveal" className={filesFirst ? "mt-1.5" : undefined} />
             : null}
-      {!m.deleted && !editing && <MessageFiles m={m} />}
+      {!filesFirst && !m.deleted && !editing && <MessageFiles m={m} />}
       {m._change && <p role="status" className="mt-1 text-xs text-muted" data-message-change={m._change.status}>
         {m._change.status === "failed" ? <>{m._change.action === "edit" ? "Edit" : "Deletion"} couldn’t be confirmed. {m._change.error}
           {m._change.action === "edit" && can.edit && <button type="button" className="ml-2 min-h-11 underline" onClick={() => setEditing(true)}>Edit again</button>}
