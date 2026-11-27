@@ -11852,6 +11852,13 @@ export class Engine {
     const checks=[];
     events=await this.convEvents(c.id,checks);if(n.sub==="event")events.push(await this.eventRecord(n.body));
     members = await this.dmMembers(c, events, checks); info = this.resolveAgent(n.pid, events, members);
+    if(n.sub==="event") { // this host's decision counts only on an invitation still waiting for it in this write (client decide, MEL-841)
+      const d=wire.parseEvent(n.body);
+      if(["accept","decline"].includes(d.type)&&d.author.address===this.address&&d.author.fingerprint===this.fp) {
+        const waiting=this.resolveAgent(n.pid,events.slice(0,-1),members);
+        if(waiting.invite!==d.prev||waiting.state!=="invited"||waiting.held)throw new Error(`The invite is ${waiting.state}, not waiting for a decision.`);
+      }
+    }
     if(members.group && (info.member||info.parent) && !n.sub && !n.human) n={...n,human:await this.roomPlan(c,events,members,n.topic||"")};
     await this.externalRole({...n,conv:c.id}, info, members, this.address, this.fp,checks);
     checkFiles(n.files || []);

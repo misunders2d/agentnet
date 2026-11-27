@@ -1371,6 +1371,22 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser decision of a cancelled room invitation sends nothing');
    await w.close();
   }
+  // A cancellation that lands after the decision's checks and before its
+  // write: the send's own transaction refuses it (client decide, MEL-841).
+  for(const accept of [true,false]){
+   w=await world();for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
+   w.e.retryHeld=async()=>{};
+   for(const name of ['human-invite','human-invite-second','group-proof-human','group-context-human'])await w.e.onMessage(outside[name].envelope);
+   check((await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid'])?.can_decide,'browser fixture: invitation decidable before the late cancellation');
+   const send=w.e.sendExternal.bind(w.e);let landed=false;
+   w.e.sendExternal=async(...args)=>{if(!landed){landed=true;await w.e.onMessage(outside['human-dismiss'].envelope);}return send(...args);};
+   let why='';try{await w.e.changeHuman('decide',{pid:outside['human-pid'],accept});}catch(e){why=e.message;}
+   const after=(await w.e.groupThread(outsideConv)).guests.find(g=>g.pid===outside['human-pid']);
+   check(landed&&/dismissed, not waiting for a decision/.test(why),'browser late cancellation refuses the decision (accept='+accept+'): '+why);
+   check(after?.state==='dismissed'&&!after.can_decide,'browser late cancellation leaves the invitation dismissed (accept='+accept+')');
+   check(!(await w.st.all('outbox')).some(r=>r.pid===outside['human-pid']&&r.sub==='event'),'browser late-cancelled decision sends nothing (accept='+accept+')');
+   await w.close();
+  }
   w=await world();const ownRoster=await wire.parseRoster(v.challenge.rosters[0]),ownNext={...ownRoster,seq:1,prev:await wire.rosterHash(ownRoster),devices:[...ownRoster.devices,pub],by:await wire.fingerprint(alicePub),sig:null,join:await wire.joinConsent(keys,address,ownRoster.person,1,await wire.rosterHash(ownRoster))};
   const ownUnsigned=JSON.parse(wire.rosterJSON(ownNext));delete ownUnsigned.sig;delete ownUnsigned.join;ownNext.sig=new Uint8Array(await crypto.subtle.sign('Ed25519',aliceKeys.sign,new TextEncoder().encode('agentnet-person-v2\n'+JSON.stringify(ownUnsigned))));
   await wire.verifyNext(ownNext,ownRoster);w.extraChains.set(ownRoster.person,[ownRoster,ownNext].map(r=>JSON.parse(wire.rosterJSON(r))));w.e.me=await w.e.personRecord([ownRoster,ownNext],'self',null);await w.st.write([{s:'kv',k:'person',v:w.e.me}]);await w.e.pinDevices(w.e.me);
