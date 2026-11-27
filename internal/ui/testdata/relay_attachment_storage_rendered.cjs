@@ -18,7 +18,8 @@ window.fixture={calls:[],status:base(),base,active:true,platform:'browser',defer
 const consent='https://accounts.google.com/o/oauth2/v2/auth?client_id=synthetic-public&state=synthetic';
 function makeHost(id){return {platform:fixture.platform,listen(fn){listeners.add(fn);return()=>listeners.delete(fn)},async api(url,body){
  fixture.calls.push({id,url,body});if(url!=='/api/storage/attachments')throw Error('Unexpected endpoint '+url);
- if(!body&&fixture.real){const r=await fetch(url);if(!r.ok)throw Error((await r.text()).trim()||r.statusText);return r.json();}
+ if(fixture.real){const r=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});if(!r.ok)throw Error((await r.text()).trim()||r.statusText);return r.json();}
+ if(body&&fixture.hangAction)return new Promise(()=>{});
  if(!body&&fixture.hang)return new Promise(()=>{});
  if(!body&&fixture.holdAll){fixture.inFlight++;fixture.maxInFlight=Math.max(fixture.maxInFlight,fixture.inFlight);const result=structuredClone(fixture.status);return new Promise(resolve=>fixture.held.push(()=>{fixture.inFlight--;resolve(result);}));}
  if(!body){const result=structuredClone(fixture.status);if(fixture.deferGet){fixture.deferGet=false;return new Promise(resolve=>fixture.resolveRead=()=>resolve(result));}if(fixture.error)throw Error(fixture.error);return result;}
@@ -34,13 +35,23 @@ let host=makeHost('one');
 // artificial effect change; real DriveSettings uses useCallback as well.
 const isActive=()=>fixture.active;
 const mount=()=>react.render(<OwnedContext.Provider value={{root,app,portals}}><RelayAttachmentStorage host={host} isActive={isActive}/></OwnedContext.Provider>);
-fixture.switchHost=()=>{host=makeHost('two');mount();};
+fixture.switchHost=(id='two')=>{host=makeHost(id);mount();};
 fixture.useAndroid=()=>{fixture.platform='android';host=makeHost('android');mount();};
 mount();
 `;
-const bundle = web('esbuild').buildSync({ stdin: { contents: entry, resolveDir: webDir, loader: 'tsx' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, write: false, logLevel: 'silent' }).outputFiles[0].text;
+// AGENTNET_RELAY_STORAGE_SKIN=office: Office's overlay over Comic's source, as build.sh makes it.
+const skin = process.env.AGENTNET_RELAY_STORAGE_SKIN === 'office' ? 'office' : 'comic';
+let srcRoot = webDir;
+if (skin === 'office') {
+  srcRoot = path.join(work, 'office');
+  fs.cpSync(path.join(webDir, 'src'), path.join(srcRoot, 'src'), { recursive: true });
+  const overlay = path.resolve(webDir, '../skins/office/overlay');
+  for (const f of fs.readdirSync(overlay)) fs.copyFileSync(path.join(overlay, f), path.join(srcRoot, 'src/skin', f));
+  fs.symlinkSync(path.join(webDir, 'node_modules'), path.join(srcRoot, 'node_modules'), 'dir');
+}
+const bundle = web('esbuild').buildSync({ stdin: { contents: entry, resolveDir: srcRoot, loader: 'tsx' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, write: false, logLevel: 'silent' }).outputFiles[0].text;
 const cssFile = path.join(work, 'style.css');
-execFileSync(path.join(webDir, 'node_modules/.bin/tailwindcss'), ['-i', path.join(webDir, 'src/styles.css'), '-o', cssFile, '--minify'], { cwd: webDir, stdio: 'pipe' });
+execFileSync(path.join(webDir, 'node_modules/.bin/tailwindcss'), ['-i', path.join(srcRoot, 'src/styles.css'), '-o', cssFile, '--minify'], { cwd: srcRoot, stdio: 'pipe' });
 const css = fs.readFileSync(cssFile, 'utf8') + '\nbody{margin:0}.fixture{max-width:720px;margin-inline:auto;padding:16px}.an-root{height:auto;min-height:100vh}.an-app{height:auto}';
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
@@ -110,7 +121,7 @@ async function burstAndFailures(browser, origin) {
   await steady(10);
   await refresh.waitFor();
   assert.ok(await page.evaluate(() => fixture.held.length) >= 1, 'Refresh returns while events continue');
-  assert.ok(await page.evaluate(() => fixture.maxInFlight) <= 2, 'steady traffic keeps at most two reads in flight');
+  assert.ok(await page.evaluate(() => fixture.maxInFlight) <= 3, 'steady traffic keeps at most two background reads plus one manual read in flight');
   await page.evaluate(() => { fixture.holdAll = false; fixture.held.splice(0).forEach(done => done()); });
   await alert.waitFor({ state: 'detached' });
   // Refresh after another real network failure: the press clears the old
@@ -150,9 +161,71 @@ async function burstAndFailures(browser, origin) {
   await refresh.click();
   await alert.waitFor({ state: 'detached' });
   await refresh.waitFor();
+  // Refresh pressed while two background reads hang: it starts its own read
+  // at once, and the earlier reads' timeouts never bring back an error.
+  await page.evaluate(() => { fixture.hang = true; fixture.calls.length = 0; fixture.emit(); fixture.emit(); });
+  await page.waitForFunction(() => fixture.calls.length === 2);
+  await page.clock.runFor(5_000);
+  await refresh.click();
+  await page.waitForFunction(() => fixture.calls.length === 3);
+  await page.clock.runFor(25_500);
+  assert.equal(await alert.count(), 0, 'reads started before the press cannot show their timeout');
+  await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+  await page.clock.runFor(5_000);
+  await alert.waitFor();
+  assert.equal(await alert.count(), 1);
+  assert.equal(await alert.innerText(), 'No answer about workspace attachments yet. Refresh to try again.');
+  assert.equal(await refresh.isDisabled(), false, 'Refresh is usable when its own read ends');
+  await page.evaluate(() => { fixture.hang = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
+  // A queued follow-up of a replaced workspace never starts.
+  await page.evaluate(() => { fixture.holdAll = true; fixture.held.length = 0; fixture.switchHost('old'); });
+  await page.waitForFunction(() => fixture.held.length === 1);
+  await page.evaluate(() => { fixture.emit(); fixture.emit(); });
+  await page.waitForFunction(() => fixture.held.length === 2);
+  await page.evaluate(() => { fixture.oldReads = fixture.held.splice(0); fixture.holdAll = false; fixture.switchHost('new'); });
+  await page.waitForFunction(() => fixture.calls.some(c => c.id === 'new'));
+  await page.evaluate(() => fixture.oldReads.forEach(done => done()));
+  await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  assert.equal(await page.evaluate(() => fixture.calls.filter(c => c.id === 'old').length), 2, 'no follow-up read after its workspace was replaced');
+  // An action that never answers releases the card at the bound with a
+  // truthful message, and background reads do not clear that message.
+  await page.evaluate(() => { fixture.status = { ...fixture.base(), connected: true, state: 'connected' }; fixture.hangAction = true; fixture.emit(); });
+  const move = panel.getByRole('button', { name: 'Move existing attachments…', exact: true });
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].find(e => e.textContent === 'Move existing attachments…')?.disabled === false);
+  await move.click();
+  const dialog = page.getByRole('dialog', { name: 'Move existing relay attachments?', exact: true });
+  await dialog.getByRole('button', { name: 'Move attachments', exact: true }).click();
+  await panel.getByRole('button', { name: 'Starting move…', exact: true }).waitFor();
+  assert.equal(await refresh.isDisabled(), true);
+  await page.clock.runFor(30_000);
+  await alert.waitFor();
+  assert.equal(await alert.innerText(), 'No answer about this change yet. Refresh to see whether it happened.');
+  assert.equal(await refresh.isDisabled(), false, 'a silent action does not lock the card');
+  const beforeEvents = await page.evaluate(() => fixture.calls.length);
+  for (let i = 0; i < 5; i++) await page.evaluate(() => fixture.emit());
+  await page.waitForFunction(n => fixture.calls.length > n, beforeEvents);
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  assert.equal(await alert.innerText(), 'No answer about this change yet. Refresh to see whether it happened.', 'background reads keep the action error');
+  // An action rejected at the network says it could not be confirmed.
+  await page.evaluate(() => { fixture.hangAction = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
+  await page.route('**/api/storage/attachments', route => route.abort('failed'));
+  await page.evaluate(() => { fixture.real = true; });
+  await move.click();
+  await dialog.getByRole('button', { name: 'Move attachments', exact: true }).click();
+  await alert.waitFor();
+  assert.equal(await alert.innerText(), 'This change couldn’t be confirmed. Refresh to see whether it happened.');
+  await page.unroute('**/api/storage/attachments');
+  await page.evaluate(() => { fixture.real = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
   await context.close();
-  console.log(`390 light burst PASS (Refresh feedback ${Math.round(feedback)} ms): real fetch failure is named truthfully, 300 change events → 2 reads + 1 follow-up, steady events still land reads and return Refresh, Refresh stays usable, clears the error at once and retries; a silent read ends at the 30 s bound`);
+  console.log(`390 light burst PASS (Refresh feedback ${Math.round(feedback)} ms): real fetch failure is named truthfully, 300 change events → 2 reads + 1 follow-up, steady events still land reads and return Refresh, Refresh stays usable, clears the error at once and retries; a silent read ends at the 30 s bound; Refresh over hung reads owns its own result; no follow-up after a workspace change; silent/failed actions release the card and keep their message (${skin})`);
 }
 
 (async () => {
@@ -378,7 +451,7 @@ async function burstAndFailures(browser, origin) {
       assert.deepEqual(errors, []); assert.deepEqual(external, []);
       assert.ok((await page.evaluate(() => fixture.calls)).every(c => c.url === '/api/storage/attachments'));
       await context.close();
-      console.log(`${width} ${theme} PASS: members status-only; admin consent/confirmations; progress; remote-only and stale-response guards; keyboard, overflow, no polling/provider calls`);
+      console.log(`${skin} ${width} ${theme} PASS: members status-only; admin consent/confirmations; progress; remote-only and stale-response guards; keyboard, overflow, no polling/provider calls`);
     }
   } finally {
     await browser?.close();

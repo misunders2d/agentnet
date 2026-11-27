@@ -4487,6 +4487,19 @@ ends with "No answer about workspace attachments yet. Refresh to try again." A
 request with no HTTP answer says "Workspace attachment status couldn’t be read
 just now. Refresh to try again."; HTTP refusals keep their own words.
 
+Review follow-up (same release line). A manual Refresh drops answers to reads
+started before the press and starts its own read at once, one past the cap, so a
+pre-press timeout can no longer bring back the cleared error while Refresh stays
+disabled. Unmounting or switching workspace replaces the lane, so a queued
+follow-up never starts afterwards. Move, Connect and Disconnect have the same
+30 s bound: a silent change says "No answer about this change yet. Refresh to see
+whether it happened."; a change rejected at the network says "This change
+couldn’t be confirmed. Refresh to see whether it happened." Neither claims done
+or failed. An action's message is kept apart from read errors: background reads
+never clear it; the next action or a manual Refresh does. `host.api` takes no
+AbortSignal (skin contract), so a call past the bound keeps running in the host
+and its late answer is ignored.
+
 `TestRelayAttachmentStorageRendered` (390 px, Chromium, fake clock): a real
 `fetch` aborted at the network gives the truthful alert with Refresh usable; 300
 change events start 2 reads plus exactly 1 follow-up, Refresh stays enabled and
@@ -4500,6 +4513,19 @@ candidate (alert text; with that removed, 300 reads in flight) and on the first
 lane (steady events never landed a read). "Keyboard dismissal returns focus" in
 the default run fails intermittently at different views, on the unchanged
 candidate too (3 of 3 runs with Playwright 1.65.1); not addressed.
+
+The follow-up adds rendered cases: Refresh pressed 5 s into two hung reads shows
+no alert at 30.5 s and its own timeout alert, with Refresh enabled, at 35.5 s; a
+replaced workspace's queued follow-up never reads; a silent Move releases the card
+at 30 s with its message, which five background reads keep; a network-rejected
+Move says it could not be confirmed. On the previous lane the first case fails
+(the press starts no read) and the silent Move never alerts. The whole fixture
+also runs with the Office overlay and CSS (`AGENTNET_RELAY_STORAGE_SKIN=office`):
+default (all six views), member and Move variants pass, Playwright 1.66.0-alpha.
+
+Outstanding: none of this ran in Android WebView or on a phone. A device check of
+You → Storage during a large history copy (both labels, the card's alert and
+Refresh) remains open.
 
 Storage on Android now says "On this phone" in the stat tile and the section
 header (`store.host.platform`, as the same file's workspace and runs-as lines
