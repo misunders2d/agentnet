@@ -32,7 +32,7 @@ export function groupRights(t: T.DMThread | null, o: T.Overview | null) {
   return { member, admin, builtIn };
 }
 
-export const BUILT_IN_NOTE = "This is your built-in group where your own agents talk with you and each other. It can’t be left.";
+export const BUILT_IN_NOTE = "This is your built-in group where your own agents talk with you and each other. It can’t be renamed or left.";
 
 /** GroupChangeSheet asks for one group change in plain words and makes it. */
 export function GroupChangeSheet({ open, onOpenChange, t, action, member }: {
@@ -165,11 +165,12 @@ export function MemberMenu({ t, member, me, onPick }: { t: T.DMThread; member: T
 }
 
 /** GroupFooter: "Rename group…" for an admin and "Leave group…" for anyone
- * in it; the built-in "My agents" group says what it is instead of Leave. */
+ * in it; the built-in "My agents" group says what it is instead (its agents
+ * find it by name, so it keeps it: owner, 2026-11-27). */
 export function GroupFooter({ admin, builtIn = false, onPick }: { admin: boolean; builtIn?: boolean; onPick: (a: GroupAction) => void }) {
   return (
     <div className="mt-2.5 flex flex-wrap gap-2">
-      {admin && <Button size="sm" variant="outline" icon={<IconPencil size={18} />} onClick={() => onPick("rename")}>Rename group…</Button>}
+      {admin && !builtIn && <Button size="sm" variant="outline" icon={<IconPencil size={18} />} onClick={() => onPick("rename")}>Rename group…</Button>}
       {builtIn ? <p className="w-full text-[13px] text-muted" data-built-in-group>{BUILT_IN_NOTE}</p>
         : <Button size="sm" variant="danger" icon={<IconDoorExit size={18} />} onClick={() => onPick("leave")}>Leave group…</Button>}
     </div>

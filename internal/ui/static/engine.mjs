@@ -5869,6 +5869,9 @@ export class Engine {
   async manageGroup(change) {
     if(!change||typeof change!=="object"||Array.isArray(change)||Object.keys(change).some(k=>!["conv","action","title","person"].includes(k))||!["rename","promote","demote","remove","leave"].includes(change.action))throw Error("Unknown group action.");
     if(change.action==="rename"?change.person:change.action==="leave"?change.person||change.title:change.title||!change.person)throw Error("Group action has unexpected target fields.");
+    // The person's "My agents" room keeps its name and its person: their
+    // agents find it by name (owner, 2026-11-27; client.ErrBuiltInGroup).
+    if((change.action==="rename"||change.action==="leave")&&await this.builtInGroup(change.conv))throw Error("My agents is your built-in group for your own agents: it can't be renamed or left.");
     if(change.action==="leave")return this.leaveGroup(change.conv);
     const checks=[],{packet,g}=await this.groupTurnEvidence(change.conv,checks), me=await this.groupRead(checks,"kv","person"), member=wire.groupMember(packet.state,me.person);
     if(!member?.admin)throw Error("Current person administrator required.");
@@ -5886,6 +5889,15 @@ export class Engine {
     const next={root:packet.root,proof:null,state:await wire.signGroupState(this.keys,state),withdrawals};
     const terminal=change.action==="remove"&&change.person!==me.person?await this.prepareGroupTerminal(packet,next,change.person,g,checks,packet.withdrawals):null;
     await this.publishGroupPacket(next,null,checks,terminal);return {queued:false};
+  }
+
+  // builtInGroup: conv is the person's "My agents" room, chosen as
+  // client.MyAgentsRoom chooses it (the oldest solo group of theirs by that title).
+  async builtInGroup(conv) {
+    const o=await this.overview(),me=o.person?.person;if(!me)return false;
+    const at=d=>Date.parse(d.created)||0;
+    const room=(o.dms||[]).filter(d=>d.kind==="group"&&d.title==="My agents"&&!d.frozen&&d.members?.length===1&&d.members[0].person===me).sort((a,b)=>at(a)-at(b)||(a.id<b.id?-1:1))[0];
+    return !!room&&room.id===conv;
   }
 
   async leaveGroup(conv) {

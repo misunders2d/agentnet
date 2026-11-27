@@ -85,6 +85,33 @@ func (a *Agent) MyAgentsRoom(ctx context.Context) (string, error) {
 	if !found {
 		return "", errors.New("this device has no person yet")
 	}
+	id, err := a.myAgentsRoomID(me.Person)
+	if err != nil || id != "" {
+		return id, err
+	}
+	packet, err := a.CreateGroup(ctx, MyAgentsRoomTitle)
+	if err != nil {
+		return "", err
+	}
+	return packet.State.Conv, nil
+}
+
+// ErrBuiltInGroup refuses renaming or leaving the person's "My agents" room:
+// their agents find it by that name (owner, 2026-11-27, MEL-842).
+var ErrBuiltInGroup = errors.New("My agents is your built-in group for your own agents: it can't be renamed or left")
+
+// builtInGroup reports whether conv is this person's "My agents" room.
+func (a *Agent) builtInGroup(conv string) (bool, error) {
+	me, found, err := a.Person()
+	if err != nil || !found {
+		return false, err
+	}
+	id, err := a.myAgentsRoomID(me.Person)
+	return err == nil && id != "" && id == conv, err
+}
+
+// myAgentsRoomID is the existing "My agents" room of person, or "".
+func (a *Agent) myAgentsRoomID(person string) (string, error) {
 	convs, err := a.Conversations()
 	if err != nil {
 		return "", err
@@ -92,21 +119,17 @@ func (a *Agent) MyAgentsRoom(ctx context.Context) (string, error) {
 	var room *ConversationInfo
 	for i, c := range convs {
 		if c.Kind != protocol.ConvKindGroup || c.Title != MyAgentsRoomTitle || c.Deleted || c.Frozen != "" ||
-			len(c.Members) != 1 || c.Members[0].Person != me.Person {
+			len(c.Members) != 1 || c.Members[0].Person != person {
 			continue
 		}
 		if room == nil || c.Created < room.Created || c.Created == room.Created && c.ID < room.ID {
 			room = &convs[i]
 		}
 	}
-	if room != nil {
-		return room.ID, nil
+	if room == nil {
+		return "", nil
 	}
-	packet, err := a.CreateGroup(ctx, MyAgentsRoomTitle)
-	if err != nil {
-		return "", err
-	}
-	return packet.State.Conv, nil
+	return room.ID, nil
 }
 
 // agentRoomTopic is the job's topic: the replied-to message's topic, else

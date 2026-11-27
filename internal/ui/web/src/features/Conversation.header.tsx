@@ -239,7 +239,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite, onContinue }: { ctx:
               {latest && (
                 <Menu.Item className={item} onClick={() => setRemind(true)}><IconAlarm size={20} />{latestReminder ? "Change reminder…" : "Remind me about this chat…"}</Menu.Item>
               )}
-              {rights.admin && <Menu.Item className={item} onClick={() => change.pick("rename")}><IconPencil size={20} />Rename group…</Menu.Item>}
+              {rights.admin && !rights.builtIn && <Menu.Item className={item} onClick={() => change.pick("rename")}><IconPencil size={20} />Rename group…</Menu.Item>}
               {grants && th && (th.approved
                 ? <Menu.Item className={item} onClick={() => setGrant("unapprove")}><IconMessagePause size={20} />Stop answering their questions automatically…</Menu.Item>
                 : <Menu.Item className={item} onClick={() => setGrant("approve")}><IconMessageCheck size={20} />Answer their questions automatically…</Menu.Item>)}

@@ -88,10 +88,11 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   await page.goto('http://127.0.0.1:'+server.address().port+'/?action=builtin');
   const panel=width===390?page.getByRole('dialog',{name:'In this chat',exact:true}):page.getByRole('complementary',{name:'In this chat'});
   await page.getByRole('button',{name:'Open members',exact:true}).click();await panel.waitFor();
-  await panel.getByText('This is your built-in group where your own agents talk with you and each other. It can’t be left.',{exact:true}).waitFor();
+  await panel.getByText('This is your built-in group where your own agents talk with you and each other. It can’t be renamed or left.',{exact:true}).waitFor();
   assert.equal(await panel.getByRole('button',{name:'Leave group…',exact:true}).count(),0,'no Leave in My agents');
   assert.equal(await page.evaluate(()=>fixture.rights().builtIn),true);
-  await panel.getByRole('button',{name:'Rename group…',exact:true}).waitFor();
+  // Its agents find it by name: no Rename either (owner, 2026-11-27).
+  assert.equal(await panel.getByRole('button',{name:'Rename group…',exact:true}).count(),0,'no Rename in My agents');
   assert.deepEqual(errors,[]);await page.close();
  }
  // Only the one room the agents use is built in: a newer look-alike solo
@@ -103,7 +104,8 @@ const server=http.createServer((req,res)=>{if(req.url==='/entry.mjs'){res.setHea
   await page.getByRole('button',{name:'Open members',exact:true}).click();await panel.waitFor();
   assert.equal(await page.evaluate(()=>fixture.rights().builtIn),false,'a look-alike is not built in');
   await panel.getByRole('button',{name:'Leave group…',exact:true}).waitFor();
-  assert.equal(await panel.getByText('It can’t be left.',{exact:false}).count(),0);
+  await panel.getByRole('button',{name:'Rename group…',exact:true}).waitFor();
+  assert.equal(await panel.getByText('It can’t be renamed or left.',{exact:false}).count(),0);
   assert.deepEqual(errors,[]);await page.close();
  }
  {

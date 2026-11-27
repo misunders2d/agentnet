@@ -13,8 +13,9 @@ This record starts with v0.8.1; earlier releases remain on the
 - A cancelled invitation disappears right away, even before you have joined
   the group (MEL-841). Before, the cancellation waited until you accepted,
   so a cancelled invitation still showed and could be accepted.
-- "My agents" is your built-in group for your agents. It no longer offers
-  Leave, and says what it is (MEL-842). A group change that was refused can
+- "My agents" is your built-in group for your agents. It can no longer be
+  left or renamed, since your agents find it by name, and it says what it is
+  (MEL-842). A group change that was refused can
   now be dismissed instead of staying on screen.
 - Settings → Coding agents → Desktop chats connects an open Claude chat or a
   recent Codex Desktop chat as one of your agents, with a confirmation
