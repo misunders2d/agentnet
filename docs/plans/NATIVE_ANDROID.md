@@ -201,7 +201,7 @@ are recorded above; actual QR image decoding remains untested.
 
 ### Build instructions
 
-Requirements: JDK 17, Android SDK 35/build-tools 35.0.0, NDK 28.2.13676358,
+Requirements: JDK 17, Android SDK 36/build-tools 36.0.0, NDK 28.2.13676358,
 Go 1.26.8. Gradle 8.11.1 and its SHA-256 are pinned in the wrapper; AGP 8.9.2
 and Kotlin 2.1.20 are pinned. The separate `mobile/tools` module pins x/mobile;
 the Android runtime adds the pinned SQLite driver described below. Official build references:
