@@ -246,8 +246,7 @@ func TestDeleteEmptyDMOnAllOwnDevices(t *testing.T) {
 	if after := people(w.alice); after != before {
 		t.Fatalf("the people changed:\n%s\n%s", before, after)
 	}
-	var markers int
-	w.alice.store.db.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&markers)
+	markers := count(t, w.alice, "conv_erased WHERE conv = '"+conv+"'")
 	if _, err := w.alice.DeleteConversation(tctx(t), conv); !errors.Is(err, ErrNothingToDelete) {
 		t.Fatalf("a second deletion: %v", err)
 	}

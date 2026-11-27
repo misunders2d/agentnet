@@ -43,7 +43,9 @@ overview, deleted with a note, gone from the next overview, people kept);
 desk and the linked phone, people kept, a repeat adds no marker, a turn
 brings it back; the phone's root is seeded as root-sync leaves it, and no
 new-chat step).
-Each new check fails on the code before the fix with the reported refusal.
+Three of the four new checks (client, ui `Live`, browser) fail on the code before
+the fix with the reported refusal; the empty-group lines pass there too, and
+guard that refusal.
 Not rerun: the rendered latency suite (web code unchanged); not checked on the
 real installed app.
 

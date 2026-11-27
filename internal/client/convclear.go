@@ -137,11 +137,18 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	} else if !found {
 		return ConversationDeleted{}, ErrNoConversation
 	}
-	family, err := a.continuityDMs(conv) // read before the transaction
-	if err != nil {
-		return ConversationDeleted{}, err
-	}
 	selfFP := a.Self().Fingerprint()
+	// A recovered person's chat shows its earlier DMs too: read its family
+	// only when this row holds no turn, before the transaction.
+	var family []ConversationInfo
+	empty := false
+	if turns, err := convTurns(a.store.db, conv, selfFP); err != nil {
+		return ConversationDeleted{}, err
+	} else if empty = len(turns) == 0; empty {
+		if family, err = a.continuityDMs(conv); err != nil {
+			return ConversationDeleted{}, err
+		}
+	}
 	out := ConversationDeleted{Deletion: protocol.NewID()}
 	tx, err := a.store.db.Begin()
 	if err != nil {
@@ -162,7 +169,7 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 		if err := tx.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&erased); err != nil {
 			return out, err
 		}
-		if erased > 0 || root.Kind != protocol.ConvKindDM || len(family) > 1 {
+		if erased > 0 || !empty || root.Kind != protocol.ConvKindDM || len(family) > 1 { // !empty: its turns went meanwhile
 			return out, ErrNothingToDelete
 		}
 		turns, marker = []envelope.Ref{{Fingerprint: selfFP, ID: out.Deletion}}, true
