@@ -96,6 +96,13 @@ func groupDeliveryRecipient(q dbq, packet GroupContext, address, fp string) erro
 	if err := groupDeliveryHead(q, packet); err != nil {
 		return err
 	}
+	return groupRecipientListed(q, packet, address, fp)
+}
+
+// groupRecipientListed is groupDeliveryRecipient without the head fence:
+// whether packet lists the device as a current member, withdrawn
+// (errGroupRecipientWithdrawn) or not at all (errGroupRecipientNotCurrent).
+func groupRecipientListed(q dbq, packet GroupContext, address, fp string) error {
 	if have, e := hasContinuity(q); e != nil {
 		return e
 	} else if !have {

@@ -895,16 +895,21 @@ func TestGroupRemovedSenderTurnStaysRefused(t *testing.T) {
 // no newer context; re-invited with no history, the reader still never
 // sees it.
 func TestGroupRemovedReaderTurnStaysRefused(t *testing.T) {
-	t.Run("context", func(t *testing.T) { removedReaderTurn(t, false, false) })
+	t.Run("context", func(t *testing.T) { removedReaderTurn(t, false, "") })
 	// Codex review (P2): the readmission's newer proof head is known before
 	// its context; the removal installed here still refuses the turn first.
-	t.Run("proof-before-context", func(t *testing.T) { removedReaderTurn(t, true, false) })
+	t.Run("proof-before-context", func(t *testing.T) { removedReaderTurn(t, true, "") })
 	// agy re-check: an administrator reader that left by itself (its own
 	// removal: no terminal proof, itself the actor) is out just the same.
-	t.Run("self-leave", func(t *testing.T) { removedReaderTurn(t, false, true) })
+	t.Run("self-leave", func(t *testing.T) { removedReaderTurn(t, false, "admin") })
+	// agy re-check: an ordinary member that left by its own withdrawal is
+	// still listed by its context, withdrawn; it is out just the same.
+	t.Run("member-leave-proof-before-context", func(t *testing.T) { removedReaderTurn(t, true, "member") })
 }
 
-func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
+// removedReaderTurn: the reader is removed by the administrator (leave ""),
+// leaves as an administrator ("admin") or as an ordinary member ("member").
+func removedReaderTurn(t *testing.T, proofFirst bool, leave string) {
 	w, p := groupLifecycleFixture(t, false)
 	runAgent(t, w.alice)
 	publishGroupFixtureCaps(t, w.alice, true)
@@ -921,7 +926,16 @@ func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selfLeave {
+	if leave == "member" {
+		stopB() // its withdrawal waits queued: its context still lists it, withdrawn
+		if left, e := w.bob.LeaveGroup(tctx(t), conv); e != nil || left.Withdrawal == nil {
+			t.Fatalf("member leave: %+v %v", left, e)
+		}
+		got, e := w.bob.GroupContext(conv)
+		if _, listed := got.State.Member(bob.Person); e != nil || !listed || !errors.Is(groupRecipientListed(w.bob.store.db, got, w.bob.Address, w.bob.Self().Fingerprint()), errGroupRecipientWithdrawn) {
+			t.Fatalf("fixture: the leaving member is not listed withdrawn: %v", e)
+		}
+	} else if leave == "admin" {
 		if _, err = w.alice.PromoteGroupMember(tctx(t), conv, bob.Person); err != nil {
 			t.Fatal(err)
 		}
@@ -936,11 +950,13 @@ func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 	} else if _, err = w.alice.RemoveGroupMember(tctx(t), conv, bob.Person); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "removal at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
-	// The re-invitation below must follow the removal at the inviter too,
-	// or it is made on the older context and goes stale.
-	eventually(t, "removal at the inviter", func() bool { got, e := w.alice.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
-	stopB()
+	if leave != "member" {
+		eventually(t, "removal at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
+		// The re-invitation below must follow the removal at the inviter too,
+		// or it is made on the older context and goes stale.
+		eventually(t, "removal at the inviter", func() bool { got, e := w.alice.GroupContext(conv); return e == nil && len(got.State.Members) == 1 })
+		stopB()
+	}
 	root, _, _, err := w.alice.store.conversation(conv)
 	if err != nil {
 		t.Fatal(err)
@@ -976,6 +992,9 @@ func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 		}
 	}
 	runAgent(t, w.bob)
+	if leave == "member" {
+		eventually(t, "withdrawal at the inviter", func() bool { pins, e := w.alice.groupWithdrawals(conv); return e == nil && len(pins) > 0 })
+	}
 	again, err := w.alice.InviteGroup(tctx(t), conv, bob.Person, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -984,7 +1003,11 @@ func removedReaderTurn(t *testing.T, proofFirst, selfLeave bool) {
 	if err = w.bob.DecideGroupInvitation(tctx(t), again.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "member again at the reader", func() bool { got, e := w.bob.GroupContext(conv); return e == nil && len(got.State.Members) == 2 })
+	eventually(t, "member again at the reader", func() bool {
+		got, e := w.bob.GroupContext(conv)
+		_, listed := got.State.Member(bob.Person)
+		return e == nil && listed && got.State.Seq > packet.State.Seq && groupRecipientListed(w.bob.store.db, got, w.bob.Address, w.bob.Self().Fingerprint()) == nil
+	})
 	for w.bob.retryProof(tctx(t)) {
 	}
 	if got := heldReason(t, w.bob, turn.ID); got != reasonInvalid {

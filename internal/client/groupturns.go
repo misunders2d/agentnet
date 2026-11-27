@@ -559,7 +559,9 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	removedReader := func(q dbq, current GroupContext) error {
 		_, listed := current.State.Member(me.roster.Person)
 		left := !listed && current.State.Actor == me.roster.Person
-		if in.Human == nil && (left || groupRemovalNotice(q, current, me.roster.Person) != "") {
+		// A member that left by its own withdrawal is still listed, withdrawn.
+		withdrawn := listed && errors.Is(groupRecipientListed(q, current, a.Address, a.Self().Fingerprint()), errGroupRecipientWithdrawn)
+		if in.Human == nil && (left || withdrawn || groupRemovalNotice(q, current, me.roster.Person) != "") {
 			return errGroupReaderRemoved
 		}
 		return nil
