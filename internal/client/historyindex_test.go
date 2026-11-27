@@ -1,6 +1,7 @@
 package client
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,12 +55,26 @@ func TestHistoryDedupIndexUpgrade(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	// Today's control query also reads inbox.steering_parent, a column a later
+	// step adds. Lend it to the old store for this read only, then take it
+	// back, so the upgrade below still adds it as a real store would.
+	lent := !hasColumn(t, db, "inbox", "steering_parent")
+	if lent {
+		if _, err = db.Exec(`ALTER TABLE inbox ADD COLUMN steering_parent TEXT`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	start := time.Now()
 	before, err := s.convControls("busy", "self/device", "self-key")
 	if err != nil || len(before) != turns {
 		t.Fatalf("before controls=%d err=%v", len(before), err)
 	}
 	beforeTime := time.Since(start)
+	if lent {
+		if _, err = db.Exec(`ALTER TABLE inbox DROP COLUMN steering_parent`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -91,4 +106,15 @@ func TestHistoryDedupIndexUpgrade(t *testing.T) {
 	if err = rows.Err(); err != nil || !indexed {
 		t.Fatalf("dedup lacks indexed conv/lid lookup: indexed=%v err=%v", indexed, err)
 	}
+}
+
+func hasColumn(t *testing.T, db interface {
+	QueryRow(string, ...any) *sql.Row
+}, table, column string) bool {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n > 0
 }
