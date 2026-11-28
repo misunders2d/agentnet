@@ -1194,7 +1194,10 @@ July 14, 2021). Both posts were read on November 27.
   the window. The copies go again in version 2 parts and the receiver's
   admission drops any it already has. A copy whose embedded group file
   was released on acceptance cannot be repacked; it is marked not
-  delivered, so history catch-up seals it afresh.
+  delivered, so history catch-up seals it afresh. A copy erased here since
+  keeps its old part's requirements, group-context catch-up scans again,
+  and a receiver closes its unfinished version 1 imports (their sources
+  send every copy again).
 - A part packed by the browser or Android engine holds at most 500
   copies. Packing a part, and the receipt that settles it, is one
   IndexedDB transaction over its copies, and live sends wait behind it;

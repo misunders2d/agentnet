@@ -200,13 +200,27 @@ func (a *Agent) archiveStep(ctx context.Context) (more bool, err error) {
 // part is accepted) become not_delivered, so history catch-up seals them
 // afresh. Unsent descriptors stop counting as in flight. A part already at
 // the relay keeps its state; its receipt no longer moves any child.
-const historyArchiveV2Schema = `UPDATE outbox SET
+// An erased copy (empty body) cannot be classified again when it repacks,
+// so it first takes its old part's requirements, as an expired part's
+// children do through history_archive_entries. Group-context catch-up
+// scans again for the copies sent afresh. On a receiver, unfinished
+// version 1 imports are closed: every source sends them again.
+const historyArchiveV2Schema = `UPDATE outbox AS o SET
+ required_cap=coalesce((SELECT m.required_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),o.required_cap),
+ mention_cap=o.mention_cap OR coalesce((SELECT m.mention_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0),
+ organization_cap=o.organization_cap OR coalesce((SELECT m.organization_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0),
+ shared_title_cap=o.shared_title_cap OR coalesce((SELECT m.shared_title_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0),
+ resources_cap=o.resources_cap OR coalesce((SELECT m.resources_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0)
+ WHERE o.state IN ('archive_staged','archive_accepted') AND coalesce(o.body,'')='' AND o.id IN (SELECT child FROM history_archive_entries);
+UPDATE outbox SET
  state=CASE WHEN json_array_length(json_extract(envelope,'$.blobs'))>0 THEN 'not_delivered' ELSE 'archive_staged' END,
  error=CASE WHEN json_array_length(json_extract(envelope,'$.blobs'))>0 THEN 'not delivered: copied again in a version 2 history part' END
  WHERE state IN ('archive_staged','archive_accepted') AND id IN (SELECT child FROM history_archive_entries);
 DELETE FROM history_archive_entries;
 UPDATE outbox SET state='not_delivered', error='not delivered: replaced by a version 2 history part'
- WHERE sub='history-archive' AND state IN ('queued','waiting','archive_uploading');`
+ WHERE sub='history-archive' AND state IN ('queued','waiting','archive_uploading');
+UPDATE history_catchup SET context_done=0, context_pos='';
+UPDATE history_archive_jobs SET done=1 WHERE done=0;`
 
 const archiveInFlight = `('archive_uploading','queued','waiting','custody')`
 

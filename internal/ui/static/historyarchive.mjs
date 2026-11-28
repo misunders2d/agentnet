@@ -63,6 +63,9 @@ export async function parseArchiveChunk(bytes,count){
   }
   return chunk;
 }
+// A child staged again after its part ends keeps that part's requirements:
+// an erased copy can no longer be classified from its plaintext.
+const inherited=(child,job)=>({resources_cap:!!(child.resources_cap||job.resources_cap),shared_title_cap:!!(child.shared_title_cap||job.shared_title_cap),mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})});
 export function historyArchive(e,Hold,StoreConflict,retryable){
   async function authority(manifest,from,key,checks=[]){
     return e.readSyncAuthority(manifest,from,key,e.address,e.fp,checks);
@@ -118,7 +121,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
         if(!child||child.archive_chunk!==job.id||!['archive_staged','archive_accepted'].includes(child.state))continue;
         checks.push({s:'outbox',k:id,v:child});
         const released=(child.files||[]).some(f=>!f.ct);
-        ops.push({s:'outbox',k:id,v:{...child,archive_chunk:'',...(released?{state:'not_delivered',detail:'Copied again in a version 2 history part.'}:{state:'archive_staged'})}});
+        ops.push({s:'outbox',k:id,v:{...child,archive_chunk:'',...(released?{state:'not_delivered',detail:'Copied again in a version 2 history part.'}:{state:'archive_staged',...inherited(child,job)})}});
       }
       const descriptor=await e.store.get('outbox',job.id);
       if(descriptor&&['queued','waiting','archive_uploading'].includes(descriptor.state)){
@@ -128,6 +131,12 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       ops.push({s:'kv',k:outgoing+job.id,v:{...job,ct:null,children:[],state:['prepared','published'].includes(job.state)?'expired':job.state,swept:true}});
       if(job.state==='prepared')ops.push({s:'files',k:'archive-out/'+job.id,v:undefined});
       try{await e.store.write(ops,checks);}catch(error){if(error instanceof StoreConflict)return;throw error;}
+    }
+    // A version 1 part still importing here can never be read again; its
+    // source sends every copy in it again, so the job closes.
+    for(const job of await e.store.prefix('kv',incoming)){
+      if(job.state==='done'||job.manifest?.format===wire.HistoryArchiveFormat)continue;
+      try{await e.store.write([{s:'kv',k:incoming+job.id,v:{...job,state:'done',error:''}},{s:'files',k:'archive/'+job.id,v:undefined}],[{s:'kv',k:incoming+job.id,v:job}]);}catch(error){if(error instanceof StoreConflict)return;throw error;}
     }
     e.archiveSwept=true;
   }
@@ -203,7 +212,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           // The sealed part lives in the files store until it is uploaded:
           // job rows are scanned on every wake and stay small.
           await e.store.write([{
-            s:'files',k:'archive-out/'+id,v:{ct:sealed.ct}
+            s:'files',k:'archive-out/'+id,v:{ct:sealed.ct,history_part:true}
           },{
             s:'kv',k:outgoing+id,v:{
               id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,attachment:sealed.attachment,required_cap,mention_cap,organization_cap,shared_title_cap,resources_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
@@ -301,6 +310,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
     }
   }
   async function importPass(){
+    await sweepVersion1();
     for(let job of (await e.store.prefix('kv',incoming)).sort((a,b)=>(a.order??0)-(b.order??0)||a.id.localeCompare(b.id))){
       if(e.closing)return;
       if(job.state==='done')continue;
@@ -417,7 +427,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       checks.push({s:'outbox',k:id,v:child});
       if(['archive_staged','not_delivered'].includes(child?.state)&&child.archive_chunk===row.id)ops.push({
         s:'outbox',k:id,v:{
-          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',resources_cap:!!(child.resources_cap||job.resources_cap),shared_title_cap:!!(child.shared_title_cap||job.shared_title_cap),mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
+          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',...inherited(child,job)}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
         }
       });
     }

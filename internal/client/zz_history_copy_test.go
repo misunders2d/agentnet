@@ -342,3 +342,60 @@ func TestHistorySourcePagePerSideLimitMatchesWholeOrder(t *testing.T) {
 		}
 	}
 }
+
+// The upgrade step keeps an erased copy's part requirements, restarts the
+// group-context catch-up scan, and closes unfinished version 1 imports.
+func TestHistoryArchiveUpgradeStepKeepsRequirementsAndClosesOldImports(t *testing.T) {
+	_, a, phone, _ := archiveFixture(t, 1)
+	fp := phone.Self().Fingerprint()
+	exec := func(st *store, q string, args ...any) {
+		t.Helper()
+		if _, err := st.db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, erased, kept := protocol.NewID(), protocol.NewID(), protocol.NewID()
+	exec(a.store, `INSERT INTO outbox(id,recipient,body,envelope,state,created_at,sub,recipient_fp,required_cap,mention_cap,organization_cap) VALUES(?,?,'','{}',?,1,?,?,'ha1+flw2',1,1)`, part, phone.Address, protocol.StateDelivered, envelope.SubHistoryArchive, fp)
+	for _, c := range []struct{ id, body string }{{erased, ""}, {kept, "plaintext still here"}} {
+		exec(a.store, `INSERT INTO outbox(id,recipient,body,envelope,state,created_at,sub,recipient_fp,required_cap) VALUES(?,?,?,'{}',?,1,?,?,'own3')`, c.id, phone.Address, c.body, archiveAccepted, envelope.SubHistory, fp)
+		exec(a.store, `INSERT INTO history_archive_entries(child,manifest) VALUES(?,?)`, c.id, part)
+	}
+	exec(a.store, `INSERT INTO history_catchup(device,fingerprint,phase,pos,inbox_ceiling,outbox_ceiling,tail,context_pos,context_done) VALUES(?,?,'done','{}',0,0,0,'scanned-to-here',1)`, phone.Address, fp)
+	unfinished, finished := protocol.NewID(), protocol.NewID()
+	exec(phone.store, `INSERT INTO history_archive_jobs(id,envelope,source_fp,retained,pos,done) VALUES(?,'{}',?,1,7,0),(?,'{}',?,1,9,1)`, unfinished, a.Self().Fingerprint(), finished, a.Self().Fingerprint())
+
+	exec(a.store, historyArchiveV2Schema)
+	exec(phone.store, historyArchiveV2Schema)
+
+	t.Run("erased copy keeps its part requirements", func(t *testing.T) {
+		for _, c := range []struct{ id, required string }{{erased, "ha1+flw2"}, {kept, "own3"}} {
+			var state, required string
+			var mention, organization bool
+			if err := a.store.db.QueryRow(`SELECT state,required_cap,mention_cap,organization_cap FROM outbox WHERE id=?`, c.id).Scan(&state, &required, &mention, &organization); err != nil {
+				t.Fatal(err)
+			}
+			if state != archiveStaged || required != c.required || (c.id == erased) != (mention && organization) {
+				t.Fatalf("%s: state=%s required=%s mention=%v organization=%v, want staged %s", c.id, state, required, mention, organization, c.required)
+			}
+		}
+	})
+	t.Run("group context scan restarts", func(t *testing.T) {
+		var pos string
+		var done bool
+		if err := a.store.db.QueryRow(`SELECT context_pos,context_done FROM history_catchup WHERE device=? AND fingerprint=?`, phone.Address, fp).Scan(&pos, &done); err != nil {
+			t.Fatal(err)
+		}
+		if pos != "" || done {
+			t.Fatalf("context scan not reset: pos=%q done=%v", pos, done)
+		}
+	})
+	t.Run("unfinished version 1 imports close", func(t *testing.T) {
+		var open int
+		if err := phone.store.db.QueryRow(`SELECT count(*) FROM history_archive_jobs WHERE done=0`).Scan(&open); err != nil {
+			t.Fatal(err)
+		}
+		if open != 0 {
+			t.Fatalf("%d version 1 imports still open", open)
+		}
+	})
+}

@@ -69,7 +69,7 @@ const write=desk.store.write.bind(desk.store),packs=[];let widest=0;
 desk.store.write=async(ops,c)=>{
  const outbox=ops.filter(o=>o.s==='outbox').length,job=ops.find(o=>o.s==='kv'&&o.k.startsWith('history-archive/out/')&&o.v?.state==='prepared'&&!o.v.attachment?.uploaded);
  const started=performance.now(),out=await write(ops,c);
- if(job&&ops.some(o=>o.s==='files'))packs.push({children:job.v.children.length,commit_ms:performance.now()-started});
+ if(job&&ops.some(o=>o.s==='files'))packs.push({children:job.v.children.length,commit_ms:performance.now()-started,marked:ops.find(o=>o.s==='files').v.history_part===true});
  if(ops.some(o=>o.s==='kv'&&o.k.startsWith('history-archive/out/')))widest=Math.max(widest,outbox);
  return out;
 };
@@ -122,7 +122,9 @@ const waitingV1=jobs.find(j=>j.id!==full.id&&j.children.length===wire.HistoryArc
 const v1=job=>{const {format,...manifest}=job.manifest;return manifest;};
 const acceptedJob=await desk.store.get('kv','history-archive/out/'+full.id),waitingJob=await desk.store.get('kv','history-archive/out/'+waitingV1.id);
 await desk.store.write([
- {s:'kv',k:'history-archive/out/'+full.id,v:{...acceptedJob,manifest:v1(acceptedJob),children:full.children}},
+ {s:'kv',k:'history-archive/out/'+full.id,v:{...acceptedJob,manifest:v1(acceptedJob),children:full.children,required_cap:wire.CapTopicContext,mention_cap:true}},
+ // One accepted copy was erased here since: only its old part knows its requirements.
+ {s:'outbox',k:full.children[0],v:{...await desk.store.get('outbox',full.children[0]),body:'',mention_cap:false}},
  {s:'kv',k:'history-archive/out/'+waitingV1.id,v:{...waitingJob,manifest:v1(waitingJob)}},
  {s:'outbox',k:waitingV1.id,v:{...await desk.store.get('outbox',waitingV1.id),state:'waiting',required_cap:'ha1',error:'peer_update: ha1 required'}}]);
 const upgraded=new Engine({store:desk.store,base:desk.base,fetch});Object.assign(upgraded,{keys:desk.keys,address:desk.address,pub:desk.pub,fp:desk.fp,me:desk.me,connected:true});
@@ -137,7 +139,22 @@ const rows=await Promise.all(again.map(id=>desk.store.get('outbox',id)));
 check(rows.every(r=>r.state==='archive_staged'&&(repacked.has(r.id)?r.archive_chunk&&!swept.includes(r.archive_chunk):!r.archive_chunk)),'every child of a version 1 part, accepted or waiting, is staged again for a version 2 part');
 check(again.some(id=>repacked.has(id)),'the swept children repack as version 2 parts');
 check(after.every(j=>j.children.length<=wire.HistoryArchivePackEntries),'repacked parts stay within the engine part cap');
+const erasedCopy=await desk.store.get('outbox',full.children[0]);
+check(erasedCopy.body===''&&erasedCopy.required_cap===wire.CapTopicContext&&erasedCopy.mention_cap===true,'an erased copy staged again keeps its version 1 part requirements');
+// A receiver's unfinished version 1 import can never be read again: its
+// source sends every copy again, so the job closes and its part is freed.
+const staleID=wire.newID(),staleManifest=v1(acceptedJob);
+await phone.store.write([{s:'kv',k:'history-archive/in/'+staleID,v:{id:staleID,from:desk.address,from_key:desk.fp,manifest:staleManifest,attachment:full.attachment,index:3,order:1,retained:true,state:'importing'}},{s:'files',k:'archive/'+staleID,v:{ct:new Uint8Array(64)}}]);
+const upgradedPhone=new Engine({store:phone.store,base:phone.base,fetch});Object.assign(upgradedPhone,{keys:phone.keys,address:phone.address,pub:phone.pub,fp:phone.fp,me:phone.me,connected:false});
+await upgradedPhone.archives().wake();await settle(upgradedPhone);
+check((await phone.store.get('kv','history-archive/in/'+staleID)).state==='done'&&!await phone.store.get('files','archive/'+staleID),'an unfinished version 1 import closes and releases its retained part');
+check((await phone.store.get('kv','history-archive/in/'+full.id)).state==='done','a finished version 2 import is untouched');
+// A sealed part waiting to upload is not counted as a received file.
+check(packs.length&&packs.every(p=>p.marked),'every packed part file row is marked as a history part');
+await desk.store.write([{s:'files',k:'archive-out/'+wire.newID(),v:{ct:new Uint8Array(32),history_part:true}}]);
+const received=(await upgraded.storageSummary()).local.areas.find(a=>a.directory==='received');
+check(received.usage.files===0,'storage summary does not count a history part waiting to upload as a received file: '+JSON.stringify(received.usage));
 
-const result={ok:true,checks,storage:browser?'IndexedDB':'memory',count:options.count,body_bytes:options.bytes,parts:jobs.map(j=>j.children.length),part_entries:full.children.length,part_bytes:partBytes,pack_commits:packs,pack_phase_ms:Math.round(packMs),import_ms:Math.round(importMs),receipt_ms:Math.round(receiptMs),peak_heap_mb:+(peakHeap/1048576).toFixed(1)};
+const result={ok:true,checks,storage:browser?'IndexedDB':'memory',count:options.count,body_bytes:options.bytes,parts:jobs.map(j=>j.children.length),part_entries:full.children.length,part_bytes:partBytes,pack_commits:packs.map(({marked,...p})=>p),pack_phase_ms:Math.round(packMs),import_ms:Math.round(importMs),receipt_ms:Math.round(receiptMs),peak_heap_mb:+(peakHeap/1048576).toFixed(1)};
 console.log('history archive full part',JSON.stringify(result));
 if(browser){for(const e of engines){await settle(e);e.closing=true;e.store.close();await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(e.fixtureStoreName);r.onsuccess=resolve;r.onerror=()=>reject(r.error);r.onblocked=resolve;});}window.archiveFullResult=result;}

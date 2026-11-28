@@ -9188,7 +9188,7 @@ export class Engine {
     const size = (v) => (v && v.ct ? v.ct.byteLength || v.ct.length || 0 : 0);
     const sum = (list) => ({ files: list.length, bytes: list.reduce((n, v) => n + size(v), 0) });
     const kept = sum(files.filter((v) => v && v.attachment)); // copies of files sent here, encrypted to this device
-    const cache = sum(files.filter((v) => v && !v.attachment)); // ciphertext of received files, as fetched
+    const cache = sum(files.filter((v) => v && !v.attachment && !v.history_part)); // ciphertext of received files, as fetched (not history parts waiting to upload)
     const queued = sum((await this.store.all("outbox")).flatMap((r) => (r.files || []).filter((f) => f.ct)));
     const areas = [
       { directory: "kept", label: "Retained sent files", kind: "ciphertext", status: "available", usage: kept,
