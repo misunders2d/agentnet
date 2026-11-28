@@ -165,6 +165,7 @@ func TestReceiverRetractionImportedOrdinaryAndForgedProof(t *testing.T) {
 		t.Fatal(e)
 	}
 	body, _ := json.Marshal(envelope.Retraction{Reason: "forged"})
+	var forged []string
 	for _, bad := range []string{"signature", "key", "id", "scope"} {
 		in := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: phone.Address, To: w.alice.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Sub: envelope.SubRetraction, Body: string(body), Ref: &envelope.Ref{ID: sent.ID, Fingerprint: phone.Self().Fingerprint()}}
 		signer := phone.id.Sign
@@ -186,6 +187,7 @@ func TestReceiverRetractionImportedOrdinaryAndForgedProof(t *testing.T) {
 		if e = w.alice.store.holdAs(env, reasonProof); e != nil {
 			t.Fatal(e)
 		}
+		forged = append(forged, env.ID)
 	}
 	if e = w.alice.Accept(setup); e != nil {
 		t.Fatal(e)
@@ -205,8 +207,10 @@ func TestReceiverRetractionImportedOrdinaryAndForgedProof(t *testing.T) {
 		b, e := replyReceiverIn(w.alice.store.db, setup)
 		return e == nil && b.State == "canceled" && b.remote.Redacted && b.remote.Request.Body == ""
 	})
+	// Count only the four forged controls: the phone's own device-history
+	// copy may also be held here while it waits for its original request.
 	var held int
-	w.alice.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=?`, reasonProof).Scan(&held)
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=? AND id IN (?,?,?,?)`, reasonProof, forged[0], forged[1], forged[2], forged[3]).Scan(&held)
 	if held != 4 {
 		t.Fatalf("foreign/forged held controls changed %d", held)
 	}
