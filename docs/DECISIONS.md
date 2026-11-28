@@ -1183,8 +1183,33 @@ July 14, 2021). Both posts were read on November 27.
 - The reader capability `ha2` replaces `ha1`; the formats are
   `agentnet-history-v2` and chunk version 2. A device that cannot inflate
   (no `CompressionStream`) does not advertise `ha2` and keeps the
-  per-message history copies. No compatibility path for `ha1`, since this
-  is not a public release yet.
+  per-message history copies. No reader keeps decoding `ha1` parts, since
+  this is not a public release yet.
+- Updating in the middle of a copy loses nothing (owner rule: nothing
+  already sent may be silently lost). On the first start after the
+  update, every part packed before it is version 1: the Go client's
+  appended schema step and the browser engine's start sweep stage that
+  part's copies again, including copies a receiver already accepted, and
+  mark an unsent version 1 descriptor not delivered, so it stops holding
+  the window. The copies go again in version 2 parts and the receiver's
+  admission drops any it already has. A copy whose embedded group file
+  was released on acceptance cannot be repacked; it is marked not
+  delivered, so history catch-up seals it afresh.
+- A part packed by the browser or Android engine holds at most 500
+  copies. Packing a part, and the receipt that settles it, is one
+  IndexedDB transaction over its copies, and live sends wait behind it;
+  500 keeps that wait short on a phone. Receivers still accept 5,000, so
+  parts from the Go client keep their size. The engine counts a device's
+  staged copies on an index before reading any, and keeps a sealed part
+  in its own file row until upload, so the job rows it scans on every
+  wake stay small. A resumed import parses its part once.
+- Measured in desktop Chromium over real IndexedDB, the source and the
+  new device in one page: a typical part of 500 short messages (550 KB
+  sealed) packed in about 0.12 s of commit, imported in 3.7 s, and raised
+  the page's memory by at most 32 MB during the import. A part of 500
+  messages of 22 KB each (11.5 MB sealed, close to the 16 MiB bound)
+  committed in 0.45 s, imported in 8.1 s, and raised it by at most 67 MB.
+  Not measured on a phone or a low-end Android WebView.
 - The device that holds the history picks each page from per-side indexes
   instead of sorting both sides of a busy chat, which kept large parts
   from filling.

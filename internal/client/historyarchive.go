@@ -191,6 +191,23 @@ func (a *Agent) archiveStep(ctx context.Context) (more bool, err error) {
 // archiveInFlight lists the archive descriptor states that hold a part of a
 // device's window: uploading, sendable, waiting for capability, or held by
 // the relay. A delivered descriptor's ciphertext is retained by its device.
+// historyArchiveV2Schema runs once, when this release first opens a store,
+// so every history-archive part already there was packed as version 1,
+// which an upgraded device refuses. Nothing already sent may be lost:
+// each part's children are copied again as version 2 (receivers
+// deduplicate on admission). Plain copies go back to staging and repack.
+// Copies with embedded structural files (their spool is released once a
+// part is accepted) become not_delivered, so history catch-up seals them
+// afresh. Unsent descriptors stop counting as in flight. A part already at
+// the relay keeps its state; its receipt no longer moves any child.
+const historyArchiveV2Schema = `UPDATE outbox SET
+ state=CASE WHEN json_array_length(json_extract(envelope,'$.blobs'))>0 THEN 'not_delivered' ELSE 'archive_staged' END,
+ error=CASE WHEN json_array_length(json_extract(envelope,'$.blobs'))>0 THEN 'not delivered: copied again in a version 2 history part' END
+ WHERE state IN ('archive_staged','archive_accepted') AND id IN (SELECT child FROM history_archive_entries);
+DELETE FROM history_archive_entries;
+UPDATE outbox SET state='not_delivered', error='not delivered: replaced by a version 2 history part'
+ WHERE sub='history-archive' AND state IN ('queued','waiting','archive_uploading');`
+
 const archiveInFlight = `('archive_uploading','queued','waiting','custody')`
 
 // archivePack packs staged children into parts for each device whose window

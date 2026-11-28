@@ -43,7 +43,8 @@ This record starts with v0.8.1; earlier releases remain on the
   history moves in large compressed parts of up to 5,000 messages, up to
   four at a time, instead of 50 messages per part one after another, as
   Signal and WhatsApp do. The device that holds the history reads far less
-  of its database per page, using new indexes.
+  of its database per page, using new indexes. A copy that was under way
+  when you update finishes, and nothing in it is lost.
 
 - Photos attached to the same message can be browsed in one viewer. Use
   Previous and Next, the arrow keys, or swipe at fit zoom.

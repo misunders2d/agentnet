@@ -2484,6 +2484,10 @@ export async function validateInvitationSync(r) {
 // Go protocol/historyarchive.go: one part is gzip-compressed chunk JSON. MaxPart
 // bounds the compressed attachment, MaxBytes the JSON while it inflates.
 export const HistoryArchiveMaxBytes=16<<20,HistoryArchiveMaxPart=16<<20,HistoryArchiveMaxEntries=5000,HistoryArchiveWindow=4,HistoryArchiveFormat="agentnet-history-v2";
+// A browser or phone packs at most this many children per part: packing and
+// its receipt each commit one IndexedDB transaction over every child, and
+// live sends queue behind it. Receivers still accept HistoryArchiveMaxEntries.
+export const HistoryArchivePackEntries=500;
 export function parseHistoryArchive(json){
  const r=strictRecord(json,4096,"history archive",{v:"int",person:"string",roster:"string",count:"int",format:"string"});
  if(r.v!==1||!validID(r.person)||!validHash(r.roster)||r.count<1||r.count>HistoryArchiveMaxEntries||r.format!==HistoryArchiveFormat)throw Error("invalid history archive manifest");return r;

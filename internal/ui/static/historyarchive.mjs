@@ -102,28 +102,61 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       };
     }),...ops];
   }
-  async function pack(){
-    // A durable terminal descriptor may outlive its receipt callback after a crash.
+  // Parts packed before ha2 are version 1, which an upgraded device refuses.
+  // Nothing already sent may be lost: once per start, every child of such a
+  // part is staged again for a version 2 part (receivers deduplicate), and
+  // an unsent one stops holding the window. Children whose structural
+  // ciphertext was released on acceptance are marked not delivered, so
+  // history catch-up seals them afresh, as the Go client's schema step does.
+  async function sweepVersion1(){
+    if(e.archiveSwept)return;
     for(const job of await e.store.prefix('kv',outgoing)){
+      if(!job.manifest||job.manifest.format===wire.HistoryArchiveFormat||job.swept||!['prepared','published','accepted'].includes(job.state))continue;
+      const ops=[],checks=[{s:'kv',k:outgoing+job.id,v:job}];
+      for(const id of job.children||[]){
+        const child=await e.store.get('outbox',id);
+        if(!child||child.archive_chunk!==job.id||!['archive_staged','archive_accepted'].includes(child.state))continue;
+        checks.push({s:'outbox',k:id,v:child});
+        const released=(child.files||[]).some(f=>!f.ct);
+        ops.push({s:'outbox',k:id,v:{...child,archive_chunk:'',...(released?{state:'not_delivered',detail:'Copied again in a version 2 history part.'}:{state:'archive_staged'})}});
+      }
+      const descriptor=await e.store.get('outbox',job.id);
+      if(descriptor&&['queued','waiting','archive_uploading'].includes(descriptor.state)){
+        checks.push({s:'outbox',k:job.id,v:descriptor});
+        ops.push({s:'outbox',k:job.id,v:{...descriptor,state:'not_delivered',detail:'Replaced by a version 2 history part.'}});
+      }
+      ops.push({s:'kv',k:outgoing+job.id,v:{...job,ct:null,children:[],state:['prepared','published'].includes(job.state)?'expired':job.state,swept:true}});
+      if(job.state==='prepared')ops.push({s:'files',k:'archive-out/'+job.id,v:undefined});
+      try{await e.store.write(ops,checks);}catch(error){if(error instanceof StoreConflict)return;throw error;}
+    }
+    e.archiveSwept=true;
+  }
+  async function pack(){
+    await sweepVersion1();
+    // A durable terminal descriptor may outlive its receipt callback after a crash.
+    const jobs=await e.store.prefix('kv',outgoing);
+    for(const job of jobs){
       if(job.state!=='published')continue;
       const descriptor=await e.store.get('outbox',job.id);
       if(['delivered','expired'].includes(descriptor?.state))await receipt(descriptor);
     }
-    const staged=(await e.store.outboxStates(['archive_staged'])).filter(r=>!r.archive_chunk).sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)||a.id.localeCompare(b.id));
-    const targets=new Map();
-    for(const row of staged){
-      const key=row.to+'\0'+row.recipient_fp;
-      if(!targets.has(key))targets.set(key,[]);
-      targets.get(key).push(row);
-    }
-    for(const rows of targets.values()){
+    const own=await e.store.get('kv','person');
+    for(const dev of own?.devices||[]){
+      if(dev.address===e.address)continue;
+      // Count first: only a destination with a part to pack is read, and
+      // then at most one part's rows, in packing order.
+      let pending=await e.store.archivePendingCount(dev.address,dev.fingerprint),rows=[];
+      if(!pending)continue;
       try{
         // Up to HistoryArchiveWindow parts travel at once. A part goes when
         // full, or when none is in flight (the newest page at once, the
         // last partial part after its predecessors); otherwise production
         // keeps filling it instead of each page making its own round trip.
-        let outstanding=(await e.store.prefix('kv',outgoing)).filter(j=>j.to===rows[0].to&&j.recipient_fp===rows[0].recipient_fp&&['prepared','published'].includes(j.state)).length;
-        while(rows.length&&outstanding<wire.HistoryArchiveWindow){
+        let outstanding=(await e.store.prefix('kv',outgoing)).filter(j=>j.to===dev.address&&j.recipient_fp===dev.fingerprint&&['prepared','published'].includes(j.state)).length;
+        while(pending>0&&outstanding<wire.HistoryArchiveWindow){
+          if(outstanding>0&&pending<wire.HistoryArchivePackEntries)break; // cannot be full yet
+          rows=await e.store.archivePending(dev.address,dev.fingerprint,wire.HistoryArchivePackEntries);
+          if(!rows.length)break;
           const checks=[],{
             own,pin
           }=await gate(rows[0],checks),entries=[],chosen=[];
@@ -150,7 +183,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
             size=grown;
             entries.push(entry);
             chosen.push(current);
-            if(entries.length===wire.HistoryArchiveMaxEntries){full=true;break;}
+            if(entries.length===wire.HistoryArchivePackEntries){full=true;break;}
           }
           if(!entries.length||!full&&outstanding>0)break;
           const sealed=await wire.encryptFile(await compressPart(utf8.encode(JSON.stringify({
@@ -167,16 +200,20 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           const baseRequirement=snapshot?(proactive?wire.CapTopicContext+"+"+wire.CapProactiveAgent:wire.CapTopicContext):proactive?wire.CapProactiveAgent:wire.CapHistoryArchive;
           const required_cap=wire.conversationAudienceRequirement(wire.steerRequirement(wire.guestAgentRequirement(baseRequirement,chosen.some(wire.guestAgentCopy)),chosen.some(wire.steerCopy)),chosen.some(wire.conversationAudienceCopy));
           await gate(rows[0],checks);
+          // The sealed part lives in the files store until it is uploaded:
+          // job rows are scanned on every wake and stay small.
           await e.store.write([{
+            s:'files',k:'archive-out/'+id,v:{ct:sealed.ct}
+          },{
             s:'kv',k:outgoing+id,v:{
-              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,...sealed,required_cap,mention_cap,organization_cap,shared_title_cap,resources_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
+              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,attachment:sealed.attachment,required_cap,mention_cap,organization_cap,shared_title_cap,resources_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
             }
           },...chosen.map(row=>({
             s:'outbox',k:row.id,v:{
               ...row,archive_chunk:id
             }
           }))],checks);
-          rows.splice(0,chosen.length);
+          pending-=chosen.length;
           outstanding++;
         }
       }catch{
@@ -230,7 +267,9 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       try{
         const checks=[];
         await gate(row,checks);
-        await e.uploadBlob(row.to,row.attachment.blob,row.ct);
+        const part=await e.store.get('files','archive-out/'+row.id);
+        if(!part?.ct)throw Error('Archive part ciphertext unavailable.');
+        await e.uploadBlob(row.to,row.attachment.blob,part.ct);
         const {
           pin
         }=await gate(row,checks),at=e.now(),body=JSON.stringify(row.manifest);
@@ -247,9 +286,9 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           }
         },{
           s:'kv',k:outgoing+row.id,v:{
-            ...row,state:'published',ct:null
+            ...row,state:'published'
           }
-        }],checks);
+        },{s:'files',k:'archive-out/'+row.id,v:undefined}],checks);
         e.queueOutbox();
       }catch{
         const current=await e.store.get('kv',outgoing+row.id);
@@ -268,12 +307,12 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       try{
         const checks=[];
         await authority(job.manifest,job.from,job.from_key,checks);
-        let retained=await e.store.get('files','archive/'+job.id);
+        let retained=await e.store.get('files','archive/'+job.id),chunk=null;
         if(!retained){
           if(!e.connected)return;
           const ct=await e.getBytes('/v1/blobs/'+job.attachment.blob.id+'/data',job.attachment.blob.size);
           // Both hashes/decryption must pass before the descriptor can be acked.
-          await parseArchivePart(await wire.decryptFile(ct,job.attachment,e.keys),job.manifest.count);
+          chunk=await parseArchivePart(await wire.decryptFile(ct,job.attachment,e.keys),job.manifest.count);
           await authority(job.manifest,job.from,job.from_key,checks);
           const current=await e.groupRead(checks,'kv',incoming+job.id);
           job={
@@ -296,7 +335,9 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           e.flushReceipts().catch(()=>{
           });
         }
-        const chunk=await parseArchivePart(await wire.decryptFile(retained.ct,job.attachment,e.keys),job.manifest.count);
+        // The first fetch already decrypted and parsed this part; only a
+        // resumed import (after a restart) reads the retained copy.
+        chunk||=await parseArchivePart(await wire.decryptFile(retained.ct,job.attachment,e.keys),job.manifest.count);
         while(job.index<chunk.entries.length){
           if(e.closing)return;
           await importEntry(job,chunk.entries[job.index]);
@@ -382,7 +423,7 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
     }
     ops.push({
       s:'kv',k:key,v:{
-        ...job,state:row.state==='expired'?'expired':'accepted'
+        ...job,state:row.state==='expired'?'expired':'accepted',children:[] // a terminal job is never read for its children again
       }
     });
     try{await e.store.write(ops,checks);}

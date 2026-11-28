@@ -34,6 +34,9 @@ available=true;await e.post({...descriptor,state:'queued'});
 assert.equal((await e.store.get('outbox',job.id)).envelope,sealed);
 assert.equal((await e.store.get('outbox',job.id)).state,'custody');
 console.log('Browser snapshot archive: body erasure, repack, independent waiting and same sealed ciphertext release passed');
+// The receiver accepts that part, so the window holds no part in flight
+// and a one-entry tail packs at once.
+await e.archives().receipt({...await e.store.get('outbox',job.id),state:'delivered'});
 // A shared-title child keeps its independent reader gate after plaintext loss,
 // restart, expiry and repack; org/mention and base requirements remain present.
 let titleAvailable=true;

@@ -109,6 +109,12 @@ const historyIndexed = (row,arrival) => {
 
 // Derived selectors let a transfer recheck one original and source organization
 // metadata without projecting or hashing every topic body on each batch.
+// Unpacked archive children by destination, in packing order: a history
+// sender counts and reads at most one part instead of every staged row.
+const archivePendingRange=(to,fp)=>IDBKeyRange.bound([to,fp],[to,fp,[]]);
+const archiveIndexed=(row,key)=>{const value={...row};if(value.state==="archive_staged"&&!value.archive_chunk&&value.to&&value.recipient_fp)value.archive_pending=[value.to,value.recipient_fp,value.send_order??value.at??0,key];else delete value.archive_pending;return value;};
+const archivePendingOf=(r,to,fp)=>r.archive_pending?.[0]===to&&r.archive_pending?.[1]===fp;
+const archivePendingOrder=(a,b)=>a.archive_pending[2]-b.archive_pending[2]||(a.archive_pending[3]<b.archive_pending[3]?-1:a.archive_pending[3]>b.archive_pending[3]?1:0);
 const transferIndexed=row=>{const value={...row};delete value.contribution_review;value.transfer_lid=[row.conv||"",row.lid||row.id];if(row.conv&&row.topic)value.transfer_topic=[row.conv,row.topic];else delete value.transfer_topic;if(row.topic_event||row.control&&[wire.SubRevision,wire.SubRetraction].includes(row.sub))value.transfer_meta=row.conv||row.thread_peer||"";else delete value.transfer_meta;return value;};
 
 // ---- storage -------------------------------------------------------------------------------
@@ -123,7 +129,7 @@ const transferIndexed=row=>{const value={...row};delete value.contribution_revie
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 10, { // 10: exact transfer originals and source metadata; 9: direct-thread peer projection; 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes; 8: unstarted inbox state and active report status indexes
+  const opening = openDB(name, 11, { // 11: unpacked archive children by destination; 10: exact transfer originals and source metadata; 9: direct-thread peer projection; 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes; 8: unstarted inbox state and active report status indexes
     async upgrade(d,oldVersion,newVersion,tx) {
       for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if(oldVersion<4) {
@@ -144,6 +150,7 @@ export async function openIDB(name = "agentnet") {
       if(oldVersion<8){const inbox=tx.objectStore("inbox");inbox.createIndex("state","state");inbox.createIndex("status","status");}
       if(oldVersion<9)for(const name of ["inbox","outbox"]){const store=tx.objectStore(name);store.createIndex("thread_peer","thread_peer");for(let c=await store.openCursor();c;c=await c.continue())await c.update(threadIndexed(c.value,name));}
       if(oldVersion<10)for(const name of ["inbox","outbox"]){const store=tx.objectStore(name);store.createIndex("transfer_lid","transfer_lid");store.createIndex("transfer_topic","transfer_topic");store.createIndex("transfer_meta","transfer_meta");for(let c=await store.openCursor();c;c=await c.continue())await c.update(transferIndexed(c.value));}
+      if(oldVersion<11){const outbox=tx.objectStore("outbox");outbox.createIndex("archive_pending","archive_pending");for(let c=await outbox.index("state").openCursor("archive_staged");c;c=await c.continue())await c.update(archiveIndexed(c.value,c.primaryKey));}
 
     },
     blocked: onBlocked,
@@ -176,6 +183,8 @@ export async function openIDB(name = "agentnet") {
       for(const state of states)rows.push(...await tx.store.index("state").getAll(state));
       await tx.done;return rows;
     },
+    archivePending:(to,fp,n)=>db.getAllFromIndex("outbox","archive_pending",archivePendingRange(to,fp),n),
+    archivePendingCount:(to,fp)=>db.countFromIndex("outbox","archive_pending",archivePendingRange(to,fp)),
     inboxStatus:status=>db.getAllFromIndex("inbox","status",status),
     outboxSub:sub=>db.getAllFromIndex("outbox","sub",sub),
     demotionRows:()=>db.getAllFromIndex("outbox","lane_demote","sync"),
@@ -227,6 +236,7 @@ export async function openIDB(name = "agentnet") {
               if(!arrival) {arrival=(await tx.objectStore("kv").get("history-arrival")||0)+1;await tx.objectStore("kv").put(arrival,"history-arrival");}
             }
             value=transferIndexed(threadIndexed(historyIndexed(value,arrival),o.s));
+            if(o.s==="outbox")value=archiveIndexed(value,o.k);
             if(directHistoryRow(value)){let seq=(await tx.objectStore(o.s).get(o.k))?.device_arrival||0;if(!seq){seq=(await tx.objectStore("kv").get("device-history-arrival")||0)+1;await tx.objectStore("kv").put(seq,"device-history-arrival");}value.device_arrival=seq;}else delete value.device_arrival;
           }
           // Each request's own rejection is the transaction's (tx.done); it is not awaited one by one.
@@ -262,6 +272,8 @@ export function memoryStore() {
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
     outboxStates:async(states,to="")=>[...data.outbox.values()].filter(r=>states.includes(r.state)&&(!to||r.to===to)).map(r=>structuredClone(r)),
     inboxStates:async states=>[...data.inbox.values()].filter(r=>states.includes(r.state)).map(r=>structuredClone(r)),
+    archivePending:async(to,fp,n)=>[...data.outbox.values()].filter(r=>archivePendingOf(r,to,fp)).sort(archivePendingOrder).slice(0,n).map(r=>structuredClone(r)),
+    archivePendingCount:async(to,fp)=>[...data.outbox.values()].filter(r=>archivePendingOf(r,to,fp)).length,
     inboxStatus:async status=>[...data.inbox.values()].filter(r=>r.status===status).map(r=>structuredClone(r)),
     outboxSub:async sub=>[...data.outbox.values()].filter(r=>r.sub===sub).map(r=>structuredClone(r)),
     demotionRows:async()=>[...data.outbox.values()].filter(r=>r.lane_demote==="sync").map(r=>structuredClone(r)),
@@ -288,6 +300,7 @@ export function memoryStore() {
               if(!arrival) {arrival=(data.kv.get("history-arrival")||0)+1;data.kv.set("history-arrival",arrival);}
             }
             value=transferIndexed(threadIndexed(historyIndexed(value,arrival),o.s));
+            if(o.s==="outbox")value=archiveIndexed(value,o.k);
             if(directHistoryRow(value)){let seq=data[o.s].get(o.k)?.device_arrival||0;if(!seq){seq=(data.kv.get("device-history-arrival")||0)+1;data.kv.set("device-history-arrival",seq);}value.device_arrival=seq;}else delete value.device_arrival;
           }
           data[o.s].set(o.k,value);
@@ -316,7 +329,7 @@ const roomAgentScope = e => !e.role && e.audience === "room";
 // Delivery progress never changes the signed authority of an outbox row.
 const authorityFields = (store, row) => {
   if (store !== "outbox") return row;
-  const {state, detail, delivery, path, ...authority} = row;
+  const {state, detail, delivery, path, archive_pending, ...authority} = row; // archive_pending follows state
   if (authority.files) authority.files = authority.files.map(({uploaded, ct, ...file}) => file);
   return authority;
 };
@@ -1833,6 +1846,7 @@ export class Engine {
         if ((await this.store.get("outbox", job.id))?.state === "delivered") continue;
         const key = "history-archive/out/" + job.id;
         checks.push({s:"kv",k:key,v:job}); ops.push({s:"kv",k:key,v:{...job,state:"ended",error:detail,ct:null}});
+        if (job.state === "prepared") ops.push({s:"files",k:"archive-out/"+job.id,v:undefined}); // its sealed part, never uploaded
       }
       if (revoked) {
         const key = "revoked-device/" + address + "/" + fingerprint, previous = await this.store.get("kv",key);
