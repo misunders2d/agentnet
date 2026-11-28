@@ -1177,3 +1177,86 @@ too).
   `POST /api/conversation/delete` (`{peer, thread}` without `chat`), and the
   Go `DeleteThread` stay for compatibility: external skins may call them.
   The route docs mark them "no longer offered by the bundled UI".
+
+## November 27, 2026 — history copy to a new device in large parts
+
+Copying a long history to a newly linked device was far too slow: the
+v0.8.18 archive moved 50 messages per part and waited for each part's
+receipt before sending the next. Signal now sends a linked device's history
+as one compressed, encrypted archive through its servers, and says text
+histories "usually fit in just a few megabytes after compression"
+([A Synchronized Start for Linked Devices](https://signal.org/blog/a-synchronized-start-for-linked-devices/),
+January 27, 2025). WhatsApp's primary device "encrypts a bundle of the
+messages from recent chats"
+([How WhatsApp enables multi-device capability](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/),
+July 14, 2021). Both posts were read on November 27.
+
+**Implementation (not owner decisions):**
+- A part holds up to 5,000 history copies. Its JSON is gzip-compressed
+  (Go `compress/gzip`, the browser's `CompressionStream`) and then
+  encrypted as an ordinary file attachment, as before. The compressed part
+  and the inflated JSON are each bounded to 16 MiB, so four parts in flight
+  stay well inside the relay's file and storage limits. Inflating stops one
+  byte past the bound; a bad checksum, a second gzip member or any trailing
+  byte refuses the part.
+- Up to four parts may be in flight to one device at once. A part is
+  packed when it is full, or when nothing else is in flight to that
+  device, so a short history still goes at once and a long one moves in
+  full parts.
+- Each child copy keeps its own signature and encryption, and the importer
+  still runs the existing history admission per copy, newest first, saving
+  its position after each one. A restart resumes at the next copy.
+- The reader capability `ha2` replaces `ha1`; the formats are
+  `agentnet-history-v2` and chunk version 2. A device that cannot inflate
+  (no `CompressionStream`) does not advertise `ha2` and keeps the
+  per-message history copies. No reader keeps decoding `ha1` parts, since
+  this is not a public release yet.
+- Updating in the middle of a copy loses nothing (owner rule: nothing
+  already sent may be silently lost). On the first start after the
+  update, every part packed before it is version 1: the Go client's
+  appended schema step and the browser engine's start sweep stage that
+  part's copies again, including copies a receiver already accepted, and
+  mark an unsent version 1 descriptor not delivered, so it stops holding
+  the window. The copies go again in version 2 parts and the receiver's
+  admission drops any it already has. A copy whose embedded group file
+  was released on acceptance cannot be repacked; it is marked not
+  delivered, so history catch-up seals it afresh. A copy erased here since
+  keeps its old part's requirements, group-context catch-up scans again,
+  and a receiver closes its unfinished version 1 imports (their sources
+  send every copy again).
+- A part packed by the browser or Android engine holds at most 500
+  copies. Packing a part, and the receipt that settles it, is one
+  IndexedDB transaction over its copies, and live sends wait behind it;
+  500 keeps that wait short on a phone. Receivers still accept 5,000, so
+  parts from the Go client keep their size. The engine counts a device's
+  staged copies on an index before reading any, and keeps a sealed part
+  in its own file row until upload, so the job rows it scans on every
+  wake stay small. A resumed import parses its part once.
+- Measured in desktop Chromium over real IndexedDB, the source and the
+  new device in one page: a typical part of 500 short messages (550 KB
+  sealed) packed in about 0.12 s of commit, imported in 3.7 s, and raised
+  the page's memory by at most 32 MB during the import. A part of 500
+  messages of 22 KB each (11.5 MB sealed, close to the 16 MiB bound)
+  committed in 0.45 s, imported in 8.1 s, and raised it by at most 67 MB.
+  Not measured on a phone or a low-end Android WebView.
+- The device that holds the history picks each page from per-side indexes
+  instead of sorting both sides of a busy chat, which kept large parts
+  from filling.
+- Three per-message costs grew with history size and made a long copy
+  slow down as it went (measured with CPU profiles of the real daemons):
+  every receipt flush on the new device walked each imported copy, the
+  review check scanned the whole inbox, and the sending device re-read a
+  part's worth of copies on every page just to decide it should wait.
+  Imported copies now record that they owe no receipt of their own (a
+  relay arrival of the same message still sends one), the review check
+  uses the state index, and the sender counts before it reads.
+- Measured on one laptop with a real relay and three separate daemons,
+  70,000 text messages in one chat: before, 33,353 copied in 30 minutes
+  and slowing (about 62 minutes in all by extrapolation); after, all
+  70,000 in 11 minutes 34 seconds. The new device peaked at 61 MB. In
+  that run the new device kept up, so parts stayed small (largest 750
+  copies) and mostly one was in flight: the gain came from the page pick
+  and the per-copy fixes. Large parts and the window matter when the new
+  device or the network is slower; a run that moved 5,000-copy parts
+  peaked at 86 MB on the new device. The "before" run shared the CPU with
+  other tests for part of its time and was stopped at 30 minutes.

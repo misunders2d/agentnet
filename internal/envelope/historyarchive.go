@@ -1,7 +1,9 @@
 package envelope
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +14,9 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// HistoryArchiveChunkVersion is the JSON chunk inside a compressed part.
+const HistoryArchiveChunkVersion = 2
 
 // HistoryArchiveChunk retains each carrier's existing signed encryption.
 // Parsing checks bounds and embedded ciphertext, never sender authority.
@@ -78,8 +83,58 @@ func MarshalHistoryArchiveChunk(r HistoryArchiveChunk) ([]byte, error) {
 	return data, nil
 }
 
+// EncodeHistoryArchivePart validates the chunk and compresses its JSON with
+// gzip. The result is the plaintext of one archive attachment. Child
+// ciphertext is base64 in the JSON: compression mostly recovers that and
+// the JSON framing, never any plaintext (each child is already sealed).
+func EncodeHistoryArchivePart(r HistoryArchiveChunk) ([]byte, error) {
+	data, err := MarshalHistoryArchiveChunk(r)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&out, gzip.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = zw.Write(data); err != nil {
+		return nil, err
+	}
+	if err = zw.Close(); err != nil {
+		return nil, err
+	}
+	if out.Len() > protocol.MaxHistoryArchivePart {
+		return nil, errors.New("history archive: oversized compressed part")
+	}
+	return out.Bytes(), nil
+}
+
+// DecodeHistoryArchivePart inflates one decrypted archive attachment and
+// parses its chunk. Inflation stops one byte past the plaintext bound, so a
+// small hostile part cannot expand without limit; a bad gzip checksum or any
+// data after the gzip stream fails closed.
+func DecodeHistoryArchivePart(src io.Reader) (HistoryArchiveChunk, error) {
+	in := bufio.NewReader(src) // a ByteReader: gzip reads no byte past its stream
+	zr, err := gzip.NewReader(in)
+	if err != nil {
+		return HistoryArchiveChunk{}, errors.New("history archive: not a gzip part")
+	}
+	zr.Multistream(false)
+	data, err := io.ReadAll(io.LimitReader(zr, protocol.MaxHistoryArchivePlaintext+1))
+	if err != nil {
+		return HistoryArchiveChunk{}, errors.New("history archive: corrupt compressed part")
+	}
+	if len(data) > protocol.MaxHistoryArchivePlaintext {
+		return HistoryArchiveChunk{}, errors.New("history archive: part inflates past its bound")
+	}
+	if _, err := in.ReadByte(); err != io.EOF {
+		return HistoryArchiveChunk{}, errors.New("history archive: data after the compressed part")
+	}
+	return ParseHistoryArchiveChunk(data)
+}
+
 func validateHistoryArchiveChunk(r HistoryArchiveChunk) error {
-	if r.V != 1 || len(r.Entries) < 1 || len(r.Entries) > protocol.MaxHistoryArchiveEntries {
+	if r.V != HistoryArchiveChunkVersion || len(r.Entries) < 1 || len(r.Entries) > protocol.MaxHistoryArchiveEntries {
 		return errors.New("history archive: invalid version or count")
 	}
 	seen := map[string]bool{}

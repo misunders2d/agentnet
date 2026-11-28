@@ -1,8 +1,11 @@
 package envelope
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os/exec"
@@ -79,7 +82,7 @@ func archiveTestChunk() HistoryArchiveChunk {
 	sum := sha256.Sum256(ct)
 	b := Blob{ID: protocol.NewID(), Size: int64(len(ct)), SHA256: hex.EncodeToString(sum[:])}
 	e := Envelope{V: Version2, ID: protocol.NewID(), From: "owner/host", To: "owner/phone", TS: 1, Kind: KindMessage, CT: []byte("encrypted child"), Sig: make([]byte, ed25519.SignatureSize), Blobs: []Blob{b}}
-	return HistoryArchiveChunk{V: 1, Entries: []HistoryArchiveEntry{{Envelope: e, Blobs: []HistoryArchiveBlob{{ID: b.ID, CT: ct}}}}}
+	return HistoryArchiveChunk{V: HistoryArchiveChunkVersion, Entries: []HistoryArchiveEntry{{Envelope: e, Blobs: []HistoryArchiveBlob{{ID: b.ID, CT: ct}}}}}
 }
 
 func TestHistoryArchiveChunkBoundsAndBlobs(t *testing.T) {
@@ -92,7 +95,7 @@ func TestHistoryArchiveChunkBoundsAndBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(*HistoryArchiveChunk){
-		"version":         func(r *HistoryArchiveChunk) { r.V = 2 },
+		"version":         func(r *HistoryArchiveChunk) { r.V = 1 },
 		"empty":           func(r *HistoryArchiveChunk) { r.Entries = nil },
 		"duplicate child": func(r *HistoryArchiveChunk) { r.Entries = append(r.Entries, r.Entries[0]) },
 		"too many": func(r *HistoryArchiveChunk) {
@@ -160,14 +163,14 @@ func TestHistoryArchiveGoBrowserSignedChunk(t *testing.T) {
 	if _, err := Open(e, to.id, in.To, from.pub); err != nil {
 		t.Fatal(err)
 	}
-	chunk, err := MarshalHistoryArchiveChunk(HistoryArchiveChunk{V: 1, Entries: []HistoryArchiveEntry{{Envelope: e}}})
+	part, err := EncodeHistoryArchivePart(HistoryArchiveChunk{V: HistoryArchiveChunkVersion, Entries: []HistoryArchiveEntry{{Envelope: e}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture, _ := json.Marshal(struct {
-		Chunk json.RawMessage `json:"chunk"`
-		Key   []byte          `json:"key"`
-	}{Chunk: chunk, Key: from.pub.SignKey})
+		Part []byte `json:"part"`
+		Key  []byte `json:"key"`
+	}{Part: part, Key: from.pub.SignKey})
 	module, err := filepath.Abs("../ui/static/historyarchive.mjs")
 	if err != nil {
 		t.Fatal(err)
@@ -177,18 +180,88 @@ import {webcrypto} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 globalThis.crypto ||= webcrypto;
 const archiveURL=pathToFileURL(process.argv[1]);
-const {parseArchiveChunk}=await import(archiveURL);
+const {parseArchivePart,compressPart}=await import(archiveURL);
 const wire=await import(new URL('./wire.mjs',archiveURL));
 const parts=[];for await(const part of process.stdin)parts.push(part);
 const fixture=JSON.parse(Buffer.concat(parts).toString('utf8'));
-const chunk=await parseArchiveChunk(new TextEncoder().encode(JSON.stringify(fixture.chunk)),1);
+const chunk=await parseArchivePart(new Uint8Array(Buffer.from(fixture.part,'base64')),1);
 if(!Array.isArray(chunk.entries[0].blobs)||chunk.entries[0].blobs.length)throw Error('Empty blobs interoperability');
 await wire.verifyEnvelope(wire.parseEnvelope(chunk.entries[0].envelope),Buffer.from(fixture.key,'base64'));
+// The browser's own compressed part goes back for Go to decode.
+process.stdout.write(Buffer.from(await compressPart(new TextEncoder().encode(JSON.stringify(chunk)))).toString('base64'));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, module)
 	cmd.Stdin = strings.NewReader(string(fixture))
-	if output, err := cmd.CombinedOutput(); err != nil {
+	output, err := cmd.Output()
+	if err != nil {
 		t.Fatalf("Go to browser signed archive: %v\n%s", err, output)
+	}
+	browserPart, err := base64.StdEncoding.DecodeString(string(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := DecodeHistoryArchivePart(bytes.NewReader(browserPart))
+	if err != nil {
+		t.Fatalf("browser to Go compressed archive: %v", err)
+	}
+	if len(back.Entries) != 1 || back.Entries[0].Envelope.ID != e.ID {
+		t.Fatal("browser part changed its child")
+	}
+	if _, err := Open(back.Entries[0].Envelope, to.id, in.To, from.pub); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A part is gzip of the chunk JSON. Inflation is bounded and every
+// malformed, oversized or trailing input fails closed.
+func TestHistoryArchivePartCompressionBounds(t *testing.T) {
+	r := archiveTestChunk()
+	part, err := EncodeHistoryArchivePart(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeHistoryArchivePart(bytes.NewReader(part))
+	if err != nil || len(got.Entries) != 1 || got.Entries[0].Envelope.ID != r.Entries[0].Envelope.ID {
+		t.Fatalf("round trip: %v", err)
+	}
+	gz := func(data []byte) []byte {
+		var b bytes.Buffer
+		w := gzip.NewWriter(&b)
+		w.Write(data)
+		w.Close()
+		return b.Bytes()
+	}
+	raw, _ := MarshalHistoryArchiveChunk(r)
+	v1 := strings.Replace(string(raw), `{"v":2,`, `{"v":1,`, 1)
+	corrupt := append([]byte(nil), part...)
+	corrupt[len(corrupt)-6] ^= 1
+	bomb := gz(make([]byte, protocol.MaxHistoryArchivePlaintext+1))
+	if len(bomb) > 1<<20 {
+		t.Fatalf("bomb fixture is not small: %d", len(bomb))
+	}
+	for name, input := range map[string][]byte{
+		"uncompressed JSON": raw,
+		"corrupt checksum":  corrupt,
+		"truncated":         part[:len(part)-4],
+		"trailing byte":     append(append([]byte(nil), part...), 0),
+		"two members":       append(append([]byte(nil), part...), part...),
+		"inflates too far":  bomb,
+		"old chunk version": gz([]byte(v1)),
+		"empty":             nil,
+	} {
+		if _, err := DecodeHistoryArchivePart(bytes.NewReader(input)); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	// The packer cannot emit a part past the bound either.
+	big := HistoryArchiveChunk{V: HistoryArchiveChunkVersion}
+	for range protocol.MaxHistoryArchiveEntries + 1 {
+		e := r.Entries[0]
+		e.Envelope.ID = protocol.NewID()
+		big.Entries = append(big.Entries, e)
+	}
+	if _, err := EncodeHistoryArchivePart(big); err == nil {
+		t.Fatal("part with too many entries encoded")
 	}
 }
 

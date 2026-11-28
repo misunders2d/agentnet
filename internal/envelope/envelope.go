@@ -788,7 +788,7 @@ func checkVersion2(in Inner) error {
 			return errors.New("read sync: quiet rootless reference carrier required")
 		}
 		if in.Sub == SubHistoryArchive {
-			if in.SendGroup != "" || len(in.Attachments) != 1 || in.Attachments[0].Size < 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePlaintext {
+			if in.SendGroup != "" || len(in.Attachments) != 1 || in.Attachments[0].Size < 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePart {
 				return errors.New("history archive carries exactly one bounded attachment and no message grouping")
 			}
 			_, err := protocol.ParseHistoryArchive([]byte(in.Body))

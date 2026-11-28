@@ -188,10 +188,95 @@ func (a *Agent) archiveStep(ctx context.Context) (more bool, err error) {
 	return more || errors.As(packErr, &isolated), packErr
 }
 
+// archiveInFlight lists the archive descriptor states that hold a part of a
+// device's window: uploading, sendable, waiting for capability, or held by
+// the relay. A delivered descriptor's ciphertext is retained by its device.
+// historyArchiveV2Schema runs once, when this release first opens a store,
+// so every history-archive part already there was packed as version 1,
+// which an upgraded device refuses. Nothing already sent may be lost:
+// each part's children are copied again as version 2 (receivers
+// deduplicate on admission). Plain copies go back to staging and repack.
+// Copies with embedded structural files (their spool is released once a
+// part is accepted) become not_delivered, so history catch-up seals them
+// afresh. Unsent descriptors stop counting as in flight. A part already at
+// the relay keeps its state; its receipt no longer moves any child.
+// An erased copy (empty body) cannot be classified again when it repacks,
+// so it first takes its old part's requirements, as an expired part's
+// children do through history_archive_entries. Group-context catch-up
+// scans again for the copies sent afresh. On a receiver, unfinished
+// version 1 imports are closed: every source sends them again.
+const historyArchiveV2Schema = `UPDATE outbox AS o SET
+ required_cap=coalesce((SELECT m.required_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),o.required_cap),
+ mention_cap=o.mention_cap OR coalesce((SELECT m.mention_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0),
+ organization_cap=o.organization_cap OR coalesce((SELECT m.organization_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0),
+ shared_title_cap=o.shared_title_cap OR coalesce((SELECT m.shared_title_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0),
+ resources_cap=o.resources_cap OR coalesce((SELECT m.resources_cap FROM history_archive_entries e JOIN outbox m ON m.id=e.manifest WHERE e.child=o.id),0)
+ WHERE o.state IN ('archive_staged','archive_accepted') AND coalesce(o.body,'')='' AND o.id IN (SELECT child FROM history_archive_entries);
+UPDATE outbox SET
+ state=CASE WHEN json_array_length(json_extract(envelope,'$.blobs'))>0 THEN 'not_delivered' ELSE 'archive_staged' END,
+ error=CASE WHEN json_array_length(json_extract(envelope,'$.blobs'))>0 THEN 'not delivered: copied again in a version 2 history part' END
+ WHERE state IN ('archive_staged','archive_accepted') AND id IN (SELECT child FROM history_archive_entries);
+DELETE FROM history_archive_entries;
+UPDATE outbox SET state='not_delivered', error='not delivered: replaced by a version 2 history part'
+ WHERE sub='history-archive' AND state IN ('queued','waiting','archive_uploading');
+UPDATE history_catchup SET context_done=0, context_pos='';
+UPDATE history_archive_jobs SET done=1 WHERE done=0;`
+
+const archiveInFlight = `('archive_uploading','queued','waiting','custody')`
+
+// archivePack packs staged children into parts for each device whose window
+// has room. A part is packed when it is full (entries or bytes), or when the
+// device has no part in flight, so the newest page goes at once and the last
+// partial part follows its predecessors; meanwhile production fills the next
+// part instead of each small page becoming its own round trip.
+func (a *Agent) archivePack(ctx context.Context) error {
+	rows, err := a.store.db.Query(`SELECT o.recipient,o.recipient_fp,(SELECT count(*) FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN `+archiveInFlight+`),count(*),sum(length(o.envelope)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) GROUP BY o.recipient,o.recipient_fp ORDER BY min(o.rowid)`, envelope.SubHistoryArchive, archiveStaged)
+	if err != nil {
+		return err
+	}
+	type target struct {
+		address, fp string
+		inFlight    int
+	}
+	var targets []target
+	for rows.Next() {
+		var t target
+		var staged, size int
+		if err = rows.Scan(&t.address, &t.fp, &t.inFlight, &staged, &size); err != nil {
+			break
+		}
+		// While a part is in flight only a full part is packed. Skip reading
+		// a part that cannot be full yet (embedded structural files make a
+		// part slightly larger than its envelopes, so this may wait one
+		// part longer, never pack early).
+		waiting := t.inFlight > 0 && staged < protocol.MaxHistoryArchiveEntries && size < protocol.MaxHistoryArchivePlaintext
+		if t.inFlight < protocol.HistoryArchiveWindow && !waiting {
+			targets = append(targets, t)
+		}
+	}
+	rowErr := rows.Err()
+	rows.Close()
+	if err = errors.Join(err, rowErr); err != nil {
+		return err
+	}
+	var first error
+	for _, t := range targets {
+		if err := a.archivePackFor(ctx, t.address, t.fp, t.inFlight); err != nil {
+			if ctx.Err() != nil {
+				return err
+			}
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	return first
+}
+
 // A staged child is already exact signed ciphertext, committed with its
 // source cursor. A crash before packing discovers it here; no source is lost.
-func (a *Agent) archivePack(ctx context.Context) (err error) {
-	rows, err := a.store.db.Query(`SELECT o.envelope,o.recipient_fp,coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.body,''),coalesce(m.required_cap,o.required_cap,''),(o.mention_cap OR coalesce(m.mention_cap,0)),(o.organization_cap OR coalesce(m.organization_cap,0)),(o.shared_title_cap OR coalesce(m.shared_title_cap,0)),(o.resources_cap OR coalesce(m.resources_cap,0)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) AND NOT EXISTS(SELECT 1 FROM history_archive_export_errors x WHERE x.recipient=o.recipient AND x.recipient_fp=o.recipient_fp) AND NOT EXISTS(SELECT 1 FROM outbox live WHERE live.recipient=o.recipient AND live.recipient_fp=o.recipient_fp AND live.sub=? AND live.state IN ('archive_uploading','queued','waiting','custody')) ORDER BY o.rowid LIMIT ?`, archiveStaged, envelope.SubHistoryArchive, protocol.MaxHistoryArchiveEntries)
+func (a *Agent) archivePackFor(ctx context.Context, address, fp string, inFlight int) (err error) {
+	rows, err := a.store.db.Query(`SELECT o.envelope,o.recipient_fp,coalesce(o.conv,''),coalesce(o.sub,''),coalesce(o.body,''),coalesce(m.required_cap,o.required_cap,''),(o.mention_cap OR coalesce(m.mention_cap,0)),(o.organization_cap OR coalesce(m.organization_cap,0)),(o.shared_title_cap OR coalesce(m.shared_title_cap,0)),(o.resources_cap OR coalesce(m.resources_cap,0)) FROM outbox o LEFT JOIN history_archive_entries e ON e.child=o.id LEFT JOIN outbox m ON m.id=e.manifest WHERE o.state=? AND o.recipient=? AND o.recipient_fp=? AND (e.child IS NULL OR m.state IN ('expired','failed','not_delivered')) ORDER BY o.rowid LIMIT ?`, archiveStaged, address, fp, protocol.MaxHistoryArchiveEntries)
 	if err != nil {
 		return err
 	}
@@ -284,13 +369,14 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	if err = historyRecoveryCurrent(a.store.db, a.Self(), dev); err != nil {
 		return err
 	}
-	chunk := envelope.HistoryArchiveChunk{V: 1}
+	chunk := envelope.HistoryArchiveChunk{V: envelope.HistoryArchiveChunkVersion}
+	full := len(selectedRows) == protocol.MaxHistoryArchiveEntries
 	required := protocol.CapHistoryArchive
 	snapshotExtension := false
 	conversationAudienceExtension := false
 	steerExtension := false
 	guestAgentExtension := false
-	chunkBytes := len(`{"v":1,"entries":[]}`)
+	chunkBytes := len(`{"v":2,"entries":[]}`)
 	mentionExtension, organizationExtension := false, false
 	sharedTitleExtension, resourcesExtension := false, false
 	for _, r := range selectedRows {
@@ -320,6 +406,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 			if len(chunk.Entries) == 0 {
 				return fmt.Errorf("archive record %s exceeds the bounded chunk", r.env.ID)
 			}
+			full = true
 			break
 		}
 		chunkBytes += n
@@ -348,7 +435,12 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	required = guestAgentRequirement(required, guestAgentExtension)
 	required = steerRequirement(required, steerExtension)
 	required = conversationAudienceRequirement(required, conversationAudienceExtension)
-	data, err := envelope.MarshalHistoryArchiveChunk(chunk)
+	if !full && inFlight > 0 {
+		// Production is still filling this part; an earlier part's receipt
+		// or the next producer commit wakes packing again.
+		return nil
+	}
+	data, err := envelope.EncodeHistoryArchivePart(chunk)
 	if err != nil {
 		return err
 	}
@@ -356,7 +448,7 @@ func (a *Agent) archivePack(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	att, err := a.spoolReader("history.age.json", bytes.NewReader(data), recipient)
+	att, err := a.spoolReader("agentnet-history-v2.json.gz", bytes.NewReader(data), recipient)
 	if err != nil {
 		return err
 	}
@@ -432,7 +524,7 @@ func (a *Agent) archiveAuthority(ctx context.Context, env envelope.Envelope, in 
 	if err != nil {
 		return manifest, err
 	}
-	if in.Sub != envelope.SubHistoryArchive || !in.Replica || len(in.Attachments) != 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePlaintext {
+	if in.Sub != envelope.SubHistoryArchive || !in.Replica || len(in.Attachments) != 1 || in.Attachments[0].Size > protocol.MaxHistoryArchivePart {
 		return manifest, errors.New("invalid history archive shape")
 	}
 	me, ok, err := a.store.selfPerson(a.Address)
@@ -580,11 +672,13 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 		return failed(err)
 	}
 	defer os.Remove(path)
-	data, err := os.ReadFile(path)
+	part, err := os.Open(path)
 	if err != nil {
 		return failed(err)
 	}
-	chunk, err := envelope.ParseHistoryArchiveChunk(data)
+	// Inflate this bounded part once, then checkpoint each ordinary admission.
+	chunk, err := envelope.DecodeHistoryArchivePart(part)
+	part.Close()
 	if err != nil {
 		return failed(err)
 	}
@@ -592,7 +686,6 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 		return failed(errors.New("archive count does not match signed manifest"))
 	}
 	ctx = context.WithValue(ctx, historyArchiveRefreshKey{}, map[string]error{})
-	// Decode this bounded chunk once, then checkpoint each ordinary admission.
 	// No transaction spans crypto, network, or filesystem work.
 	for pos < len(chunk.Entries) {
 		if err := ctx.Err(); err != nil {
@@ -644,6 +737,14 @@ func (a *Agent) archiveImportStep(ctx context.Context) (bool, error) {
 				return failed(e)
 			}
 			if e = a.verifyAndStore(ctx, child); e != nil {
+				return failed(e)
+			}
+			// The descriptor's receipt covers this copy: no relay holds it,
+			// so it has no receipt of its own. Recording that keeps receipt
+			// flushes from walking every imported copy. A relay arrival of
+			// the same message first removes its archive row (daemon.go), so
+			// a real receipt is never suppressed.
+			if e = a.store.archivedChildNeedsNoReceipt(child.ID); e != nil {
 				return failed(e)
 			}
 		}
