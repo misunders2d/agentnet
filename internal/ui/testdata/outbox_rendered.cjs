@@ -46,7 +46,15 @@ async function bootFixture(seed) {
     [ids.claude]:{text:'', files:[stagedFile(agentFile, 'agent-original')]},
   };
   const workspace = {id:'default', name:'Private Outbox fixture', endpoint:location.origin, address:local, realm:'', handle:'outbox-exact-handle', state:'enrolled'};
-  const bag = {comicDrafts:{handle:workspace.handle, drafts, open:null, dm:null, thread:null, tab:'chats'}};
+  // Since 82010f31 drafts load from per-chat saved records (send-journal.mjs);
+  // their files come from this bag only while its revision matches the record.
+  const draftWrites = new Map();
+  for (const [conv, d] of Object.entries(drafts)) {
+    const revision = 'fixture-revision-' + conv, {files, ...scalar} = d;
+    localStorage.setItem('agentnet.messenger.drafts.' + workspace.id + '.draft.v1.' + conv, JSON.stringify({...scalar, __an_draft_revision:revision, __an_draft_write:'fixture-write-' + conv}));
+    draftWrites.set(conv, revision);
+  }
+  const bag = {comicDrafts:{handle:workspace.handle, drafts, draftWrites, open:null, dm:null, thread:null, tab:'chats'}};
   window.fixture = {...structuredClone(seed), requests:[], stages:0, fileReads:0, reminderPushes:0, originals:{humanFile, agentFile}, bag};
   let changed;
   const host = {
