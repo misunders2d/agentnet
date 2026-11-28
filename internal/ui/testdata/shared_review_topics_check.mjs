@@ -128,14 +128,15 @@ console.log('PASS shared Review/topics additional gates: duplicates/moving opaqu
  let requests=0;const current=unreadReview(f.root,{api:async()=>{requests++;return{rows:[row('current-host')],total:1,content:1,seq:1};},onChoose:r=>chosen.push(r)});current.update({overview:{unread_total:1,seq:1},revision:1,scope:'current-host'});current.show(true);await tick();const currentNode=role(f.root,'Unread messages').children[0];pending.resolve({rows:[row('old-host')],total:1,content:1,seq:1});await tick();assert.equal(role(f.root,'Unread messages').children[0],currentNode);assert(f.root.textContent.includes('current-host preview'));assert(!f.root.textContent.includes('old-host preview'));assert.equal(requests,1);assert.equal(chosen.length,0);current.stop();
 }
 
-// Keep the pre-existing Archive/Delete/Reopen routes and exact count payloads.
-for(const [label,route] of [['Archive','archive'],['Delete for me','delete']]){
- const f=topicFixture();f.update();const popup=await f.open(),check=role(popup,'Active topics').children[0].children[0];check.checked=true;check.onchange();button(popup,label).click();button(popup,'Confirm').click();const timer=[...f.timers.values()][0];assert.equal(timer.ms,6000);await timer.fn();await tick();const action=f.calls.find(c=>c.body);assert.equal(action.path,'/api/topic/'+route);assert.deepEqual(action.body,{conv:'chat',id:'',ids:['1'],counts:{'1':2}});f.controls.stop();
+// Keep the pre-existing Archive/Reopen routes and exact count payloads. One
+// topic is never deleted (owner, 2026-11-27): no Delete for me is offered.
+for(const [label,route] of [['Archive','archive']]){
+ const f=topicFixture();f.update();const popup=await f.open(),check=role(popup,'Active topics').children[0].children[0];check.checked=true;check.onchange();assert(!popup.textContent.includes('Delete'),'no topic delete offered');button(popup,label).click();button(popup,'Confirm').click();const timer=[...f.timers.values()][0];assert.equal(timer.ms,6000);await timer.fn();await tick();const action=f.calls.find(c=>c.body);assert.equal(action.path,'/api/topic/'+route);assert.deepEqual(action.body,{conv:'chat',id:'',ids:['1'],counts:{'1':2}});f.controls.stop();
 }
 {
  const f=topicFixture();f.controls.update({conv:'chat'},f.data,'2',null,{revision:1,mainUnread:2,unreadTotal:5});button(f.root,'Reopen').click();await tick();assert.deepEqual(f.calls.find(c=>c.body),{path:'/api/topic/reopen',body:{conv:'chat',id:'2',count:2}});button(f.root,'New topic').click();assert.deepEqual(f.chosen,['new']);f.controls.stop();
 }
-console.log('PASS shared Review/topics remaining gates: stale host response cannot repaint current host; Archive/Delete/Reopen/New retain routes and captured counts');
+console.log('PASS shared Review/topics remaining gates: stale host response cannot repaint current host; Archive/Reopen/New retain routes, no topic delete and captured counts');
 
 // T1: reuse the actual existing popup and bound API for shared and personal names.
 function titleFixture(scope={conv:'chat'},rows=[topic('named')]){

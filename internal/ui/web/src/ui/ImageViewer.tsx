@@ -14,12 +14,17 @@ const initial: View = { zoom: 1, x: 0, y: 0 };
 
 export type ImageNavigation = { index: number; total: number; step: (delta: -1 | 1) => void };
 
-export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigation, onClose, actions, openInApp }: {
+// content replaces the picture (an album's video plays here): no zoom or
+// pan then, and a swipe that starts on the video's own controls seeks
+// instead of turning the page.
+export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigation, onClose, actions, openInApp, content }: {
   src?: string; name: string; imageKey: string; loadFailed: boolean; opener: HTMLButtonElement;
   navigation?: ImageNavigation; onClose: () => void; actions?: ReactNode; openInApp?: () => Promise<unknown>;
+  content?: ReactNode;
 }) {
   const portal = usePortal(), modal = useModal(true);
   const [stage, setStage] = useState<HTMLDivElement | null>(null);
+  const [contentStage, setContentStage] = useState<HTMLDivElement | null>(null);
   const pointers = useRef(new Map<number, Point>());
   const swipe = useRef<(Point & { pointerId: number }) | null>(null);
   const [image, setImage] = useState({ width: 0, height: 0 });
@@ -64,6 +69,23 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
     observer.observe(el);
     return () => observer.disconnect();
   }, [stage]);
+  // A touch swipe here is the viewer's own gesture (pointer events below), so
+  // its touchmoves are cancelled: otherwise Chromium (Android's WebView)
+  // still starts a fling after a quick swipe, and a tap during that fling,
+  // such as Close right after swiping to the last item, only stops the fling
+  // and is not a click. Taps never move, so they still click. Around a video
+  // only a sideways album swipe is cancelled; up and down still scroll.
+  useEffect(() => {
+    const els = [stage, contentStage].filter((el): el is HTMLDivElement => !!el);
+    const move = (e: TouchEvent) => {
+      if (!e.cancelable) return;
+      if (e.currentTarget === stage) { e.preventDefault(); return; }
+      const start = swipe.current, touch = e.touches[0];
+      if (start && touch && e.touches.length === 1 && Math.abs(touch.clientX - start.x) > Math.abs(touch.clientY - start.y)) e.preventDefault();
+    };
+    for (const el of els) el.addEventListener("touchmove", move, { passive: false });
+    return () => { for (const el of els) el.removeEventListener("touchmove", move); };
+  }, [stage, contentStage]);
   // Native listener: React's passive wheel listener cannot prevent page zoom.
   useEffect(() => {
     const el = stage;
@@ -92,6 +114,7 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
             modal.onKeyDown(e);
             if (e.defaultPrevented || !navigation || view.zoom !== 1 || e.altKey || e.ctrlKey || e.metaKey) return;
             if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            if (e.target instanceof HTMLElement && e.target.closest("video, input, textarea")) return; // seek, not page
             e.preventDefault();
             e.stopPropagation();
             step(e.key === "ArrowLeft" ? -1 : 1);
@@ -100,7 +123,7 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
           <div className="flex shrink-0 items-center gap-3 border-b border-hairline px-3 py-2 pt-[max(8px,env(safe-area-inset-top))]">
             <div className="min-w-0 flex-1">
               <Dialog.Title className="truncate font-semibold">{name}</Dialog.Title>
-              <Dialog.Description className="text-sm text-muted">Drag to pan. Pinch or scroll to zoom.</Dialog.Description>
+              <Dialog.Description className="text-sm text-muted">{content ? navigation ? "Swipe or use the arrows for the album’s other items." : "" : "Drag to pan. Pinch or scroll to zoom."}</Dialog.Description>
             </div>
             {navigation && <>
               <IconButton label="Previous image" disabled={navigation.index === 0} onClick={() => step(-1)}><IconChevronLeft size={24} /></IconButton>
@@ -109,6 +132,21 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
             </>}
             <Dialog.Close aria-label="Close" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken"><IconX size={20} /></Dialog.Close>
           </div>
+          {content ? <div ref={setContentStage} role="region" aria-label={"Video: " + name} className="relative flex min-h-0 flex-1 touch-pan-y items-center justify-center overflow-auto bg-sunken p-3"
+            onPointerDown={e => {
+              const video = e.target instanceof Element ? e.target.closest("video") : null;
+              const controls = video && e.clientY > video.getBoundingClientRect().bottom - 64;
+              swipe.current = navigation && e.pointerType === "touch" && !controls && !(e.target instanceof Element && e.target.closest("button, a, input"))
+                ? { pointerId: e.pointerId, x: e.clientX, y: e.clientY } : null;
+            }}
+            onPointerUp={e => {
+              const start = swipe.current;
+              if (start?.pointerId !== e.pointerId) return;
+              swipe.current = null;
+              const dx = e.clientX - start.x, dy = e.clientY - start.y;
+              if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5) step(dx < 0 ? 1 : -1);
+            }}
+            onPointerCancel={() => { swipe.current = null; }}>{content}</div> :
           <div ref={setStage} tabIndex={0} role="region" aria-label="Image: drag to pan, pinch or scroll to zoom"
             className="relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden bg-sunken select-none"
             style={{ cursor: view.zoom > 1 ? "grab" : "default" }}
@@ -171,13 +209,15 @@ export function ImageViewer({ src, name, imageKey, loadFailed, opener, navigatio
               style={{ width: image.width * fit * view.zoom, height: image.height * fit * view.zoom, transform: `translate(${view.x}px, ${view.y}px)` }}
               onLoad={e => setImage({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
               onError={() => setDecodeFailed(true)} />}
-          </div>
+          </div>}
           <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-hairline px-3 py-2 pb-[max(8px,env(safe-area-inset-bottom))]">
+            {!content && <>
             <IconButton label="Zoom out" disabled={view.zoom <= 1 || unavailable} onClick={() => zoomBy(0.8)}><IconMinus size={20} /></IconButton>
             <output aria-label="Zoom level" className="min-w-12 text-center text-sm tnum">{Math.round(fit * view.zoom * 100)}%</output>
             <IconButton label="Zoom in" disabled={view.zoom >= maxZoom || unavailable} onClick={() => zoomBy(1.25)}><IconPlus size={20} /></IconButton>
             <Button disabled={unavailable} onClick={() => setView(initial)}>Fit</Button>
             <Button disabled={unavailable} onClick={() => setView({ ...initial, zoom: 1 / fit })}>100%</Button>
+            </>}
             {openInApp && <Button disabled={openState?.pending} onClick={async () => {
               setOpenState({ pending: true });
               try {

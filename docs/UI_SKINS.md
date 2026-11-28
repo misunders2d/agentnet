@@ -484,6 +484,9 @@ types are the Go structs in `internal/ui/*.go`, generated into
 `internal/ui/web/src/api.ts` and `model.ts`:
 
 - Reads: `/api/overview`, `/api/thread?id=...`, `/api/dm?id=...`.
+  The built-in "My agents" room is `overview.my_agents`, named also while
+  it is deleted here and left out of `dms`: reuse it, never create a second
+  "My agents" group when it is missing from `dms`.
   Private `overview.model_reports` are last reported runtime observations, not
   settings or availability. Match exact `host`, `host_key` and `agent_id`
   (empty identifies an unnamed legacy executor, not today's concrete default),
@@ -864,10 +867,12 @@ types are the Go structs in `internal/ui/*.go`, generated into
   are shared and attributed (`done_by: person`, `concluded_by`); any member
   may reopen. Send/ask accepts `topic` (`new` starts a topic), and
   `/api/topic/create` `{conv,id}` promotes a held logical message and replies.
-  Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive/Delete uses
+  Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive uses
   `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation before calling the host; never claim the change
-  before the host result. Delete for me in people chats
-  affects only this person's devices; others keep their copies. Archive
+  before the host result. Never offer deleting a topic (owner, 2026-11-27):
+  a topic is archived or marked done (and reopened); only a whole chat is
+  deleted. `/api/topic/delete` stays for skins that call it, but is no
+  longer offered by the bundled UI. Archive
   follows this person's own linked devices only; new messages/shared actions
   clear an archive. A named people-topic rename is shared with everyone who
   has access, including authorized topic guests. Say that before submitting;
@@ -1032,6 +1037,25 @@ types are the Go structs in `internal/ui/*.go`, generated into
   Ask, Do it or Bring in toward it, only when it says so: a phone or a
   browser never does, and its messages are its person's. Both are hints for
   display and offers; nothing a skin does with them grants anything.
+- Removed devices: `overview.removed_devices` (`[{address, person}]`) lists
+  devices a verified person (you, or someone you know) removed from their
+  roster, exact key. Their device threads are history: leave them out of the
+  active chat list (an agent's row by its host, else the peer), keep them
+  findable by topic search, and name them by their person ("Your Phone 3 ·
+  Removed device", "Vitalii’s Old phone · Removed device"), never as a device
+  not linked to a person, and never as "you" or that person for review.
+  An address any current roster still names (re-enrolled under a new key, or
+  now another person's device) is never listed here.
+  (`GET /api/approvals` keeps its own `removed_devices` as addresses.)
+- Deleting a device chat: `POST /api/conversation/delete` with
+  `{peer, thread, chat: true}` deletes every topic of that chat's row. Offer
+  "Delete chat…" only; `{peer, thread}` without `chat` (one topic) stays for
+  skins that call it, but is no longer offered by the bundled UI. Hide the
+  whole row at once and bring it back if the host refuses. A row is one peer
+  and one agent: an agent-history chat with unknown original agent is still
+  per peer, never every peer's history on that host. Say how many topics go
+  (`PeerTopics.total` counts archived ones) and who keeps a copy only as far
+  as it is known: nobody for another current device of yours.
 - People, not addresses: name a device by its person and device
   ("Vitalii · Phone", "You · Pixel"; the device in words, dashes as spaces);
   keep addresses for verified-detail panels. When a person's name is also

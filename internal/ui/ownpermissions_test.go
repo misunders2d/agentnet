@@ -105,4 +105,9 @@ func TestOwnPermissionInventory(t *testing.T) {
 	if err != nil || len(v.OwnDevices) != 1 || !v.OwnDevices[0].This || !slices.Contains(v.RemovedDevices, phone.Address) {
 		t.Fatalf("removed device inventory: %+v %v", v.OwnDevices, err)
 	}
+	// The overview names it too: its device thread is history, not a chat.
+	o, err := live.TopicOverview()
+	if err != nil || !slices.Contains(o.RemovedDevices, client.RemovedDevice{Address: phone.Address, Person: me.Person}) {
+		t.Fatalf("overview removed devices: %v %v", o.RemovedDevices, err)
+	}
 }

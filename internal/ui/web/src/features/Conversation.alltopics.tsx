@@ -27,7 +27,7 @@ export interface FlatTopics {
  canSelect: (id: string) => boolean;
  detail: (id: string) => string;
  choose: (id: string) => void;
- change: (what: "delete" | "done" | "archive", ids: string[], counts: Record<string,number>) => Promise<{note: string} | undefined>;
+ change: (what: "done" | "archive", ids: string[], counts: Record<string,number>) => Promise<{note: string} | undefined>;
 }
 
 export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, current, flat }: {
@@ -53,7 +53,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
   const stable=useSteadyChoices(latest,topicIdentity,scope,selected.length>0);
   const items=stable.choices.map(c=>c.row),present=new Set(latest.map(topicIdentity));
   const [counts,setCounts]=useState<Record<string,number>>({});
-  const [action,setAction]=useState<"delete"|"done"|"archive"|null>(null);
+  const [action,setAction]=useState<"done"|"archive"|null>(null);
   const [busy,setBusy]=useState(false);
   const [actionError,setActionError]=useState("");
   const [actionNote,setActionNote]=useState("");
@@ -72,7 +72,6 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
       const r=await(flat?flat.change(what,ids,covered):store.api.changeTopic(what,{conv,peer,id:"",ids,counts:covered}));
       if(r){
         if(!flat)void store.refetch();
-        if(what==="delete"&&conv&&ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});
         if(alive.current&&currentScope.current===capturedScope){
           if(confirm.current?.matches(":focus"))search.current?.closest<HTMLElement>('[role="dialog"]')?.focus({preventScroll:true});
           setSelected([]);setAction(null);setActionNote(r.note);
@@ -147,13 +146,11 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
           {actionNote && <p role="status" className="px-4 pt-3 text-[14px] font-semibold text-text-2">{actionNote}</p>}
           {selected.length>0 && <div className="shrink-0 border-b border-hairline px-4 py-2" aria-live="polite">
             <p className="text-[14px] font-semibold">{selected.length} selected</p>
-            {!action ? <div className="mt-2 flex flex-wrap gap-2">{(["delete","done","archive"] as const).map(what=><Button key={what} size="sm" disabled={busy || what==="done"&&items.some(t=>selected.includes(t.id)&&t.root)} onClick={()=>setAction(what)}>{what==="delete"?"Delete for me":what==="done"?"Mark done":"Archive"}</Button>)}<Button size="sm" disabled={busy} onClick={()=>setSelected([])}>Cancel selection</Button></div>
-              : <><p className="mt-1 text-[14px]">{action==="delete"
-                  ? `Delete ${selected.length} ${selected.length===1?"topic":"topics"} for ${conv?"you on your linked devices; others keep their copies":"you on this device only"}? This can't be undone.`
-                  : action==="done"
+            {!action ? <div className="mt-2 flex flex-wrap gap-2">{(["done","archive"] as const).map(what=><Button key={what} size="sm" disabled={busy || what==="done"&&items.some(t=>selected.includes(t.id)&&t.root)} onClick={()=>setAction(what)}>{what==="done"?"Mark done":"Archive"}</Button>)}<Button size="sm" disabled={busy} onClick={()=>setSelected([])}>Cancel selection</Button></div>
+              : <><p className="mt-1 text-[14px]">{action==="done"
                     ? `Mark ${selected.length} ${selected.length===1?"topic":"topics"} done ${conv?"for everyone in this chat":"on your linked devices"}? You can reopen from Done.`
                     : `Archive ${selected.length} ${selected.length===1?"topic":"topics"} on your linked devices? Nothing is deleted. Find them in Archived.`}</p>
-                <div className="mt-2 flex gap-2" aria-live="polite"><Button ref={confirm} size="sm" variant={action==="delete"?"danger":"act"} disabled={busy} onClick={commit}>{busy?`${action==="delete"?"Deleting":action==="done"?"Marking":"Archiving"} ${selected.length}…`:"Confirm"}</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></div></>}
+                <div className="mt-2 flex gap-2" aria-live="polite"><Button ref={confirm} size="sm" variant="act" disabled={busy} onClick={commit}>{busy?`${action==="done"?"Marking":"Archiving"} ${selected.length}…`:"Confirm"}</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></div></>}
           </div>}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-2 lg:px-3" aria-busy={loading}>
             <p role="status" className={q && !loading && !failed && items.length ? "px-3 pb-1 text-[13px] font-semibold text-text-2" : "sr-only"}>
@@ -200,7 +197,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, binding, agent, curre
             {loading && items.length === 0 && <p className="px-4 py-6 text-center text-[14px] text-text-2" role="status">Loading topics…</p>}
           </div>
           <p className="shrink-0 border-t border-hairline px-5 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))] text-[12.5px] text-muted">
-            {conv?"Names and Archive sync across your linked devices. Done and Reopen are shared with everyone. Delete for me leaves others’ copies.":"Names, Done and Archive sync across your linked devices. Delete for me leaves others’ copies."}
+            {conv?"Names and Archive sync across your linked devices. Done and Reopen are shared with everyone.":"Names, Done and Archive sync across your linked devices."}
           </p>
         </Dialog.Popup>
       </Dialog.Portal>

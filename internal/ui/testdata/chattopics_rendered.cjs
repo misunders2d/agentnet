@@ -619,16 +619,11 @@ const server = http.createServer((req, res) => {
         await dialog.getByRole('button', { name: /^Archived(?:\s|$)/ }).click();
         await dialog.getByRole('checkbox', { name: 'Select Topic 3', exact: true }).waitFor();
         await dialog.getByRole('checkbox', { name: 'Select Topic 3', exact: true }).check();
-        await dialog.getByRole('checkbox', { name: 'Select Topic 4', exact: true }).check();
-        await dialog.getByRole('button', { name: 'Delete for me', exact: true }).click();
-        assert.match(await dialog.innerText(), kind === 'agent'
-          ? /Delete 2 topics for you on this device only\? This can't be undone\./
-          : /Delete 2 topics for you on your linked devices; others keep their copies\? This can't be undone\./, tag + ': exact deletion scope and irreversibility');
-        await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
-        await page.waitForFunction(() => fixture.requests.some(r => r.path === '/api/topic/delete'), null, { timeout: 12000 });
-        assert.deepEqual(await page.evaluate(() => fixture.topics.map(t => t.title)), ['Topic 1', 'Topic 2'], tag + ': batch delete');
+        // One topic is never deleted, only archived or marked done (owner, 2026-11-27).
+        assert.equal(await dialog.getByRole('button', { name: /Delete/ }).count(), 0, tag + ': no topic delete offered');
+        assert.equal(await page.evaluate(() => fixture.requests.some(r => r.path === '/api/topic/delete')), false, tag + ': nothing deleted');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, tag + ': modal fits');
-        await shot('deleted');
+        await shot('archived');
         await dialog.getByRole('button', { name: /^(Close|Back to the conversation)$/ }).click();
         await page.getByRole('button', { name: 'New topic', exact: true }).click();
         combinations++;console.log('PASS ' + tag);

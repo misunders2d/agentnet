@@ -116,20 +116,41 @@ func (a *Agent) myAgentsRoomID(person string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var room *ConversationInfo
+	return MyAgentsRoomIn(convs, person), nil
+}
+
+// MyAgentsRoomIn is person's "My agents" room among convs, or "": the oldest
+// current group of theirs, with no other person, by that title. A room
+// deleted here (left out of the list until a turn) is still the room, so
+// its agents and the person's next ask reuse it and bring it back, never a
+// second one (owner, 2026-11-27). Where older code made a second room after
+// a deletion, the oldest listed one wins; the oldest deleted one only when
+// every room is deleted.
+func MyAgentsRoomIn(convs []ConversationInfo, person string) string {
+	var listed, deleted *ConversationInfo
+	older := func(c, than *ConversationInfo) bool {
+		return than == nil || c.Created < than.Created || c.Created == than.Created && c.ID < than.ID
+	}
 	for i, c := range convs {
-		if c.Kind != protocol.ConvKindGroup || c.Title != MyAgentsRoomTitle || c.Deleted || c.Frozen != "" ||
+		if c.Kind != protocol.ConvKindGroup || c.Title != MyAgentsRoomTitle || c.Frozen != "" ||
 			len(c.Members) != 1 || c.Members[0].Person != person {
 			continue
 		}
-		if room == nil || c.Created < room.Created || c.Created == room.Created && c.ID < room.ID {
-			room = &convs[i]
+		if c.Deleted {
+			if older(&convs[i], deleted) {
+				deleted = &convs[i]
+			}
+		} else if older(&convs[i], listed) {
+			listed = &convs[i]
 		}
 	}
-	if room == nil {
-		return "", nil
+	switch {
+	case listed != nil:
+		return listed.ID
+	case deleted != nil:
+		return deleted.ID
 	}
-	return room.ID, nil
+	return ""
 }
 
 // agentRoomTopic is the job's topic: the replied-to message's topic, else

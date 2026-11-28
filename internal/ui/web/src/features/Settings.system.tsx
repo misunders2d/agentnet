@@ -34,7 +34,7 @@ export function StorageSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   if (r.error && !r.data) return <>{head}<Failed text={/not found|404/i.test(r.error) ? "This AgentNet doesn’t report storage yet." : "Storage couldn’t be read just now."} retry={r.reload} /></>;
   if (!r.data) return <>{head}<Skeleton lines={5} /></>;
   const { local, remote } = r.data;
-  const here = local.scope === "browser-device-records" ? "this browser" : "this computer";
+  const here = local.scope === "browser-device-records" ? "this browser" : store.host.platform === "android" ? "this phone" : "this computer";
   const own = remote.status === "available" && remote.usage ? remote.usage.own.stored : null;
   return (
     <>

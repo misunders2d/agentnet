@@ -10,6 +10,16 @@ import (
 // implies that reader (CapsRecord.Reads): the capability list is full.
 const CapReminderSyncV2 = "rem2"
 
+// CapReminderSyncV3 reads everything rem2 does (reminders, person blocks)
+// and this person's device chat deletions (a clear with no conversation,
+// CapDeviceClear). It replaces rem2 in the same advertised slot and implies
+// rem2 and rem1 (CapsRecord.Reads): the capability list is full. All three
+// gate only copies to this person's own devices (blocksync.go,
+// remindersync.go, convclear.go), so an older own device that reads neither
+// name holds those copies until it updates; no other person's device and no
+// relay reads them.
+const CapReminderSyncV3 = "rem3"
+
 // MaxBlockMarks bounds one block-sync carrier.
 const MaxBlockMarks = 64
 

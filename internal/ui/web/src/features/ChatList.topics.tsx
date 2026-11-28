@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { errorText } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { TOPICS, chatList, deviceKind, firstLine, topicOf, when, type Topic } from "../model";
+import { TOPICS, chatList, deviceKind, firstLine, removedDevice, threadRow, topicOf, when, type Topic } from "../model";
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -28,6 +28,7 @@ export function TopicResults({ query, onCount }: { query: string; onCount: (n: n
   const hits={topics:page.rows,matched:page.total,next:page.next},failed=page.error,more=page.loading,showMore=page.more;
   if (!long || (!hits?.topics.length && !failed)) return null;
   const agents = new Map(chatList(overview, names).filter((i) => i.open.kind === "thread").map((i) => [i.peer || "", i.title]));
+  for (const t of hits.topics) if (!agents.has(t.peer) && removedDevice(t.peer, overview)) agents.set(t.peer, threadRow(t.peer, overview, names).title); // history, not listed
   return (
     <div className="px-2 pt-4 lg:px-1">
       <h2 className="px-4 pb-1 text-[12px] font-extrabold uppercase tracking-[.08em] text-muted lg:px-3">

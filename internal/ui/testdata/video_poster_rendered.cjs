@@ -29,7 +29,7 @@ async function check(kind, phone) {
     // Hold the received video's first read: its poster waits, nothing else may.
     let release; const held = new Promise(r => { release = r; });
     let heldOnce = false;
-    await p.route('**/api/files/picture-message/8?dir=in', async route => {
+    await p.route('**/api/files/video-8/8?dir=in', async route => {
       if (!heldOnce) { heldOnce = true; await held; }
       await route.continue();
     });

@@ -68,6 +68,9 @@ func (l *Live) dmOverview(o *Overview, unread *[]UnreadRow, mutes map[string]boo
 	if err != nil {
 		return err
 	}
+	if o.Person != nil {
+		o.MyAgents = client.MyAgentsRoomIn(convs, o.Person.Person)
+	}
 	chats := l.keptChats(convs)
 	// The agents each person's device runs in DMs here, from the
 	// participations as resolved (the host's person and device).

@@ -8,10 +8,39 @@ const outgoing='history-archive/out/',incoming='history-archive/in/';
 const inert=new Set(['history',wire.SubDeviceHistory,wire.SubRootSync,wire.SubGroupProof,wire.SubGroupContext]);
 const yieldTurn=()=>new Promise(r=>setTimeout(r,0));
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>keys.includes(k));
+// Large parts are gzip-compressed (Go envelope.EncodeHistoryArchivePart). A
+// device without the standard streams neither advertises nor packs ha2.
+export const archiveCompression=()=>typeof CompressionStream==='function'&&typeof DecompressionStream==='function';
+export async function compressPart(bytes){
+  const out=new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  if(out.length>wire.HistoryArchiveMaxPart)throw Error('Archive part exceeds bound.');
+  return out;
+}
+// Inflation stops past the plaintext bound; corrupt, multi-member or trailing
+// data fails closed (the stream rejects it, as Go's single-stream reader does).
+export async function inflatePart(bytes){
+  if(!(bytes instanceof Uint8Array)||bytes.length<1||bytes.length>wire.HistoryArchiveMaxPart)throw Error('Archive part exceeds bound.');
+  const reader=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader(),parts=[];
+  let n=0;
+  for(;;){
+    let step;
+    try{step=await reader.read();}catch{throw Error('Corrupt archive part.');}
+    if(step.done)break;
+    n+=step.value.length;
+    if(n>wire.HistoryArchiveMaxBytes){reader.cancel().catch(()=>{});throw Error('Archive part inflates past its bound.');}
+    parts.push(step.value);
+  }
+  const out=new Uint8Array(n);let at=0;
+  for(const part of parts){out.set(part,at);at+=part.length;}
+  return out;
+}
+export async function parseArchivePart(bytes,count){
+  return parseArchiveChunk(await inflatePart(bytes),count);
+}
 export async function parseArchiveChunk(bytes,count){
   if(!(bytes instanceof Uint8Array)||bytes.length>wire.HistoryArchiveMaxBytes)throw Error('Archive exceeds bound.');
   const chunk=JSON.parse(decode.decode(bytes));
-  if(!exact(chunk,['v','entries'])||chunk.v!==1||!Array.isArray(chunk.entries)||chunk.entries.length!==count||count<1||count>wire.HistoryArchiveMaxEntries)throw Error('Invalid archive chunk.');
+  if(!exact(chunk,['v','entries'])||chunk.v!==2||!Array.isArray(chunk.entries)||chunk.entries.length!==count||count<1||count>wire.HistoryArchiveMaxEntries)throw Error('Invalid archive chunk.');
   const children=new Set();
   for(const entry of chunk.entries){
     if(!exact(entry,['envelope','blobs'])||!entry.envelope||typeof entry.envelope!=='object'||!Array.isArray(entry.blobs)||entry.blobs.length>8)throw Error('Invalid archive entry.');
@@ -34,12 +63,15 @@ export async function parseArchiveChunk(bytes,count){
   }
   return chunk;
 }
+// A child staged again after its part ends keeps that part's requirements:
+// an erased copy can no longer be classified from its plaintext.
+const inherited=(child,job)=>({resources_cap:!!(child.resources_cap||job.resources_cap),shared_title_cap:!!(child.shared_title_cap||job.shared_title_cap),mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})});
 export function historyArchive(e,Hold,StoreConflict,retryable){
   async function authority(manifest,from,key,checks=[]){
     return e.readSyncAuthority(manifest,from,key,e.address,e.fp,checks);
   }
   async function supported(dev){
-    if(!await e.recipientAvailable(dev)||!await e.ownHistoryAuthority(dev))return false;
+    if(!archiveCompression()||!await e.recipientAvailable(dev)||!await e.ownHistoryAuthority(dev))return false;
     const pin=await e.store.get('pins',dev.address);
     if(!pin||pin.pending||pin.fingerprint!==dev.fingerprint)return false;
     try{
@@ -73,27 +105,71 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       };
     }),...ops];
   }
-  async function pack(){
-    // A durable terminal descriptor may outlive its receipt callback after a crash.
+  // Parts packed before ha2 are version 1, which an upgraded device refuses.
+  // Nothing already sent may be lost: once per start, every child of such a
+  // part is staged again for a version 2 part (receivers deduplicate), and
+  // an unsent one stops holding the window. Children whose structural
+  // ciphertext was released on acceptance are marked not delivered, so
+  // history catch-up seals them afresh, as the Go client's schema step does.
+  async function sweepVersion1(){
+    if(e.archiveSwept)return;
     for(const job of await e.store.prefix('kv',outgoing)){
+      if(!job.manifest||job.manifest.format===wire.HistoryArchiveFormat||job.swept||!['prepared','published','accepted'].includes(job.state))continue;
+      const ops=[],checks=[{s:'kv',k:outgoing+job.id,v:job}];
+      for(const id of job.children||[]){
+        const child=await e.store.get('outbox',id);
+        if(!child||child.archive_chunk!==job.id||!['archive_staged','archive_accepted'].includes(child.state))continue;
+        checks.push({s:'outbox',k:id,v:child});
+        const released=(child.files||[]).some(f=>!f.ct);
+        ops.push({s:'outbox',k:id,v:{...child,archive_chunk:'',...(released?{state:'not_delivered',detail:'Copied again in a version 2 history part.'}:{state:'archive_staged',...inherited(child,job)})}});
+      }
+      const descriptor=await e.store.get('outbox',job.id);
+      if(descriptor&&['queued','waiting','archive_uploading'].includes(descriptor.state)){
+        checks.push({s:'outbox',k:job.id,v:descriptor});
+        ops.push({s:'outbox',k:job.id,v:{...descriptor,state:'not_delivered',detail:'Replaced by a version 2 history part.'}});
+      }
+      ops.push({s:'kv',k:outgoing+job.id,v:{...job,ct:null,children:[],state:['prepared','published'].includes(job.state)?'expired':job.state,swept:true}});
+      if(job.state==='prepared')ops.push({s:'files',k:'archive-out/'+job.id,v:undefined});
+      try{await e.store.write(ops,checks);}catch(error){if(error instanceof StoreConflict)return;throw error;}
+    }
+    // A version 1 part still importing here can never be read again; its
+    // source sends every copy in it again, so the job closes.
+    for(const job of await e.store.prefix('kv',incoming)){
+      if(job.state==='done'||job.manifest?.format===wire.HistoryArchiveFormat)continue;
+      try{await e.store.write([{s:'kv',k:incoming+job.id,v:{...job,state:'done',error:''}},{s:'files',k:'archive/'+job.id,v:undefined}],[{s:'kv',k:incoming+job.id,v:job}]);}catch(error){if(error instanceof StoreConflict)return;throw error;}
+    }
+    e.archiveSwept=true;
+  }
+  async function pack(){
+    await sweepVersion1();
+    // A durable terminal descriptor may outlive its receipt callback after a crash.
+    const jobs=await e.store.prefix('kv',outgoing);
+    for(const job of jobs){
       if(job.state!=='published')continue;
       const descriptor=await e.store.get('outbox',job.id);
       if(['delivered','expired'].includes(descriptor?.state))await receipt(descriptor);
     }
-    const staged=(await e.store.outboxStates(['archive_staged'])).filter(r=>!r.archive_chunk).sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)||a.id.localeCompare(b.id));
-    const targets=new Map();
-    for(const row of staged){
-      const key=row.to+'\0'+row.recipient_fp;
-      if(!targets.has(key))targets.set(key,[]);
-      targets.get(key).push(row);
-    }
-    for(const rows of targets.values()){
+    const own=await e.store.get('kv','person');
+    for(const dev of own?.devices||[]){
+      if(dev.address===e.address)continue;
+      // Count first: only a destination with a part to pack is read, and
+      // then at most one part's rows, in packing order.
+      let pending=await e.store.archivePendingCount(dev.address,dev.fingerprint),rows=[];
+      if(!pending)continue;
       try{
-        let outstanding=(await e.store.prefix('kv',outgoing)).filter(j=>j.to===rows[0].to&&j.recipient_fp===rows[0].recipient_fp&&['prepared','published'].includes(j.state)).length;
-        while(rows.length&&outstanding<2){
+        // Up to HistoryArchiveWindow parts travel at once. A part goes when
+        // full, or when none is in flight (the newest page at once, the
+        // last partial part after its predecessors); otherwise production
+        // keeps filling it instead of each page making its own round trip.
+        let outstanding=(await e.store.prefix('kv',outgoing)).filter(j=>j.to===dev.address&&j.recipient_fp===dev.fingerprint&&['prepared','published'].includes(j.state)).length;
+        while(pending>0&&outstanding<wire.HistoryArchiveWindow){
+          if(outstanding>0&&pending<wire.HistoryArchivePackEntries)break; // cannot be full yet
+          rows=await e.store.archivePending(dev.address,dev.fingerprint,wire.HistoryArchivePackEntries);
+          if(!rows.length)break;
           const checks=[],{
             own,pin
           }=await gate(rows[0],checks),entries=[],chosen=[];
+          let size=utf8.encode(JSON.stringify({v:2,entries:[]})).length,full=false;
           for(const row of rows){
             const current=await e.groupRead(checks,'outbox',row.id);
             if(current?.state!=='archive_staged'||current.archive_chunk)break;
@@ -107,23 +183,23 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
             }
             const entry={
               envelope,blobs
-            },size=utf8.encode(JSON.stringify({
-              v:1,entries:[...entries,entry]
-            })).length;
-            if(size>wire.HistoryArchiveMaxBytes){
-              if(!entries.length)throw Error('One archive record exceeds 4 MiB.');
+            },grown=size+utf8.encode(JSON.stringify(entry)).length+(entries.length?1:0);
+            if(grown>wire.HistoryArchiveMaxBytes){
+              if(!entries.length)throw Error('One archive record exceeds the part bound.');
+              full=true;
               break;
             }
+            size=grown;
             entries.push(entry);
             chosen.push(current);
-            if(entries.length===wire.HistoryArchiveMaxEntries)break;
+            if(entries.length===wire.HistoryArchivePackEntries){full=true;break;}
           }
-          if(!entries.length)break;
-          const sealed=await wire.encryptFile(utf8.encode(JSON.stringify({
-            v:1,entries
-          })),'agentnet-history-v1.json',await e.pubOf(pin)),id=wire.newID();
+          if(!entries.length||!full&&outstanding>0)break;
+          const sealed=await wire.encryptFile(await compressPart(utf8.encode(JSON.stringify({
+            v:2,entries
+          }))),'agentnet-history-v2.json.gz',await e.pubOf(pin)),id=wire.newID();
           const manifest={
-            v:1,person:own.person,roster:own.hash,count:entries.length,format:'agentnet-history-v1'
+            v:1,person:own.person,roster:own.hash,count:entries.length,format:wire.HistoryArchiveFormat
           };
           const shared_title_cap=chosen.some(row=>row.shared_title_cap);
           const resources_cap=chosen.some(row=>row.resources_cap||wire.conversationResources(row.topic_event)||row.sub==='history'&&row.body&&wire.conversationResources(wire.parseHistory(row.body).topic_event));
@@ -133,16 +209,20 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           const baseRequirement=snapshot?(proactive?wire.CapTopicContext+"+"+wire.CapProactiveAgent:wire.CapTopicContext):proactive?wire.CapProactiveAgent:wire.CapHistoryArchive;
           const required_cap=wire.conversationAudienceRequirement(wire.steerRequirement(wire.guestAgentRequirement(baseRequirement,chosen.some(wire.guestAgentCopy)),chosen.some(wire.steerCopy)),chosen.some(wire.conversationAudienceCopy));
           await gate(rows[0],checks);
+          // The sealed part lives in the files store until it is uploaded:
+          // job rows are scanned on every wake and stay small.
           await e.store.write([{
+            s:'files',k:'archive-out/'+id,v:{ct:sealed.ct,history_part:true}
+          },{
             s:'kv',k:outgoing+id,v:{
-              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,...sealed,required_cap,mention_cap,organization_cap,shared_title_cap,resources_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
+              id,to:rows[0].to,recipient_fp:rows[0].recipient_fp,manifest,attachment:sealed.attachment,required_cap,mention_cap,organization_cap,shared_title_cap,resources_cap,order:chosen[0].send_order??chosen[0].at,state:'prepared',children:chosen.map(r=>r.id)
             }
           },...chosen.map(row=>({
             s:'outbox',k:row.id,v:{
               ...row,archive_chunk:id
             }
           }))],checks);
-          rows.splice(0,chosen.length);
+          pending-=chosen.length;
           outstanding++;
         }
       }catch{
@@ -196,7 +276,9 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       try{
         const checks=[];
         await gate(row,checks);
-        await e.uploadBlob(row.to,row.attachment.blob,row.ct);
+        const part=await e.store.get('files','archive-out/'+row.id);
+        if(!part?.ct)throw Error('Archive part ciphertext unavailable.');
+        await e.uploadBlob(row.to,row.attachment.blob,part.ct);
         const {
           pin
         }=await gate(row,checks),at=e.now(),body=JSON.stringify(row.manifest);
@@ -213,9 +295,9 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           }
         },{
           s:'kv',k:outgoing+row.id,v:{
-            ...row,state:'published',ct:null
+            ...row,state:'published'
           }
-        }],checks);
+        },{s:'files',k:'archive-out/'+row.id,v:undefined}],checks);
         e.queueOutbox();
       }catch{
         const current=await e.store.get('kv',outgoing+row.id);
@@ -228,18 +310,19 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
     }
   }
   async function importPass(){
+    await sweepVersion1();
     for(let job of (await e.store.prefix('kv',incoming)).sort((a,b)=>(a.order??0)-(b.order??0)||a.id.localeCompare(b.id))){
       if(e.closing)return;
       if(job.state==='done')continue;
       try{
         const checks=[];
         await authority(job.manifest,job.from,job.from_key,checks);
-        let retained=await e.store.get('files','archive/'+job.id);
+        let retained=await e.store.get('files','archive/'+job.id),chunk=null;
         if(!retained){
           if(!e.connected)return;
           const ct=await e.getBytes('/v1/blobs/'+job.attachment.blob.id+'/data',job.attachment.blob.size);
           // Both hashes/decryption must pass before the descriptor can be acked.
-          await parseArchiveChunk(await wire.decryptFile(ct,job.attachment,e.keys),job.manifest.count);
+          chunk=await parseArchivePart(await wire.decryptFile(ct,job.attachment,e.keys),job.manifest.count);
           await authority(job.manifest,job.from,job.from_key,checks);
           const current=await e.groupRead(checks,'kv',incoming+job.id);
           job={
@@ -262,7 +345,9 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
           e.flushReceipts().catch(()=>{
           });
         }
-        const bytes=await wire.decryptFile(retained.ct,job.attachment,e.keys),chunk=await parseArchiveChunk(bytes,job.manifest.count);
+        // The first fetch already decrypted and parsed this part; only a
+        // resumed import (after a restart) reads the retained copy.
+        chunk||=await parseArchivePart(await wire.decryptFile(retained.ct,job.attachment,e.keys),job.manifest.count);
         while(job.index<chunk.entries.length){
           if(e.closing)return;
           await importEntry(job,chunk.entries[job.index]);
@@ -342,13 +427,13 @@ export function historyArchive(e,Hold,StoreConflict,retryable){
       checks.push({s:'outbox',k:id,v:child});
       if(['archive_staged','not_delivered'].includes(child?.state)&&child.archive_chunk===row.id)ops.push({
         s:'outbox',k:id,v:{
-          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',resources_cap:!!(child.resources_cap||job.resources_cap),shared_title_cap:!!(child.shared_title_cap||job.shared_title_cap),mention_cap:!!(child.mention_cap||job.mention_cap),organization_cap:!!(child.organization_cap||job.organization_cap),...([wire.CapProactiveAgent,wire.CapTopicContext,wire.CapTopicContext+"+"+wire.CapProactiveAgent].includes(wire.steerRequirementBase(job.required_cap))||wire.conversationAudienceCopy(job)||wire.steerCopy(job)||wire.guestAgentCopy(job)?{required_cap:job.required_cap}:{})}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
+          ...child,...(row.state==='expired'?{state:'archive_staged',archive_chunk:'',...inherited(child,job)}:{state:'archive_accepted',...(child.files?{files:child.files.map(file=>({...file,ct:null}))}:{})})
         }
       });
     }
     ops.push({
       s:'kv',k:key,v:{
-        ...job,state:row.state==='expired'?'expired':'accepted'
+        ...job,state:row.state==='expired'?'expired':'accepted',children:[] // a terminal job is never read for its children again
       }
     });
     try{await e.store.write(ops,checks);}

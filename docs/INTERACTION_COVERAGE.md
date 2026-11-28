@@ -1,5 +1,225 @@
 # Next-release interaction coverage and responsiveness
 
+## Delete an empty DM or group — unreleased, November 27, 2026
+
+Reported: a DM with a pinned person where nothing was ever said ("Nothing
+said yet") answered "Delete conversation…" with "There is nothing here to
+delete." and stayed in the list, with no other way to remove it. Cause: the
+conversation row exists (its signed root, synced to the own devices by
+root-sync controls), but it holds no turn, so `DeleteConversation` named zero
+turns and refused (`ErrNothingToDelete`; the browser engine refused the same
+way).
+
+Counterpart: TDLib `4c6377aa`, `MessagesManager.cpp:8613`
+`delete_dialog_history`. With `remove_from_chat_list` an empty chat is still
+removed: `allow_error = d->messages.empty()` (line 8658) tolerates a server
+error, the early "nothing to do" return applies only when the chat is not
+being removed from the list (`!(old_order != DEFAULT_ORDER && remove_from_dialog_list)`),
+and `clear_dialog_message_list` (line 8887) sets the chat's order to
+`DEFAULT_ORDER`, which takes it off the list. A later message brings the
+chat back. Contacts are not part of that call; that the contact stays saved
+is observed Telegram behavior, not checked in source here.
+
+Reused: the existing deletion. A DM with no turn names one marker turn (this
+device's key and the deletion's own id, matching no message) in `conv_erased`;
+it is shared, replayed to devices linked later and applied by the existing
+clr1 `clear` control, and the existing list rule leaves the chat out until a
+turn arrives. No schema step, no new control. The web store's existing
+immediate removal (`deleteChat`, measured by the latency fixture's chat-delete
+cells) now ends in success instead of a restore. People, keys, grants and
+blocks are untouched (keys, grants and blocks by code reading: the path
+writes only `conv_erased` and the `clear` copies). Owner decision, same day:
+an empty group leaves the list the same way; membership, keys, grants and
+its agents stay, and its other members keep it listed. Still refused as
+before: a repeat deletion and a recovered person's chat (its earlier DMs
+show in it). Owner decision (Option A), same day: the built-in My agents
+room, empty or not, is hidden the same way and is still found. The room was
+found only among listed chats (Go `myAgentsRoomID` skipped a deleted chat;
+web `myAgentsRoomId` and the engine's `builtInGroup` read `overview.dms`), so
+deleting a My agents room with messages made the next agent ask create a
+second room (reproduced by `TestDeletedMyAgentsRoomIsReused` on the old
+code). Now Go `MyAgentsRoomIn` keeps a deleted room, and the new
+`overview.my_agents` field (docs/HOST_API_ROUTES.md, docs/UI_SKINS.md) names
+it for the web ("Chat with", Assign, built-in rules) and the browser engine.
+The next agent message reuses it and its turn brings it back; deleted
+messages stay deleted, as in any deletion. After review: creating a group
+titled "My agents" while one exists, deleted here or not, returns that room
+in both hosts (Go `CreateGroup`, engine `createGroup`), so a skin that looks
+only among listed chats cannot make a second one; and when older copies
+exist, the oldest listed room wins, the oldest deleted one only when all are
+deleted.
+Starting a chat with the person again creates a new DM, as after any
+deletion; a turn in the old one brings it back.
+
+Evidence: `TestDeleteEmptyDMOnAllOwnDevices` (client: laptop and linked
+phone; no error, left out on both, people unchanged, a repeat adds no marker,
+a new DM with the person is listed, a turn in the old one brings it back on
+both); `TestDeleteEmptyGroupHidesItOnly` (client: an empty group leaves the
+list, membership hash unchanged, others keep it, a repeat refuses, a turn
+brings it back); `TestDeletedMyAgentsRoomIsReused` (client: My agents
+deleted with a message and empty is still the room the next ask gets, still
+the built-in group, and a turn brings it back; creating "My agents" while
+it is deleted returns the same room and no second one); `TestMyAgentsRoomInPrefersListed`
+(client: of two rooms, the listed one over an older deleted one; the oldest
+when all are listed or all deleted); `TestDeletedEmptyChatsOnOwnDevices`
+(client: an empty group and My agents deleted on the laptop leave the list on
+the linked agent-host device, whose `MyAgentsRoom()` is still the same room;
+a device linked after the deletion of an empty DM and an empty group shows
+neither, nor My agents, and its `MyAgentsRoom()` is the same room; the
+deleted DM's root is not synced to it at all, root-sync leaving deleted
+chats out); `TestDeletedMyAgentsRoomStaysNamed`
+(ui `Live`: after deletion the room is out of `dms` and still `my_agents`);
+`TestDeleteEmptyDMLeavesTheList` (ui `Live`: listed in a built
+overview, deleted with a note, gone from the next overview, people kept);
+`TestBrowserConversationDeletionMatchesGo` (browser engine: deleted on the
+desk and the linked phone, people kept, a repeat adds no marker, a turn
+brings it back; the phone's root is seeded as root-sync leaves it, and no
+new-chat step; an empty group leaves the list with its group context
+unchanged and comes back with a turn; My agents, empty and with a message,
+leaves the list, stays `my_agents` and the built-in group, and comes back;
+`createGroup('My agents')` while it is deleted returns it; of two rooms, the
+listed newer one over the older deleted one, the oldest when both are
+deleted or both listed); `TestAgentChatStarterRendered` (rendered Comic,
+opt-in Playwright: with the My agents room out of `dms` and named by
+`my_agents`, "Chat with" asks in that room, makes no second room, and the
+question brings it back).
+The new client, ui `Live`, browser and rendered checks fail on the code
+before each fix (the reported refusal, a second My agents room, a missing
+`my_agents`, a newer deleted room winning, or "Chat with" asking in a new
+room). Not rendered: Assign into a hidden room (same `myAgentsRoomId`). The
+skins gate (agentnet-skins `npm test` against the candidate) must be rerun
+before release for the new overview field.
+Not rerun: the rendered latency suite (web code unchanged this round); not
+checked on the real installed app or Android.
+
+## MEL-856 grouped photos, videos and files — unreleased, November 27, 2026
+
+Owner: "multiple photos should be grouped nicely and beautifully", and check
+how others do it. This replaces the MEL-668/MEL-813 picture rows below.
+
+Reuse evidence. Telegram Desktop at
+`fca0d08b6852df2195e11db91f7a4e3be2cbc4a4`:
+[`ui/grouped_layout.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/ui/grouped_layout.cpp)
+(`LayoutMediaGroup`),
+[`history_view_media_grouped.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/history/view/media/history_view_media_grouped.cpp)
+(`Mode::Grid`/`Mode::Column`, `countCurrentSize`, `kMaxSize`),
+[`attach_prepare.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/ui/chat/attach/attach_prepare.cpp)
+(`GroupRanges`, `kMaxAlbumCount = 10`), `chat.style` (`maxMediaSize`
+430, `minPhotoSize` 100, `historyGroupSkip` 4) and
+[`send_files_box.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/boxes/send_files_box.cpp#L2948-L2958)
+(the composer's caption goes to the last group: the first item of a photo
+album, shown under it, or the last file of a column).
+[Telegram API: albums](https://core.telegram.org/api/files) (ten items).
+
+Compared, not ported. Telegram Android at
+`21f7d109da6ab3506c9e9577f98c6a38771ab335`,
+[`MessageObject.GroupedMessages.calculate`](https://github.com/DrKLO/Telegram/blob/21f7d109da6ab3506c9e9577f98c6a38771ab335/TMessagesProj/src/main/java/org/telegram/messenger/MessageObject.java#L1394):
+the same w/n/q thresholds (1.2/0.8), branches for two to four items, the
+complex rows for five or more or a ratio above 2, and the same caption rule
+(one captioned item gives the album caption; documents keep theirs). It
+differs in its 800×814 reference block, ratios cropped to 0.667–1.7 (Desktop
+1–2.75 or 0.667–1), a 1.2 rather than 1.5 penalty for falling row counts, and
+ratio 1 for a picture without a thumbnail, which Comic reuses until sizes are
+known. Signal-Android at `2dd57038758b7630c028dcfd5eaf4e27acc0b11a`,
+[`AlbumThumbnailView`](https://github.com/signalapp/Signal-Android/blob/2dd57038758b7630c028dcfd5eaf4e27acc0b11a/app/src/main/java/org/thoughtcrime/securesms/components/AlbumThumbnailView.java#L143-L165):
+fixed layouts for two to five tiles, ignoring shape, and a "+N" fifth tile
+beyond five. Telegram shows all ten, so nothing is taken from it. WhatsApp:
+its help center pages returned no readable content to a fetch (the article
+URL was "page not found", the index and blog had no body), so its album
+behaviour, including the 2×2 "+N" grid, remains unverified and unused.
+
+What Comic does (`Message.groups.ts`, `Message.files.tsx`):
+
+- Attachments split as `GroupRanges` does: consecutive photos/videos
+  (album), audio (column) or other files (column); a kind change or ten items
+  starts a new group; a group of one keeps the existing single picture, video
+  card or file row. A GIF is `AlbumType::None` there
+  (`attach_prepare.cpp` 177–183): never in an album or a column, always on
+  its own, and it splits the groups around it. Order never changes.
+- An album is `LayoutMediaGroup` at 430 px, scaled with its 4 px gaps to the
+  bubble as `countCurrentSize` does, positioned in percentages. Tiles fill
+  their cell (cover); only the block's outer corners are rounded. Videos show
+  their poster with Telegram's play badge, or the size when the file is not
+  here or is over 16 MiB.
+- Documents and audio are one bordered block of rows, each with its name,
+  size, Preview/Download and the Drive copy, as before.
+- The message text, AgentNet's single caption, sits under the attachments.
+- Tapping a tile opens the existing viewer at that item. Previous/Next, the
+  arrow keys and a swipe step through the album, photos and videos alike; a
+  video plays in the viewer inside its existing card (`VideoFile`: the same
+  load, 16 MiB, WebKitGTK interleave, release and Android download paths), and
+  leaving it unloads it.
+- The viewer cancels the touchmoves of its own swipes. Without that,
+  Chromium (Android's WebView) started a fling of about 400 ms after a quick
+  swipe, and a tap during it (Close right after the last swipe) only stopped
+  the fling: no click. An input trace showed `GestureFlingCancel` then a
+  suppressed `GestureTap`. With the old viewer, the rendered check (Close
+  150 ms after a finger-like swipe) failed 3 of 3 runs; with the fix it
+  passed 24 of 24 cases.
+
+AgentNet-specific adaptations. One AgentNet message carries up to
+`envelope.MaxAttachments` (8) files and one text, so a message is split into
+groups for display rather than sent as several messages; the protocol and
+manifest are unchanged. More than ten items cannot be sent; the over-ten case
+is covered with fixture data only. The manifest has no picture dimensions,
+so an album lays out with unit ratios (Telegram Android's default) until every
+picture in it has decoded, then lays out once; a video counts as 16:9 until
+its poster is made, then takes the poster's shape. A ratio is kept within
+`ValidateThumbDimensions`' bounds (1:20 to 20:1); a size that gives none
+(0, NaN, Infinity) counts as square. A picture whose bytes are not a picture
+leaves the album and becomes a file row, and the album re-forms around it. A
+fetch or decode that fails shows the file row only until the conversation is
+opened again, when the picture is tried again. An album tile's focus ring is
+drawn inside the tile, since the album clips anything outside it. A message
+still sending shows its album at once (tiles marked busy, no thumbnails yet)
+instead of "sent, not kept here" rows.
+
+Not done (issue scope): the composer's attach preview still lists files as
+before; it neither groups them like the message nor offers Telegram's
+"group or send separately" choice. Also not done: an inline audio player
+(none existed), video durations on tiles, and the collection skins
+(Classic, Holonet, Zoom), which have their own renderers. Firefox and WebKit
+did not run locally for the adjusted video checks; the installed app
+(WebKitGTK) and Android are checked separately.
+
+Layout fidelity. `TestGroupedMediaLayout` compares the port with 34 vectors
+produced by Telegram's unmodified `grouped_layout.cpp`, compiled against a
+small shim (`testdata/grouped_layout_oracle`), covering every branch; all
+match exactly. It also checks the grouping rules (GIFs included) and the
+ratio bounds, including 0, NaN and Infinity sizes.
+
+| Control or state | Rendered evidence in `testdata/message_images_rendered.cjs` (1440, 360, 320 px; 360/320 with touch and the Android host) |
+|---|---|
+| Album of 2–10 photos, portrait/landscape/square/panorama mixed, received and sent | Tile geometry equals Telegram's layout scaled to the block within 1.5 px; order; square inner corners, rounded block; no horizontal scroll |
+| Album tile (Enter / tap) | Keyboard focus ring drawn inside the tile; opens the viewer at that item, under 1100 ms |
+| Viewer Previous/Next (click) and swipe (touch) | Step through every item with "i / n", stop at the ends; each step under 1100 ms |
+| Viewer Download, Close, Escape | Original bytes and filename; focus returns to the tile; under 1100 ms |
+| Video tile, playable (one playable and one large video in a 4-item album) | Poster, play badge; viewer plays the real clip and keeps Download; stepping away pauses, unloads and detaches it |
+| Video tile over 16 MiB | Size label; viewer says "Videos up to 16 MiB can play here."; the file is never read |
+| Held original | Unit-ratio layout and no viewer until the bytes arrive; then one layout |
+| Failed picture | Becomes a file row with Download; the album re-forms |
+| Documents (2 in the mixed case, 4 and 8), audio (3) | One block, one row per file in order, Download returns the original bytes |
+| Mixed selection | photos → documents → single audio → photos, in order, never mixed |
+| More than ten (fixture) | Albums of 10 and 2 |
+| Caption | Under the last group in every case |
+| Pending send of three photos | Album with busy tiles under 1100 ms of the Send tap, caption under it, no file-row flash |
+| Single picture | Unchanged: whole shape, own Drive link |
+
+Existing checks adjusted: the shared video fixture (`imageviewer_rendered_test.go`)
+now puts each video in its own message, since videos sent together now form
+an album; `TestImageViewerRendered` expects its three pictures as an album.
+
+`TestMessageImagesGroupedRendered` runs the script on Comic built from
+source. The packaged bundles ran the same script directly:
+`AGENTNET_IMAGE_BUILT=1` for Comic, plus
+`AGENTNET_IMAGE_PACKAGE=static/skins/office` for Office (57 of 57 each).
+
+Measured (Chromium, every case at all three widths, source and built Comic,
+built Office): viewer open at most 246 ms, a step at most 288 ms, close at
+most 290 ms; a pending album appears at most 153 ms after Send. After the
+fling fix: 10 runs from source, 5 of packaged Office and 2 of packaged
+Comic, 57 of 57 cases each.
+
 ## Next release after v0.11.10 — MEL-825 and MEL-826
 
 MEL-825 keeps a revision on the original message. The first claim reads the
@@ -865,6 +1085,8 @@ app's WebKitGTK webview (capture uses Play's interleaved bytes there),
 macOS/Windows/Android shells, physical devices.
 
 ## MEL-813 compact image groups — November 24, 2026
+
+Superseded by MEL-856 (above): pictures sent together now form a Telegram album.
 
 Three sent 2:1 screenshots filled two square-tile rows on `aa58315f`.
 Comic now gives the first image a full-width row with the other two below.
@@ -4452,3 +4674,205 @@ without border or background (tallest 17.9 px desktop, 35.8 px phone; nine rows
 161 px desktop), and the inline "saw N messages" control opens What it saw and
 closes with Escape. Office contrast: muted 6.45:1, link 7.59:1 on white.
 
+
+## Storage page on Android: attachment status reads and "On this phone" (v0.11.13)
+
+Owner's Play app (v0.11.12), 2026-11-27: You → Storage → Workspace attachments
+showed "AgentNet is not reachable…" with a stuck "Refreshing…" while the phone
+received a large history copy; chats loaded. The card, `/events` and loader code
+are unchanged from v0.11.12 to this candidate.
+
+Proven defects: the card started one relay read for every un-hinted change
+event (every committed local write is one; `/events` does not throttle). A read
+superseded by a newer one never cleared "Refreshing…", and while no status was
+known even background reads set it. The old card with 300 held change events:
+300 reads in flight, button "Refreshing…", the "not reachable" alert.
+
+Hypothesis for the alert itself, not confirmed on the phone: Chromium rejects
+fetches once about 1,350 are pending (desktop Chromium 158: 1,300 queued all
+answered; 1,500 gave 145 `TypeError: Failed to fetch`; 4,000 gave 2,651), which
+`errorText` names "not reachable". Not measured: the phone's change-event rate
+during the copy, and Android WebView's limit. Chat reads from the same page would
+be rejected at that limit too; the report that chats loaded is not explained by
+it. Settling evidence: the WebView subresource error code and path for this GET
+(`onReceivedError`, no token), and the core's count of change events during a copy.
+
+Reused pattern: the store's refresh lanes (`store.ts` `refreshOpen`, "each lane
+coalesces independently, including continuous traffic"), adapted to two reads.
+The card keeps at most two reads in flight and folds later events into one
+follow-up. An answer is dropped only once a newer read has answered or an action
+or workspace change made it stale, so under steady events every read still
+lands. Background reads never change or disable Refresh. Refresh clears the old
+error and shows "Refreshing…" at once, until a read started after the press
+settles. A read unanswered after 30 s (the core's relay call is bounded at 20 s)
+ends with "No answer about workspace attachments yet. Refresh to try again." A
+request with no HTTP answer says "Workspace attachment status couldn’t be read
+just now. Refresh to try again."; HTTP refusals keep their own words.
+
+Review follow-up (same release line). A manual Refresh drops answers to reads
+started before the press and starts its own read at once, one past the cap, so a
+pre-press timeout can no longer bring back the cleared error while Refresh stays
+disabled. Unmounting or switching workspace replaces the lane, so a queued
+follow-up never starts afterwards. Move, Connect and Disconnect have the same
+30 s bound: a silent change says "No answer about this change yet. Refresh to see
+whether it happened."; a change rejected at the network says "This change
+couldn’t be confirmed. Refresh to see whether it happened." Neither claims done
+or failed. An action's message is kept apart from read errors: background reads
+never clear it; the next action or a manual Refresh does. `host.api` takes no
+AbortSignal (skin contract), so a call past the bound keeps running in the host
+and its late answer is ignored.
+
+`TestRelayAttachmentStorageRendered` (390 px, Chromium, fake clock): a real
+`fetch` aborted at the network gives the truthful alert with Refresh usable; 300
+change events start 2 reads plus exactly 1 follow-up, Refresh stays enabled and
+labelled; under steady events (two per answered read) a fresh workspace's status
+appears and a pressed Refresh returns while reads are still in flight; Refresh
+feedback (error gone, "Refreshing…") measured 0–2 ms; a real read succeeds after
+the failure; a never-answering read ends at the 30 s bound and Refresh then
+succeeds. The member and Move focus variants pass, and one default run passed all
+six views (Playwright 1.66.0-alpha). The same fixture fails on the unchanged
+candidate (alert text; with that removed, 300 reads in flight) and on the first
+lane (steady events never landed a read). "Keyboard dismissal returns focus" in
+the default run fails intermittently at different views, on the unchanged
+candidate too (3 of 3 runs with Playwright 1.65.1); not addressed.
+
+The follow-up adds rendered cases: Refresh pressed 5 s into two hung reads shows
+no alert at 30.5 s and its own timeout alert, with Refresh enabled, at 35.5 s; a
+replaced workspace's queued follow-up never reads; a silent Move releases the card
+at 30 s with its message, which five background reads keep; a network-rejected
+Move says it could not be confirmed. On the previous lane the first case fails
+(the press starts no read) and the silent Move never alerts. The whole fixture
+also runs with the Office overlay and CSS (`AGENTNET_RELAY_STORAGE_SKIN=office`):
+default (all six views), member and Move variants pass, Playwright 1.66.0-alpha.
+
+Outstanding: none of this ran in Android WebView or on a phone. A device check of
+You → Storage during a large history copy (both labels, the card's alert and
+Refresh) remains open.
+
+Storage on Android now says "On this phone" in the stat tile and the section
+header (`store.host.platform`, as the same file's workspace and runs-as lines
+do). `TestAndroidComicRendered` (390 and 320 px) opens You → Storage with a
+stood-in `/api/storage` summary: both labels say "On this phone", nothing says
+"this computer"; on the unchanged candidate it fails with "On this computer".
+Not run in Android WebView or on a device.
+
+
+## A removed own device is history, not a chat (v0.11.14)
+
+Owner, 2026-11-27: after removing admin/android-phone-3 (replaced by
+android-phone-4), "Android phone 3 · Not linked to a person" appeared among
+the active chats; deleting it brought it back twice. Cause: while the phone
+was on the roster its unbound device threads were "Agent history" rows,
+already left out of the active list (MEL-529); once removed, no current
+roster named it, so the same threads fell through to an unknown-device person
+row. The three returns were three one-message archived topics in that one
+row: each "Delete topic" erased exactly one (the store's last three device
+erasures, in order: Oct 28, Oct 24, Oct 18), and the row showed the next.
+Device-history replicas and the history copy skip erased turns already
+(devicehistory.go, devicehistoryqueue.go) and re-created nothing.
+
+Rule followed: AGENTS.md "One active agent per harness per device"
+(retired configurations and unbound legacy conversations remain searchable
+history). The overview now names this person's own removed devices
+(`removed_devices`, from `OwnRemovedDevices`: the exact pinned key appeared in
+the person's verified roster history and is no longer current). Their
+unbound device threads leave the active list; a current agent's topic once
+asked from them keeps its agent row; the threads stay reachable through
+topic search (`GET /api/topics`, labelled "Your Phone 3") and their row reads
+"Your Phone 3 · Removed device". Only rows name it as yours: review and asker
+words never call a removed (perhaps lost) device "you". No control changed:
+there is no new interaction to time. Evidence: `comic_people_check.mjs`
+(fails on the old model with "a removed own device's thread is not an active
+chat"), `TestRemovedDevicesExactCurrentKey` (own list; the removed phone's
+thread still found by topic search), `TestOwnPermissionInventory` (overview
+field after a real removal). Not covered: the browser engine
+(`static/engine.mjs`) builds its own overview without `removed_devices`, so a
+browser still lists such a row (closed in "Delete a whole device chat; others'
+removed devices leave the list" below).
+
+
+## Delete a whole device chat; others' removed devices leave the list (v0.11.14)
+
+Owner, 2026-11-27: "there should be a distinction between deleting the whole
+chat or just deleting one topic … 'delete' removes the whole chat"; and other
+people's removed devices go "same as mine".
+
+Delete chat. A device chat's row (one peer, or one agent by host, key and id:
+`directChatKey` / `topicAgentKey`) holds every topic with it. The header menu
+adds "Delete chat…" ("Delete topic…" was then removed: a topic is archived,
+never deleted; see the next section), which posts `{peer, thread, chat: true}`: `DeleteDeviceChat` erases every topic of
+that row in one transaction (`eraseDeviceThreads`). The row leaves the list
+at once (`store.deletingRows`, by `directChatKey` and its newest `last_at`,
+as tdlib removes a chat locally first); a refusal brings it back, and a
+message newer than the deletion keeps it. Both deletions are
+synced to the person's other devices (desktop, browser and Android
+engines): a clear with no conversation naming the erased turns, held for
+each own device until it reads `rem3`, which took `rem2`'s capability slot
+(owner decision; no 33rd name). The note reads "Deleted on all your devices:
+here now; your N other device(s) remove it once each is connected and runs an
+AgentNet version that applies it, and until then still show it.", then who
+keeps a copy as far as it is known (`DeviceChatKeeper`, engine
+`deviceChatKeeper`: nothing for another current device of yours, "Your
+removed device is not told.", "<name> keeps their copy.", "That device keeps
+its copy.", or "Others keep their copies." when the chat spans several
+peers). The dialog: "deleted here and, once they connect and update, on your
+other linked devices", with the topic count. Evidence for sync:
+`TestDeviceChatDeletionOnAllOwnDevices` (a v0.11.13-style phone listing rem2
+holds the deletion while still getting block sync; updated to rem3 it
+erases all three topics; re-delivered and fresh history stay erased; the
+other person keeps three), `TestBlockSyncHeldForNonReaderThenSent` (an own
+device read as neither rem1 nor rem2 holds a block copy, then gets it),
+`TestOwnCapsRem3OnlySwap`, `convclear_engine_check.mjs` (engine queues one
+clear per own device waiting for rem3; the updated phone applies every name;
+the tablet keeps waiting; shared Go/engine vectors for the clear). Evidence:
+`TestDeleteDeviceChatRemovesEveryTopic` (four topics; one topic delete leaves
+three, the chat delete leaves none; fails before with "delete chat: 400");
+`TestDeleteDeviceChatTakesArchivedTopics` (two of three topics archived by the
+clock: one delete leaves no row, not even an archived count);
+`convclear_engine_check.mjs` (the browser engine: three topics, one chat
+delete, no row left; clears queued for this person's own devices only,
+nothing told to the other person).
+
+Others' removed devices. `removed_devices` is now `[{address, person}]` for
+any verified person (`RemovedDeviceOwners`; it replaces `OwnRemovedDevices`),
+same exact-key rule. Their device threads leave the active list (an agent's
+row keyed on its host, so a current agent hosted here that the removed device
+asked keeps its row) and read "Vitalii’s Old phone · Removed device". The
+browser engine computes the same list from its persons' known keys and pins,
+so browser, desktop and Android match. Evidence: `comic_people_check.mjs`
+(fails on the old model: another person's dropped device was listed),
+`TestRemovedDeviceOfAnotherPerson` (Bob removes his phone; Alice's list names
+it with Bob; its thread found by topic search; the overview's former source,
+`OwnRemovedDevices`, returned nothing for it), `convclear_engine_check.mjs`
+(engine list for Bob's dropped phone and for this person's own dropped
+tablet, kept in kv "person"; a reused address with another key is not
+removed; fails on the old engine with `removed_devices` undefined).
+
+
+## A topic is archived, a chat is deleted (v0.11.14)
+
+Owner, 2026-11-27: a single topic offers only Archive and Mark done (and
+Reopen); erasing for good is only "Delete chat…" for the whole chat
+(docs/DECISIONS.md). Removed controls: the conversation header's "Delete
+topic…" (device chats), the All topics bulk "Delete for me" (Comic, Office,
+and the shared `skins/shared/topics.mjs` source). The routes stay for skins
+that call them. Evidence the controls are gone: `latency_fixture.mjs` topics
+suite (`topics.bulk-*`: Archive is still timed; no Delete control is offered
+in All topics; the device chat menu offers "Delete chat…" and no "Delete
+topic…"), `chattopics_rendered.cjs` (no Delete button in All topics, no
+`/api/topic/delete` request), `review_topics_ui_check.mjs` (Comic bulk
+confirm for Archive and Mark done only; no Delete button),
+`shared_review_topics_check.mjs` (shared popup: Archive route kept, no
+Delete), `skin_contract_check.cjs` (Comic and Office header menus: no "Delete
+topic…"; "Delete chat…" still confirms). The removed timings `topics.bulk-delete-review` and
+`topics.bulk-delete-confirm` no longer exist.
+
+Delete chat stays timed: `topics.direct-chat-delete-refused` (the row leaves
+before the refusal, then returns with the reason) and
+`topics.direct-chat-delete` (the row stays gone with the answer held; the
+other agent's row on the same device stays). An agent chat whose topics span
+several peers says "Others keep their copies." (Go `DeviceChatNote`, engine
+`eraseDeviceThreads` with the clicked peer). A device with no person record
+marks its deletions told (no other device exists to tell; a device linked
+later gets them from `replayErased`), so a content change no longer
+re-sweeps them.

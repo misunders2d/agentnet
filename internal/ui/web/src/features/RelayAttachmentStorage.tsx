@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { errorText } from "../api";
+import { errorText, requestFailed } from "../api";
 import type { Host } from "../host";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
@@ -7,6 +7,36 @@ import { canUseStorageAction, readRelayStorage, storageBytes, storageFiles, stor
 
 const endpoint = "/api/storage/attachments";
 const active = () => true;
+// Reads in flight at once. Every stored local write is a change event (a
+// history copy makes a burst of them); unbounded, each started its own relay
+// read, and Chromium rejects fetches once about 1,350 are pending ("Failed
+// to fetch"). Later events coalesce into one follow-up read, as the store's
+// refresh lanes do. A read's answer is dropped only once a newer read has
+// answered, or an action or host change made it stale: under steady events
+// every read still lands.
+const maxReads = 2;
+// A read with no answer after this releases the card: the core's own relay
+// call is bounded at 20 s, so a longer wait means no answer will come.
+export const relayStorageReadBound = 30_000;
+class ReadBound extends Error {}
+function readFailure(e: unknown): string {
+  if (e instanceof ReadBound) return "No answer about workspace attachments yet. Refresh to try again.";
+  if (requestFailed(e)) return "Workspace attachment status couldn’t be read just now. Refresh to try again.";
+  return errorText(e);
+}
+// A change with no answer may or may not have happened: say so, never "done".
+function actionFailure(e: unknown): string {
+  if (e instanceof ReadBound) return "No answer about this change yet. Refresh to see whether it happened.";
+  if (requestFailed(e)) return "This change couldn’t be confirmed. Refresh to see whether it happened.";
+  return errorText(e);
+}
+// host.api takes no AbortSignal (the skin contract), so a call past the bound
+// keeps running in the host; its late answer is ignored.
+function bounded<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ReadBound()), relayStorageReadBound); });
+  return Promise.race([work, bound]).finally(() => clearTimeout(timer));
+}
 
 /** All calls remain bound to the captured workspace host. No Google transport,
  *  tokens, per-user consent, polling or direct fetch lives in this component. */
@@ -14,52 +44,81 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
   const [status, setStatus] = useState<RelayStorageStatus | null>(null);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState<RelayStorageAction | null>(null);
   const [error, setError] = useState(""), [consent, setConsent] = useState("");
+  // An action's failure stays until the next action or a manual Refresh; a
+  // background read's answer never clears it.
+  const [actionError, setActionError] = useState("");
   const [confirm, setConfirm] = useState<"move" | "disconnect" | null>(null);
-  const scope = useRef(0), reads = useRef(0), acting = useRef(false), queuedRefresh = useRef(false);
+  const scope = useRef(0), reads = useRef(0), actions = useRef(0), acting = useRef(false), queuedRefresh = useRef(false);
   const known = useRef<RelayStorageStatus | null>(null);
+  // This scope's reads: how many are in flight, whether a change asked for
+  // another, the newest read that answered or was made stale (floor), and the
+  // first read a shown "Refreshing…" waits for.
+  const lane = useRef({ running: 0, again: false, floor: 0, pressed: 1 });
 
-  const refresh = useCallback(async (background = false) => {
-    if (!isActive()) return;
-    if (acting.current) { queuedRefresh.current = true; return; }
-    const owner = scope.current, request = ++reads.current;
-    const current = () => owner === scope.current && request === reads.current && isActive();
-    if (!background || !known.current) setLoading(true);
-    try {
-      const next = readRelayStorage(await host.api(endpoint));
-      if (!current()) return;
-      known.current = next; setStatus(next); setError("");
-      if (!next.can_admin || !next.configured || next.state === "connected" || next.state === "migrating") setConsent("");
-    } catch (e) { if (current()) setError(errorText(e)); }
-    finally { if (current()) setLoading(false); }
+  const read = useCallback(() => {
+    const owner = scope.current, request = ++reads.current, mine = lane.current;
+    const current = () => owner === scope.current && mine === lane.current && request > mine.floor && isActive();
+    mine.running++; mine.again = false;
+    void (async () => {
+      try {
+        const next = readRelayStorage(await bounded(host.api(endpoint)));
+        if (!current()) return;
+        mine.floor = request;
+        known.current = next; setStatus(next); setError("");
+        if (!next.can_admin || !next.configured || next.state === "connected" || next.state === "migrating") setConsent("");
+      } catch (e) { if (current()) { mine.floor = request; setError(readFailure(e)); } }
+      finally {
+        mine.running--;
+        if (owner === scope.current && mine === lane.current && request >= mine.pressed) { mine.pressed = Infinity; setLoading(false); }
+        if (owner === scope.current && mine === lane.current && mine.again && mine.running < maxReads && isActive()) {
+          if (acting.current) { mine.again = false; queuedRefresh.current = true; } else read();
+        }
+      }
+    })();
   }, [host, isActive]);
+
+  // A manual refresh shows itself at once: the old errors go and the button
+  // says "Refreshing…" until its own read settles. It starts that read even
+  // past the cap (one more), and answers to reads started before the press
+  // are dropped, so they cannot bring back an error the press cleared. A
+  // background read never changes the button.
+  const refresh = useCallback((manual = false) => {
+    if (!isActive()) return;
+    if (manual) { lane.current.floor = reads.current; lane.current.pressed = reads.current + 1; setError(""); setActionError(""); setLoading(true); }
+    if (acting.current) { queuedRefresh.current = true; return; }
+    if (lane.current.running >= maxReads + (manual ? 1 : 0)) { lane.current.again = true; return; }
+    read();
+  }, [isActive, read]);
 
   useEffect(() => {
     scope.current++; reads.current++; acting.current = false; queuedRefresh.current = false; known.current = null;
-    setStatus(null); setBusy(null); setConfirm(null); setConsent(""); setError("");
-    void refresh();
-    const stop = host.listen(e => { if (e.type === "restart" || (e.type === "change" && !e.hint)) void refresh(true); });
-    const visible = host.android?.onVisibility(() => { if (host.android?.visible()) void refresh(true); });
-    return () => { scope.current++; reads.current++; stop(); visible?.(); };
+    lane.current = { running: 0, again: false, floor: reads.current, pressed: reads.current + 1 };
+    setStatus(null); setBusy(null); setConfirm(null); setConsent(""); setError(""); setActionError(""); setLoading(true);
+    refresh();
+    const stop = host.listen(e => { if (e.type === "restart" || (e.type === "change" && !e.hint)) refresh(); });
+    const visible = host.android?.onVisibility(() => { if (host.android?.visible()) refresh(); });
+    // A fresh lane: the old one's queued follow-up never starts after unmount.
+    return () => { scope.current++; reads.current++; actions.current++; lane.current = { running: 0, again: false, floor: Infinity, pressed: Infinity }; stop(); visible?.(); };
   }, [host, refresh]);
 
   const run = async (action: RelayStorageAction) => {
     const before = known.current;
     if (acting.current || !isActive() || !before || !canUseStorageAction(before, action)) return;
-    const owner = scope.current;
-    const current = () => owner === scope.current && isActive();
-    acting.current = true; reads.current++; setBusy(action); setLoading(false); setError(""); setConfirm(null);
+    const owner = scope.current, attempt = ++actions.current;
+    const current = () => owner === scope.current && attempt === actions.current && isActive();
+    acting.current = true; lane.current.floor = reads.current; lane.current.pressed = Infinity; setBusy(action); setLoading(false); setError(""); setActionError(""); setConfirm(null);
     if (action === "connect") setConsent("");
     try {
-      const next = readRelayStorage(await host.api(endpoint, { action, ...(action === "connect" ? {} : { confirm: true }) }), action === "connect");
+      const next = readRelayStorage(await bounded(host.api(endpoint, { action, ...(action === "connect" ? {} : { confirm: true }) })), action === "connect");
       if (!current()) return;
       known.current = next; setStatus(next);
       setConsent(action === "connect" ? next.consent_url || "" : "");
-      if (action === "connect" && !next.consent_url && next.state !== "connected") setError("Google consent did not start. Refresh and check the relay’s Google setup.");
-    } catch (e) { if (current()) setError(errorText(e)); }
+      if (action === "connect" && !next.consent_url && next.state !== "connected") setActionError("Google consent did not start. Refresh and check the relay’s Google setup.");
+    } catch (e) { if (current()) setActionError(actionFailure(e)); }
     finally {
       if (current()) {
         acting.current = false; setBusy(null);
-        if (queuedRefresh.current) { queuedRefresh.current = false; void refresh(true); }
+        if (queuedRefresh.current) { queuedRefresh.current = false; refresh(); }
       }
     }
   };
@@ -104,6 +163,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
             className="inline-flex min-h-11 items-center rounded-full stroke bg-surface px-4 font-semibold underline hover:bg-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink">Continue to Google</a>
           <Button size="sm" variant="ghost" disabled={locked || !canUseStorageAction(status, "connect")} onClick={() => void run("connect")}>Start again</Button>
         </div>}
+        {actionError && <p role="alert" className="text-[15px] text-danger">{actionError}</p>}
         {error && <p role="alert" className="text-[15px] text-danger">{error}</p>}
         {status.can_admin && <div className="flex flex-wrap gap-2">
           {(!status.connected || status.state === "needs_reconnect") && <Button disabled={locked || !!consent || !canUseStorageAction(status, "connect")} onClick={() => void run("connect")}>{busy === "connect" ? "Starting connection…" : status.state === "needs_reconnect" ? "Reconnect Google Drive" : "Connect Google Drive"}</Button>}
@@ -119,7 +179,7 @@ export function RelayAttachmentStorage({ host, isActive = active }: { host: Host
             : `Disconnect is unavailable: ${storageFiles(status.remote.files)} retained in Drive still need this account for access or cleanup, even when local copies exist.`}</p>}
       </> : loading ? <p role="status" className="text-text-2">Reading attachment storage…</p> : null}
       {!status && error && <p role="alert" className="text-[15px] text-danger">{error}</p>}
-      <Button size="sm" variant="ghost" disabled={locked} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh storage status"}</Button>
+      <Button size="sm" variant="ghost" disabled={locked} onClick={() => refresh(true)}>{loading ? "Refreshing…" : "Refresh storage status"}</Button>
       <Sheet open={confirm !== null} onOpenChange={open => { if (!open) setConfirm(null); }}
         title={confirm === "disconnect" ? "Disconnect this relay’s Drive?" : "Move existing relay attachments?"}
         description={confirm === "disconnect" ? "This changes attachment storage for everyone in this workspace." : "Move encrypted copies stored on this relay, without changing chats or attachment references."}

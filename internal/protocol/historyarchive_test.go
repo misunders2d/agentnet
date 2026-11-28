@@ -16,12 +16,13 @@ func TestHistoryArchiveManifestStrictBounds(t *testing.T) {
 		}
 	}
 	for name, change := range map[string]func(*HistoryArchive){
-		"version": func(r *HistoryArchive) { r.V = 2 },
-		"owner":   func(r *HistoryArchive) { r.Person = "wrong" },
-		"roster":  func(r *HistoryArchive) { r.Roster = "wrong" },
-		"empty":   func(r *HistoryArchive) { r.Count = 0 },
-		"count":   func(r *HistoryArchive) { r.Count = MaxHistoryArchiveEntries + 1 },
-		"format":  func(r *HistoryArchive) { r.Format = "other" },
+		"version":   func(r *HistoryArchive) { r.V = 2 },
+		"owner":     func(r *HistoryArchive) { r.Person = "wrong" },
+		"roster":    func(r *HistoryArchive) { r.Roster = "wrong" },
+		"empty":     func(r *HistoryArchive) { r.Count = 0 },
+		"count":     func(r *HistoryArchive) { r.Count = MaxHistoryArchiveEntries + 1 },
+		"format":    func(r *HistoryArchive) { r.Format = "other" },
+		"v1 format": func(r *HistoryArchive) { r.Format = "agentnet-history-v1" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			n := r

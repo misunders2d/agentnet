@@ -255,7 +255,8 @@ const journeys = {
     await page.getByRole('button', { name: 'More', exact: true }).click();
     await page.getByRole('menu').waitFor();
     await page.waitForTimeout(300);
-    await page.getByRole('menuitem', { name: /^Delete (conversation|topic)/ }).click();
+    assert.equal(await page.getByRole('menuitem', { name: /^Delete topic/ }).count(), 0, 'one topic is never deleted (owner, 2026-11-27)');
+    await page.getByRole('menuitem', { name: /^Delete (conversation|chat)/ }).click();
     await page.getByRole('alertdialog').waitFor();
     await page.waitForTimeout(400);
     await staysModal(page, 'alertdialog', 'the delete confirmation');

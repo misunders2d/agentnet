@@ -188,7 +188,7 @@ func (a *Agent) requireParticipationCapsSnapshot(ctx context.Context, key identi
 		protocol.CapGroupHumanParticipation, protocol.CapRootSync, protocol.CapHumanParticipation,
 		protocol.CapAgentIdentity, protocol.CapExternalParticipation, protocol.CapGroup,
 		protocol.CapHeadless, protocol.CapReplyReceiver, protocol.CapProgress,
-		protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRoom,
+		protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapReminderSyncV3, protocol.CapRoom,
 		protocol.CapProactiveAgent, protocol.CapMentionReaction, protocol.CapAgentOrganization:
 	default:
 		return errors.New("unknown queued capability requirement")
@@ -461,6 +461,8 @@ func (e *NeedsUpdateError) Error() string {
 		message = "cannot read nonterminal responder progress yet; update all its active AgentNet sessions"
 	case protocol.CapConvClear:
 		message = "cannot apply conversation deletions yet; it deletes it once updated"
+	case protocol.CapReminderSyncV3:
+		message = "cannot synchronize blocked people or device chat deletions yet; update all its active AgentNet sessions"
 	case protocol.CapRoom:
 		message = "cannot read room participation yet; update all its active AgentNet sessions"
 	}

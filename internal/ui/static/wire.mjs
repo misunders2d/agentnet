@@ -36,13 +36,17 @@ export const CapGuestAgent = "gpa1"; // includes tpc1, with exact parent-derived
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
-export const CapHistoryArchive="ha1",SubHistoryArchive="history-archive";
+export const CapHistoryArchive="ha2",SubHistoryArchive="history-archive";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapDirectTopicSync="dts1", SubDirectTopicSync="direct-topic-sync";
 export const CapReminderSync = "rem1", SubReminderSync = "reminder-sync";
 // rem2 replaces rem1's capability slot: it reads reminders and blocks (protocol/blocksync.go).
 export const CapReminderSyncV2 = "rem2", SubBlockSync = "block-sync";
+// rem3 replaces rem2's slot (protocol/blocksync.go): it also reads device chat
+// deletions. Desktop and this page list it in rem2's place; a peer listing rem3
+// reads as rem2 and rem1 too, and one listing only rem2 is treated as before.
+export const CapReminderSyncV3 = "rem3";
 export const CapTopicStateSync = "tss1", CapTopicStateSyncV2 = "tss2", SubTopicStateSync = "topic-state-sync"; // tss2 also reads tss1; neither is implied by rm1
 export const CapReadSync = "rd1", CapReadSyncV2 = "rd2", SubReadSync = "read-sync";
 export const CapModelSync = "mdl1", CapModelSyncV2 = "mdl2", SubModelSync = "model-sync";
@@ -625,19 +629,24 @@ function checkV3(n) {
     throw new Error("an assistant reaction names its executor or default responder (device thread) or its participation (conversation)");
   }
   if (n.sub === SubDecision && n.conv) throw new Error("a decision is device-scoped: it goes to the host that holds the request");
-  if (n.sub === SubClear && !n.conv) throw new Error("malformed conversation deletion"); // a device thread is never deleted on the wire
-  if (!n.conv) {
+  const fanOK = (fan) => {
+    if (fan.length > 2) throw new Error("a conversation message names at most its two member persons");
+    fan.forEach((f, i) => {
+      if (!validID(f.person) || !validHash(f.roster) || (i > 0 && f.person === fan[0].person)) throw new Error("invalid fan");
+    });
+  };
+  if (!n.conv && n.sub === SubClear) {
+    // A device chat deletion (rem3): this person's own replica to their own
+    // devices, named and fanned as a conversation deletion is (envelope.go).
+    if (!validID(n.lid) || !n.replica) throw new Error("a device chat deletion names its own logical id and is a replica");
+    if (n.fan) fanOK(n.fan);
+  } else if (!n.conv) {
     if (n.lid || n.replica || (n.fan && n.fan.length)) throw new Error("a device-thread control has no logical id, no fan and is no replica");
   } else {
     if (!validHash(n.conv) || !validID(n.lid)) throw new Error("a conversation control names its conversation and its own logical id");
     // A conversation control may name the member rosters its copies went
     // to (as a turn does), so a device that knows a newer roster forwards it.
-    if (n.fan) {
-      if (n.fan.length > 2) throw new Error("a conversation message names at most its two member persons");
-      n.fan.forEach((f, i) => {
-        if (!validID(f.person) || !validHash(f.roster) || (i > 0 && f.person === n.fan[0].person)) throw new Error("invalid fan");
-      });
-    }
+    if (n.fan) fanOK(n.fan);
   }
   parseControl(n.sub, n.body);
 }
@@ -776,7 +785,7 @@ async function checkV2(n) {
   }
   if(n.sub===SubHistoryArchive){
     if(n.conv||n.lid||n.root||n.kind!=="message"||!n.replica||n.attachments.length!==1||n.target||n.pid||n.reply_to||n.origin||n.emotion||n.status||n.fan||n.human||n.receiver_route||n.agent_id||n.topic||n.topic_event||n.topic_done||n.quote||n.send_group||n.session||n.fallback)throw Error("history archive: quiet rootless replica required");
-    parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size>HistoryArchiveMaxBytes||n.attachments[0].blob.size>HistoryArchiveMaxBytes+(64<<10))throw Error("history archive exceeds bound");return;
+    parseHistoryArchive(n.body);if(!n.attachments[0].blob||n.attachments[0].size<1||n.attachments[0].size>HistoryArchiveMaxPart||n.attachments[0].blob.size>HistoryArchiveMaxPart+(Math.floor(HistoryArchiveMaxPart/65536)+1)*16+16+4096)throw Error("history archive exceeds bound");return;
   }
   if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubTopicStateSync || n.sub===SubReminderSync || n.sub===SubBlockSync || n.sub===SubDirectTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
@@ -2015,7 +2024,7 @@ export async function verifyCaps(c, signKey) {
 // capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
 // rm1 implies it.
 export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
-export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicStateSync&&(c.caps||[]).includes(CapTopicStateSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapReminderSync&&(c.caps||[]).includes(CapReminderSyncV2) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+export const capsReads = (c, name) => (c.caps || []).includes(name) || name===CapReadSync&&(c.caps||[]).includes(CapReadSyncV2) || name===CapTopicStateSync&&(c.caps||[]).includes(CapTopicStateSyncV2) || name===CapTopicContext&&(c.caps||[]).includes(CapGuestAgent) || name===CapRequestFollowup&&(c.caps||[]).includes(CapRequestSteer) || name===CapModelSync&&(c.caps||[]).includes(CapModelSyncV2) || name===CapReminderSync&&((c.caps||[]).includes(CapReminderSyncV2)||(c.caps||[]).includes(CapReminderSyncV3)) || name===CapReminderSyncV2&&(c.caps||[]).includes(CapReminderSyncV3) || name===CapGroupInvitationControl&&(c.caps||[]).includes(CapGroupInvitationManage) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
 
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each
@@ -2481,8 +2490,14 @@ export async function validateInvitationSync(r) {
  if(await groupInvitationID(r.proposal)!==r.id)throw Error("invitation sync: proposal differs");return r;
 }
 
-export const HistoryArchiveMaxBytes=4<<20,HistoryArchiveMaxEntries=50;
+// Go protocol/historyarchive.go: one part is gzip-compressed chunk JSON. MaxPart
+// bounds the compressed attachment, MaxBytes the JSON while it inflates.
+export const HistoryArchiveMaxBytes=16<<20,HistoryArchiveMaxPart=16<<20,HistoryArchiveMaxEntries=5000,HistoryArchiveWindow=4,HistoryArchiveFormat="agentnet-history-v2";
+// A browser or phone packs at most this many children per part: packing and
+// its receipt each commit one IndexedDB transaction over every child, and
+// live sends queue behind it. Receivers still accept HistoryArchiveMaxEntries.
+export const HistoryArchivePackEntries=500;
 export function parseHistoryArchive(json){
  const r=strictRecord(json,4096,"history archive",{v:"int",person:"string",roster:"string",count:"int",format:"string"});
- if(r.v!==1||!validID(r.person)||!validHash(r.roster)||r.count<1||r.count>HistoryArchiveMaxEntries||r.format!=="agentnet-history-v1")throw Error("invalid history archive manifest");return r;
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||r.count<1||r.count>HistoryArchiveMaxEntries||r.format!==HistoryArchiveFormat)throw Error("invalid history archive manifest");return r;
 }

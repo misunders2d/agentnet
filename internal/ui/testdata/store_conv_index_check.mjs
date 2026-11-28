@@ -24,7 +24,7 @@ if(realIDB) {
  await new Promise((resolve,reject)=>{const tx=old.transaction(['inbox','outbox'],'readwrite');for(const r of inbox)tx.objectStore('inbox').put(r,r.id);for(const r of outbox)tx.objectStore('outbox').put(r,r.id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});
  old.close();st=await openIDB(name);
  const v=await new Promise((resolve,reject)=>{const q=indexedDB.open(name);q.onsuccess=()=>{const d=q.result,info={version:d.version,indexes:['inbox','outbox'].map(s=>[...d.transaction(s).objectStore(s).indexNames].sort().join())};d.close();resolve(info);};q.onerror=()=>reject(q.error);});
- check(v.version===8&&v.indexes[0]==='conv,device_arrival,history_arrival,history_pos,state,status'&&v.indexes[1]==='conv,device_arrival,history_pos,lane_demote,recipient_state,state,sub','existing v5 database gains conversation and pending-state indexes without losing history: '+JSON.stringify(v));
+ check(v.version===11&&v.indexes[0]==='conv,device_arrival,history_arrival,history_pos,state,status,thread_peer,transfer_lid,transfer_meta,transfer_topic'&&v.indexes[1]==='archive_pending,conv,device_arrival,history_pos,lane_demote,recipient_state,state,sub,thread_peer,transfer_lid,transfer_meta,transfer_topic','existing v5 database gains conversation and pending-state indexes without losing history: '+JSON.stringify(v));
 } else {st=memoryStore();await st.write([...inbox.map(r=>({s:'inbox',k:r.id,v:r})),...outbox.map(r=>({s:'outbox',k:r.id,v:r}))]);}
 check((await st.inboxStates(['held'])).map(r=>r.id).join()===id(2),'state index selects persisted pending row without historical messages');
 check((await st.inboxStatus('review_notice')).map(r=>r.id).join()===id(2),'status index selects persisted report rows without historical scan');

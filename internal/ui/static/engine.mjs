@@ -20,7 +20,7 @@ import {deviceHistory,deviceHistoryDirection,deviceHistoryPeer,directHistoryRow}
 import {directTopics} from "./directtopics.mjs";
 import {topicTransfers} from "./topictransfer.mjs";
 import { backgroundCopy, historyWindow, stateWindow } from "./historywindow.mjs";
-import { historyArchive } from "./historyarchive.mjs";
+import { archiveCompression, historyArchive } from "./historyarchive.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
 import { openDB } from "./vendor/idb.mjs"; // idb: promises over IndexedDB (webvendor, pinned)
 import { createParser } from "./vendor/sse.mjs"; // eventsource-parser: the framing of the signed event stream (webvendor, pinned)
@@ -58,7 +58,9 @@ const erasedKey = (conv, key, lid) => conv + "|" + key + "|" + lid;
 const retainedIn = (r) => ["question", "task"].includes(r.kind) && ["pending", "accepted", "held", "awaiting", "running", "cancel_requested", "part_waiting", "helpers_waiting", "needs_human"].includes(r.state);
 const retainedOut = (r) => ["queued", "waiting", "receiver_waiting"].includes(r.state);
 // deletionNote is what the page says after a deletion (ui livedelete.go).
-const deletionNote = (thisOnly, devices, kept) => (thisOnly ? "Deleted. This thread was stored on this device only; the other person keeps their copy."
+const deletionNote = (device, devices, kept, keeper = "") => (device ? (devices === 0
+    ? "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion."
+    : "Deleted on all your devices: here now; your " + devices + " other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it.") + (keeper ? " " + keeper : "")
   : devices === 0 ? "Deleted here. No other device of yours was linked; one you link later gets the deletion. Others in it keep their copies."
   : "Deleted here. Queued for your " + devices + " other device(s): each removes it once it is connected and runs an AgentNet version that applies deletions; until then it still shows it there. Others in it keep their copies.")
   + (kept > 0 ? " " + kept + " item(s) still in progress keep running and are removed when they finish." : "");
@@ -109,6 +111,12 @@ const historyIndexed = (row,arrival) => {
 
 // Derived selectors let a transfer recheck one original and source organization
 // metadata without projecting or hashing every topic body on each batch.
+// Unpacked archive children by destination, in packing order: a history
+// sender counts and reads at most one part instead of every staged row.
+const archivePendingRange=(to,fp)=>IDBKeyRange.bound([to,fp],[to,fp,[]]);
+const archiveIndexed=(row,key)=>{const value={...row};if(value.state==="archive_staged"&&!value.archive_chunk&&value.to&&value.recipient_fp)value.archive_pending=[value.to,value.recipient_fp,value.send_order??value.at??0,key];else delete value.archive_pending;return value;};
+const archivePendingOf=(r,to,fp)=>r.archive_pending?.[0]===to&&r.archive_pending?.[1]===fp;
+const archivePendingOrder=(a,b)=>a.archive_pending[2]-b.archive_pending[2]||(a.archive_pending[3]<b.archive_pending[3]?-1:a.archive_pending[3]>b.archive_pending[3]?1:0);
 const transferIndexed=row=>{const value={...row};delete value.contribution_review;value.transfer_lid=[row.conv||"",row.lid||row.id];if(row.conv&&row.topic)value.transfer_topic=[row.conv,row.topic];else delete value.transfer_topic;if(row.topic_event||row.control&&[wire.SubRevision,wire.SubRetraction].includes(row.sub))value.transfer_meta=row.conv||row.thread_peer||"";else delete value.transfer_meta;return value;};
 
 // ---- storage -------------------------------------------------------------------------------
@@ -123,7 +131,7 @@ const transferIndexed=row=>{const value={...row};delete value.contribution_revie
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 10, { // 10: exact transfer originals and source metadata; 9: direct-thread peer projection; 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes; 8: unstarted inbox state and active report status indexes
+  const opening = openDB(name, 11, { // 11: unpacked archive children by destination; 10: exact transfer originals and source metadata; 9: direct-thread peer projection; 5: continuous direct-thread source journal; 6: rows by conversation; 7: pending outbox state indexes; 8: unstarted inbox state and active report status indexes
     async upgrade(d,oldVersion,newVersion,tx) {
       for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if(oldVersion<4) {
@@ -144,6 +152,7 @@ export async function openIDB(name = "agentnet") {
       if(oldVersion<8){const inbox=tx.objectStore("inbox");inbox.createIndex("state","state");inbox.createIndex("status","status");}
       if(oldVersion<9)for(const name of ["inbox","outbox"]){const store=tx.objectStore(name);store.createIndex("thread_peer","thread_peer");for(let c=await store.openCursor();c;c=await c.continue())await c.update(threadIndexed(c.value,name));}
       if(oldVersion<10)for(const name of ["inbox","outbox"]){const store=tx.objectStore(name);store.createIndex("transfer_lid","transfer_lid");store.createIndex("transfer_topic","transfer_topic");store.createIndex("transfer_meta","transfer_meta");for(let c=await store.openCursor();c;c=await c.continue())await c.update(transferIndexed(c.value));}
+      if(oldVersion<11){const outbox=tx.objectStore("outbox");outbox.createIndex("archive_pending","archive_pending");for(let c=await outbox.index("state").openCursor("archive_staged");c;c=await c.continue())await c.update(archiveIndexed(c.value,c.primaryKey));}
 
     },
     blocked: onBlocked,
@@ -176,6 +185,8 @@ export async function openIDB(name = "agentnet") {
       for(const state of states)rows.push(...await tx.store.index("state").getAll(state));
       await tx.done;return rows;
     },
+    archivePending:(to,fp,n)=>db.getAllFromIndex("outbox","archive_pending",archivePendingRange(to,fp),n),
+    archivePendingCount:(to,fp)=>db.countFromIndex("outbox","archive_pending",archivePendingRange(to,fp)),
     inboxStatus:status=>db.getAllFromIndex("inbox","status",status),
     outboxSub:sub=>db.getAllFromIndex("outbox","sub",sub),
     demotionRows:()=>db.getAllFromIndex("outbox","lane_demote","sync"),
@@ -227,6 +238,7 @@ export async function openIDB(name = "agentnet") {
               if(!arrival) {arrival=(await tx.objectStore("kv").get("history-arrival")||0)+1;await tx.objectStore("kv").put(arrival,"history-arrival");}
             }
             value=transferIndexed(threadIndexed(historyIndexed(value,arrival),o.s));
+            if(o.s==="outbox")value=archiveIndexed(value,o.k);
             if(directHistoryRow(value)){let seq=(await tx.objectStore(o.s).get(o.k))?.device_arrival||0;if(!seq){seq=(await tx.objectStore("kv").get("device-history-arrival")||0)+1;await tx.objectStore("kv").put(seq,"device-history-arrival");}value.device_arrival=seq;}else delete value.device_arrival;
           }
           // Each request's own rejection is the transaction's (tx.done); it is not awaited one by one.
@@ -262,6 +274,8 @@ export function memoryStore() {
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
     outboxStates:async(states,to="")=>[...data.outbox.values()].filter(r=>states.includes(r.state)&&(!to||r.to===to)).map(r=>structuredClone(r)),
     inboxStates:async states=>[...data.inbox.values()].filter(r=>states.includes(r.state)).map(r=>structuredClone(r)),
+    archivePending:async(to,fp,n)=>[...data.outbox.values()].filter(r=>archivePendingOf(r,to,fp)).sort(archivePendingOrder).slice(0,n).map(r=>structuredClone(r)),
+    archivePendingCount:async(to,fp)=>[...data.outbox.values()].filter(r=>archivePendingOf(r,to,fp)).length,
     inboxStatus:async status=>[...data.inbox.values()].filter(r=>r.status===status).map(r=>structuredClone(r)),
     outboxSub:async sub=>[...data.outbox.values()].filter(r=>r.sub===sub).map(r=>structuredClone(r)),
     demotionRows:async()=>[...data.outbox.values()].filter(r=>r.lane_demote==="sync").map(r=>structuredClone(r)),
@@ -288,6 +302,7 @@ export function memoryStore() {
               if(!arrival) {arrival=(data.kv.get("history-arrival")||0)+1;data.kv.set("history-arrival",arrival);}
             }
             value=transferIndexed(threadIndexed(historyIndexed(value,arrival),o.s));
+            if(o.s==="outbox")value=archiveIndexed(value,o.k);
             if(directHistoryRow(value)){let seq=data[o.s].get(o.k)?.device_arrival||0;if(!seq){seq=(data.kv.get("device-history-arrival")||0)+1;data.kv.set("device-history-arrival",seq);}value.device_arrival=seq;}else delete value.device_arrival;
           }
           data[o.s].set(o.k,value);
@@ -316,7 +331,7 @@ const roomAgentScope = e => !e.role && e.audience === "room";
 // Delivery progress never changes the signed authority of an outbox row.
 const authorityFields = (store, row) => {
   if (store !== "outbox") return row;
-  const {state, detail, delivery, path, ...authority} = row;
+  const {state, detail, delivery, path, archive_pending, ...authority} = row; // archive_pending follows state
   if (authority.files) authority.files = authority.files.map(({uploaded, ct, ...file}) => file);
   return authority;
 };
@@ -1397,6 +1412,25 @@ export class Engine {
       ...extra };
   }
 
+  // removedDevicesView is overview.removed_devices (client
+  // RemovedDeviceOwners): a device whose exact pinned key a verified
+  // person's (this one's or a pinned one's) roster history named and no
+  // current roster names. Display only, never authority.
+  async removedDevicesView(stored) {
+    const persons = [...(this.me ? [{ ...this.me, state: "self" }] : []), ...stored.filter((p) => p.person !== this.me?.person).sort((a, b) => (a.person < b.person ? -1 : a.person > b.person ? 1 : 0))]; // this person (kv "person") first, then by id: the first per address wins
+    const current = new Set(persons.flatMap((p) => (p.devices || []).map((d) => d.address))), out = new Map(); // an address a current roster names (re-enrolled, any key) is not removed
+    for (const p of persons) {
+      if (!["self", "pinned"].includes(p.state)) continue;
+      for (const k of p.known || []) {
+        if (out.has(k.address) || current.has(k.address)) continue;
+        const pin = await this.store.get("pins", k.address);
+        if (pin && !pin.pending && pin.fingerprint === k.fingerprint) out.set(k.address, p.person);
+      }
+    }
+    const list = [...out].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([address, person]) => ({ address, person }));
+    return list.length ? { removed_devices: list } : {};
+  }
+
   // personRecord makes a person to keep from its verified steps (oldest
   // first), with state, from what was kept before (known devices).
   async personRecord(steps, state, before) {
@@ -1833,6 +1867,7 @@ export class Engine {
         if ((await this.store.get("outbox", job.id))?.state === "delivered") continue;
         const key = "history-archive/out/" + job.id;
         checks.push({s:"kv",k:key,v:job}); ops.push({s:"kv",k:key,v:{...job,state:"ended",error:detail,ct:null}});
+        if (job.state === "prepared") ops.push({s:"files",k:"archive-out/"+job.id,v:undefined}); // its sealed part, never uploaded
       }
       if (revoked) {
         const key = "revoked-device/" + address + "/" + fingerprint, previous = await this.store.get("kv",key);
@@ -2684,9 +2719,11 @@ export class Engine {
     for(;;) {
       const own=await this.store.get("kv","person");
       if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
-      const ops=[],checks=[];
+      const ops=[],checks=[];let rows=null;
       for(const c of await this.store.all("convs")) {
-        if(c.kind==="group" || this.erasedConv(c.id))continue;
+        if(c.kind==="group")continue;
+        // Deleted here and nothing later (client convDeleted): this conversation's own turns only, as the core.
+        if(this.erasedConv(c.id)){rows??=[await this.store.all("inbox"),await this.store.all("outbox")];if(!(await this.convMessages(c.id,rows[0],rows[1])).some(m=>!m.sub))continue;}
         const root=wire.parseRoot(c.root);if(!wire.rootMember(root,own.person))continue;
         for(const dev of own.devices) {
         if (!await this.recipientAvailable(dev,checks)) continue;
@@ -4630,6 +4667,14 @@ export class Engine {
           }
           blocked.add(key); continue;
         }
+        if (rec.sub === wire.SubClear) { // a device chat deletion: held until that own device reads rem3 (clearCopies)
+          let ok = false, why2 = "";
+          try { [ok, why2] = await this.ctlSupport(rec.to, pin, wire.CapReminderSyncV3); } catch (e) { blocked.add(key); continue; }
+          if (!ok) {
+            if (rec.state !== "waiting" || rec.detail !== why2) { await this.receiverOutboxProgress({ ...rec, state: "waiting", detail: why2 }); this.changed(); }
+            blocked.add(key); continue;
+          }
+        }
         await this.post({ ...rec, state: "queued", detail: "" });
         if ((await this.store.get("outbox", rec.id))?.state === "queued") blocked.add(key);
         continue;
@@ -5121,7 +5166,7 @@ export class Engine {
   // counts (client TopicOverview): archived topics only counted unless
   // listArchived (GET /api/overview without topics=1: a page that knows
   // nothing of topics still reaches every thread).
-  topicPeerKey(t) { return JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]); }
+  topicPeerKey(t) { return JSON.stringify(t.agent_id?[t.agent_host||t.peer,t.agent_key||"",t.agent_id]:t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"","",t.peer]:[t.peer,"","human"]); } // client topicAgentKey: a legacy thread's row is per peer
   addPeerTopic(c,t) {
     if(t.notice_only)return;
     if(!c.total||byNewest(t,c.latest)<0)c.latest=t;
@@ -5728,6 +5773,8 @@ export class Engine {
   async createGroup(title) {
     const checks=[], me=await this.groupRead(checks,"kv","person");
     if(!me || me.state!=="self" || !wire.validID(this.realm || "")) throw Error("Set up and connect your person before creating a group.");
+    // One "My agents" room per person (client.CreateGroup): a skin that looked only among listed chats gets the existing one, deleted here or not.
+    if(title==="My agents"){const room=(await this.overview()).my_agents;if(room)return room;}
     const root=await wire.signGroupRoot(this.keys,{v:wire.GroupRootVersion,kind:"group",realm:this.realm,title,creator:{person:me.person,roster:me.hash,address:this.address,fingerprint:this.fp},members:[{person:me.person,roster:me.hash}],admins:[me.person],nonce:wire.newID(),created:Math.floor(this.now()/1000)});
     const conv=await wire.rootID(root), admission=await wire.signGroupAdmission(this.keys,{conv,realm:this.realm,person:me.person,roster:me.hash,seq:0,prev:"",history:null,by:this.fp});
     const state=await wire.signGroupState(this.keys,{v:1,conv,realm:this.realm,seq:0,prev:"",title,members:[{person:me.person,roster:me.hash,admin:true,admission}],actor:me.person,actor_roster:me.hash,by:this.fp});
@@ -5894,10 +5941,8 @@ export class Engine {
   // builtInGroup: conv is the person's "My agents" room, chosen as
   // client.MyAgentsRoom chooses it (the oldest solo group of theirs by that title).
   async builtInGroup(conv) {
-    const o=await this.overview(),me=o.person?.person;if(!me)return false;
-    const at=d=>Date.parse(d.created)||0;
-    const room=(o.dms||[]).filter(d=>d.kind==="group"&&d.title==="My agents"&&!d.frozen&&d.members?.length===1&&d.members[0].person===me).sort((a,b)=>at(a)-at(b)||(a.id<b.id?-1:1))[0];
-    return !!room&&room.id===conv;
+    const o=await this.overview();
+    return !!o.my_agents&&o.my_agents===conv; // also while deleted here
   }
 
   async leaveGroup(conv) {
@@ -8757,7 +8802,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapHistoryArchive, wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV2, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapConversationResources, wire.CapSharedTopicTitle, wire.CapConversationAudience, wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationManage, wire.CapReadSyncV2, wire.CapOwnSyncV2, wire.CapOwnSyncV3, ...(archiveCompression() ? [wire.CapHistoryArchive] : []), wire.CapGuestAgent, wire.CapTopicParticipation, wire.CapRoom, wire.CapProactiveAgent, wire.CapMentionReaction, wire.CapAgentOrganization, wire.CapRequestSteer, wire.CapTopicOrganization, wire.CapModelSyncV2, wire.CapDirectTopicSync, wire.CapTopicStateSyncV2, wire.CapReminderSyncV3, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
       await this.publishPerson().catch(() => {});
       // These existing, coalesced recovery jobs can wait for old proofs or
       // network replies. They must not delay the current user's durable send.
@@ -9174,7 +9219,7 @@ export class Engine {
     const size = (v) => (v && v.ct ? v.ct.byteLength || v.ct.length || 0 : 0);
     const sum = (list) => ({ files: list.length, bytes: list.reduce((n, v) => n + size(v), 0) });
     const kept = sum(files.filter((v) => v && v.attachment)); // copies of files sent here, encrypted to this device
-    const cache = sum(files.filter((v) => v && !v.attachment)); // ciphertext of received files, as fetched
+    const cache = sum(files.filter((v) => v && !v.attachment && !v.history_part)); // ciphertext of received files, as fetched (not history parts waiting to upload)
     const queued = sum((await this.store.all("outbox")).flatMap((r) => (r.files || []).filter((f) => f.ct)));
     const areas = [
       { directory: "kept", label: "Retained sent files", kind: "ciphertext", status: "available", usage: kept,
@@ -10039,8 +10084,9 @@ export class Engine {
   // (forwardClear). The names stay here, so a late, retried or history copy
   // of an erased turn stays a skeleton nothing shows. Text that unfinished
   // work needs is hidden at once and erased by the local change that ends
-  // that work (sweepErased, on this engine's change feed). A device thread
-  // exists on this device only: deleting it tells no one.
+  // that work (sweepErased, on this engine's change feed). A device thread's
+  // deletion is told the same way, to this person's other devices only,
+  // each holding it until it reads rem3; the other person is told nothing.
 
   async loadErased() {
     this.erased = new Set((await this.store.all("erased")).map((r) => erasedKey(r.conv, r.key, r.lid)));
@@ -10086,13 +10132,16 @@ export class Engine {
   }
 
   // deleteConversation is POST /api/conversation/delete (ui livedelete.go):
-  // a conversation by id (all of this person's devices), or a device thread
-  // by its peer and earliest message (this device only).
+  // a conversation by id, a device thread by its peer and earliest message,
+  // or with chat the whole device chat (every topic of its row). Each is
+  // deleted here and told to this person's other devices (clr1; rem3 for the
+  // last two), never to anyone else. The bundled UI offers only the first
+  // and the last (owner, 2026-11-27: a topic is archived, a chat deleted).
   async deleteConversation(body) {
-    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["conv", "peer", "thread"].includes(k))) throw new Error("Name one conversation, or one thread and its peer.");
-    if (body.peer || body.thread) {
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["conv", "peer", "thread", "chat"].includes(k))) throw new Error("Name one conversation, or one thread and its peer.");
+    if (body.peer || body.thread || body.chat) {
       if (body.conv || !body.peer || !body.thread) throw new Error("Name one conversation, or one thread and its peer.");
-      return this.deleteThread(String(body.peer), String(body.thread));
+      return body.chat === true ? this.deleteDeviceChat(String(body.peer), String(body.thread)) : this.deleteThread(String(body.peer), String(body.thread));
     }
     const conv = String(body.conv || "");
     if (!wire.validHash(conv) || !((await this.store.get("convs", conv)) || (await this.groupRecord(conv)))) throw new Error("No such conversation here.");
@@ -10103,8 +10152,12 @@ export class Engine {
       const n = this.rowName(r);
       if (n.key && n.lid) names.set(erasedKey(conv, n.key, n.lid), n);
     }
-    if (!names.size) throw new Error("There is nothing here to delete.");
     const deletion = wire.newID(), ops = [], checks = [];
+    if (!names.size) { // a DM or group never written in: its deletion names a marker turn (client convclear.go), as TDLib removes an empty chat from the list
+      // Not a recovered person's chat (it shows earlier DMs). The "My agents" room is hidden too: overview.my_agents still names it.
+      if (this.erasedConv(conv) || (await this.continuityDMs(conv)).length > 1) throw new Error("There is nothing here to delete.");
+      names.set(erasedKey(conv, this.fp, deletion), { key: this.fp, lid: deletion });
+    }
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv, key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); }
     let kept = 0;
     try {
@@ -10116,19 +10169,47 @@ export class Engine {
   }
 
   // deleteThread erases exactly the device thread with peer whose earliest
-  // message is id, and the controls on its messages, here only.
-  async deleteThread(peer, id) {
-    const thread = (await this.v1Threads()).find((g) => (g[0].display_topic||g[0].id) === id && g[0].peer === peer);
-    if (!thread) throw new Error("No such conversation here.");
-    const ids = new Set(thread.map((m) => m.id)), names = new Map(), deletion = wire.newID();
+  // message is id, and the controls on its messages, here and (rem3) on
+  // this person's other devices.
+  async deleteThread(peer, id) { return this.eraseDeviceThreads([[peer, id]], peer); }
+
+  // deleteDeviceChat erases every topic of the chat row the device thread
+  // (peer, id) is in (client DeleteDeviceChat: one row, topicPeerKey).
+  async deleteDeviceChat(peer, id) {
+    const all = (await this.threadSummaries()).filter((t) => !t.notice_only), at = all.find((t) => t.id === id && t.peer === peer);
+    if (!at) throw new Error("No such conversation here.");
+    const key = this.topicPeerKey(at);
+    return this.eraseDeviceThreads(all.filter((t) => this.topicPeerKey(t) === key).map((t) => [t.peer, t.id]), peer);
+  }
+
+  // deviceChatKeeper is client DeviceChatKeeper: who still keeps a copy of a
+  // device topic or chat with peer once this person's devices delete it.
+  async deviceChatKeeper(peer) {
+    if ((this.me?.devices || []).some((d) => d.address === peer)) return ""; // another current device of this person: it gets the deletion
+    const persons = await this.store.all("persons"), removed = ((await this.removedDevicesView(persons)).removed_devices || []).find((r) => r.address === peer);
+    if (removed) return removed.person === this.me?.person ? "Your removed device is not told." : "That removed device keeps its copy.";
+    const owner = persons.find((p) => p.person !== this.me?.person && ["self", "pinned"].includes(p.state) && (p.devices || []).some((d) => d.address === peer));
+    return owner && (owner.label || "").trim() ? owner.label.trim() + " keeps their copy." : "That device keeps its copy.";
+  }
+
+  // peer is the one asked for: it names who keeps a copy, unless the threads
+  // span several peers (an agent's chat), which keep theirs (client DeviceChatNote).
+  async eraseDeviceThreads(pairs, peer) {
+    const groups = await this.v1Threads(), threads = [];
+    for (const [peer, id] of pairs) {
+      const g = groups.find((g) => (g[0].display_topic||g[0].id) === id && g[0].peer === peer);
+      if (!g) throw new Error("No such conversation here.");
+      threads.push(g);
+    }
+    const ids = new Set(threads.flat().map((m) => m.peer + "/" + m.id)), names = new Map(), deletion = wire.newID();
     const add = (key, lid) => names.set(erasedKey("", key, lid), { key, lid });
-    for (const m of thread) add(m.author_fp || (m.dir === "in" ? m.fp : this.fp), m.id);
+    for (const m of threads.flat()) add(m.author_fp || (m.dir === "in" ? m.fp : this.fp), m.id);
     for (const r of [...await this.store.all("inbox"), ...await this.store.all("outbox")]) {
-      if (!r.conv && r.control && r.ref && ids.has(r.ref.id) && (deviceHistoryPeer(r,r.to || r.from)) === peer) add(r.to ? this.fp : r.fp, r.id); // its messages' controls go with them
+      if (!r.conv && r.control && r.ref && ids.has(deviceHistoryPeer(r,r.to || r.from) + "/" + r.ref.id)) add(r.to ? this.fp : r.fp, r.id); // its messages' controls go with them
     }
     const ops = [], checks = [];
-    for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: true } }); this.erased.add(k); }
-    for (const m of thread) if (await this.store.get("kv", "topic/" + peer + "/" + m.id)) ops.push({ s: "kv", k: "topic/" + peer + "/" + m.id, v: undefined }); // its name and marks go with it
+    for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: false } }); this.erased.add(k); } // told to this person's other devices (shareErased, rem3)
+    for (const m of threads.flat()) if (await this.store.get("kv", "topic/" + m.peer + "/" + m.id)) ops.push({ s: "kv", k: "topic/" + m.peer + "/" + m.id, v: undefined }); // its name and marks go with it
     let kept = 0;
     try {
       const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
@@ -10136,11 +10217,12 @@ export class Engine {
       await this.store.write(ops,checks);
     } finally { await this.loadErased(); }
     this.changed();
-    return { note: deletionNote(true, 0, kept) };
+    const keeper = new Set(pairs.map(([p]) => p)).size > 1 ? "Others keep their copies." : await this.deviceChatKeeper(peer);
+    return { note: deletionNote(true, await this.shareErased(), kept, keeper) };
   }
 
   // clearCopies seals the parts of one deletion for devs (this person's other
-  // devices), each waiting until that device reads clr1. The fan names this
+  // devices), each waiting until that device reads clr1 (rem3 for a device chat). The fan names this
   // person's roster: the copies go to its devices only.
   async clearCopies(devs, conv, deletion, turns, admission = null) {
     const parts = [];
@@ -10153,11 +10235,12 @@ export class Engine {
         const pin = (await this.store.get("pins", dev.address)) || (await this.sendKey(dev.address, admission).catch(() => null)); // a device just linked may not be pinned yet
         if (!pin || pin.pending || pin.fingerprint !== dev.fingerprint) continue; // a changed key is never used
         let ok = false, why = "";
-        try { [ok, why] = await this.ctlSupport(dev.address, pin, wire.CapConvClear, admission); } catch (e) { why = "server_unavailable: cannot reach your server"; }
+        const cap = conv ? wire.CapConvClear : wire.CapReminderSyncV3; // a device chat: older devices refuse a clear with no conversation (envelope.go)
+        try { [ok, why] = await this.ctlSupport(dev.address, pin, cap, admission); } catch (e) { why = "server_unavailable: cannot reach your server"; }
         const id = wire.newID();
         const envelope = await wire.seal({ v: wire.Version3, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind: "message", sub: wire.SubClear, body, ref, conv, lid, replica: true, fan }, this.keys, await this.pubOf(pin));
         recs.push({ v: 3, control: true, id, conv, lid, to: dev.address, fp: this.fp, own: true, person: this.me.person, kind: "message", sub: wire.SubClear, body, ref, at, aside: true,
-          required_cap: wire.CapConvClear, recipient_fp: dev.fingerprint, state: ok ? "queued" : "waiting", detail: ok ? "" : why, envelope });
+          required_cap: cap, recipient_fp: dev.fingerprint, state: ok ? "queued" : "waiting", detail: ok ? "" : why, envelope });
       }
     }
     return recs;
@@ -10170,7 +10253,7 @@ export class Engine {
   async shareErased() {
     if (!this.me) return 0;
     const devs = this.me.devices.filter((d) => d.address !== this.address), byDeletion = new Map();
-    for (const r of await this.store.all("erased")) if (!r.shared && r.conv) byDeletion.set(r.deletion, [...(byDeletion.get(r.deletion) || []), r]);
+    for (const r of await this.store.all("erased")) if (!r.shared) byDeletion.set(r.deletion, [...(byDeletion.get(r.deletion) || []), r]); // a device chat's too (conv "", rem3)
     for (const list of byDeletion.values()) {
       const turns = list.map((r) => ({ id: r.lid, fingerprint: r.key })).sort((a, b) => (a.fingerprint + a.id < b.fingerprint + b.id ? -1 : 1));
       const recs = await this.clearCopies(devs, list[0].conv, list[0].deletion, turns);
@@ -10189,7 +10272,7 @@ export class Engine {
   async replayErased(dev) {
     if (!this.me) return;
     const byConv = new Map();
-    for (const r of await this.store.all("erased")) if (r.conv) byConv.set(r.conv, [...(byConv.get(r.conv) || []), { id: r.lid, fingerprint: r.key }]);
+    for (const r of await this.store.all("erased")) byConv.set(r.conv, [...(byConv.get(r.conv) || []), { id: r.lid, fingerprint: r.key }]); // "" names device chat turns (rem3)
     const recs = [];
     for (const [conv, turns] of byConv) recs.push(...await this.clearCopies([dev], conv, wire.newID(), turns));
     if (!recs.length) return;
@@ -10206,7 +10289,7 @@ export class Engine {
     let part;
     try { part = wire.parseControl(wire.SubClear, n.body); } catch (e) { throw new Hold("invalid", "a malformed conversation deletion"); }
     if (!this.me || env.from === this.address || !this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint)) throw new Hold("invalid", "a conversation deletion comes only from another current device of this person");
-    if (!(await this.store.get("convs", n.conv)) && !(await this.groupRecord(n.conv))) throw new Hold("proof_pending", "the conversation is not here (yet)");
+    // Kept even while the conversation is not here (client admitClear): a named turn arriving later stays a skeleton. A device chat (rem3) has no conversation.
     const checks=[],turns = [n.ref, ...part.turns], ops = [{ s: "inbox", k: env.id, v: { id: env.id, v: 3, control: true, from: env.from, fp: pin.fingerprint, kind: "message", sub: wire.SubClear, body: n.body,
       ref: n.ref, conv: n.conv, lid: n.lid, replica: true, own: true, person: this.me.person, fan: n.fan || null, at: this.now(), read: true } }];
     const prior = this.erased, next = new Set(prior);
@@ -10216,6 +10299,14 @@ export class Engine {
       next.add(k);
     }
     this.erased = next;
+    if (!n.conv) { // a device chat's topics: their names and marks go with them (deleteThread)
+      const ids = new Set(turns.map((t) => t.id));
+      for (const r of [...await this.store.all("inbox"), ...await this.store.all("outbox")]) {
+        if (r.conv || !ids.has(r.id)) continue;
+        const k = "topic/" + deviceHistoryPeer(r, r.to || r.from) + "/" + r.id;
+        if (await this.store.get("kv", k)) ops.push({ s: "kv", k, v: undefined });
+      }
+    }
     try { ops.push(...await this.eraseOps(n.conv, await this.store.all("inbox"), await this.store.all("outbox"),checks)); } finally { this.erased = prior; }
     // forwardClear: devices of this person the sender's fan roster did not have.
     const f = (n.fan || []).find((x) => x.person === this.me.person), old = f && f.roster !== this.me.hash && (this.me.steps || []).find((st) => st.hash === f.roster);
@@ -10251,7 +10342,7 @@ export class Engine {
     const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox"), ops = [], checks = [];
     for (const conv of new Set([...this.erased].map((k) => k.slice(0, k.indexOf("|"))))) ops.push(...await this.eraseOps(conv, inbox, outbox,checks));
     if (ops.length) { await this.store.write(ops,checks); this.changed(); }
-    if ((await this.store.all("erased")).some((r) => !r.shared && r.conv)) await this.shareErased();
+    if (this.me && (await this.store.all("erased")).some((r) => !r.shared)) await this.shareErased(); // with no person there is nobody to tell yet: no sweep per change (client sweepErased)
   }
 
   async dropCached(m, retraction, checks=[]) {
@@ -10611,6 +10702,7 @@ export class Engine {
         ...(last ? { last_event: last } : {}) });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
+    let myAgents=null,myAgentsDeleted=null; // the person's "My agents" room, also while deleted here (client.MyAgentsRoomIn): the oldest listed, else the oldest deleted
     for(const g of (read.groups).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox,read));
       const view=await this.groupThread(conv,read), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
@@ -10623,7 +10715,12 @@ export class Engine {
       }
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root},read).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
       this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
-      if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
+      const hiddenHere=this.erasedConv(conv)&&!visible.some(m=>!m.sub);
+      if(packet.state.title==="My agents"&&!view.frozen&&view.members?.length===1&&view.members[0].person===this.me?.person){
+        const best=hiddenHere?myAgentsDeleted:myAgents;
+        if(!best||packet.root.created<best.created||packet.root.created===best.created&&conv<best.id){if(hiddenHere)myAgentsDeleted={id:conv,created:packet.root.created};else myAgents={id:conv,created:packet.root.created};}
+      }
+      if(hiddenHere)continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : latestView.edited ? bodyPreview(latestView.text || "") : latestView.event ? firstLine(latestView.event) : bodyPreview(latestView.body);
       const previewText=wire.topicOrganization(visible.at(-1)?.topic_event)?await this.topicOrganizationNotice(conv,visible.at(-1).topic):latestText;
@@ -10679,7 +10776,7 @@ export class Engine {
         auto: this.outdated.stale ? (this.outdated.reload ? "" : "Reload this page to get your server's current version.")
           : this.version && this.version === this.pageBuild ? "Your server does not offer it to this page yet: ask its admin to update the server." : "" } : undefined,
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
-      workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], model_reports: await this.modelReports(),
+      workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices], ...await this.removedDevicesView(persons), model_reports: await this.modelReports(),
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null }, receive_status: await this.receiveStatus(),
       threads, topics, topic_list: true, schedules: true, remind:true, reminders:(await this.reminders()).map(({state,fact,...r})=>r), block:true, blocked:await this.blockedPersons(), review: [...await this.activeReportItems(inbox, outbox, words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
@@ -10689,7 +10786,7 @@ export class Engine {
       files: { max_file: wire.BrowserMaxFile, max_message: wire.BrowserMaxMessage, max_count: 8 },
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       groups:true, group_invitations:await this.groupInvitations(),
-      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
+      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms, ...((myAgents||myAgentsDeleted) ? { my_agents: (myAgents||myAgentsDeleted).id } : {}),
       // A browser is always a person's device (never a service).
       role: this.me ? "person" : "unset", link, links: asks.length ? asks : undefined, history: history.length ? history : undefined,
     };

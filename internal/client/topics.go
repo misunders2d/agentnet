@@ -479,11 +479,23 @@ type PeerTopics struct {
 	Latest         ThreadSummary `json:"latest"`          // the most recently active topic, whatever its state
 }
 
+// topicAgentKey is a device chat's row: the person (peer), or an agent by
+// its host (else the peer), key and id. A legacy agent thread (no id) names
+// no agent to group by, so its row is per peer too: deleting the chat never
+// reaches another peer's threads. engine.mjs topicPeerKey and Comic's
+// directChatKey are the same key.
 func topicAgentKey(t ThreadSummary) string {
 	if t.AgentID == "" && !t.AgentLegacy {
 		return "human/" + t.Peer
 	}
-	return t.AgentHost + "/" + t.AgentKey + "/" + t.AgentID
+	host := t.AgentHost
+	if host == "" {
+		host = t.Peer
+	}
+	if t.AgentID == "" {
+		return host + "/" + t.AgentKey + "//" + t.Peer
+	}
+	return host + "/" + t.AgentKey + "/" + t.AgentID
 }
 
 func addPeerTopic(c *PeerTopics, t ThreadSummary) {

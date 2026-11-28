@@ -13,10 +13,15 @@ import {RelayAttachmentStorage} from './src/features/RelayAttachmentStorage';
 const base=()=>({can_admin:true,configured:true,connected:false,state:'local',local:{files:4,bytes:4096},remote:{files:0,bytes:0},pending:{files:4,bytes:4096},remote_only_files:0,migration:{running:false,files:0,bytes:0,total_files:0,total_bytes:0}});
 const root=document.getElementById('root'),app=document.getElementById('app'),portals=document.getElementById('portals');
 const react=createRoot(app),listeners=new Set();
-window.fixture={calls:[],status:base(),base,active:true,platform:'browser',deferGet:new URLSearchParams(location.search).has('loading'),deferAction:false,error:'',nextConsent:'',set(v){this.status=v;this.emit();},emit(hint){for(const fn of listeners)fn({type:'change',seq:1,...(hint?{hint}:{})});}};
+window.fixture={calls:[],status:base(),base,active:true,platform:'browser',deferGet:new URLSearchParams(location.search).has('loading'),deferAction:false,error:'',nextConsent:'',
+ real:new URLSearchParams(location.search).has('real'),held:[],holdAll:false,hang:false,inFlight:0,maxInFlight:0,set(v){this.status=v;this.emit();},emit(hint){for(const fn of listeners)fn({type:'change',seq:1,...(hint?{hint}:{})});}};
 const consent='https://accounts.google.com/o/oauth2/v2/auth?client_id=synthetic-public&state=synthetic';
 function makeHost(id){return {platform:fixture.platform,listen(fn){listeners.add(fn);return()=>listeners.delete(fn)},async api(url,body){
  fixture.calls.push({id,url,body});if(url!=='/api/storage/attachments')throw Error('Unexpected endpoint '+url);
+ if(fixture.real){const r=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});if(!r.ok)throw Error((await r.text()).trim()||r.statusText);return r.json();}
+ if(body&&fixture.hangAction)return new Promise(()=>{});
+ if(!body&&fixture.hang)return new Promise(()=>{});
+ if(!body&&fixture.holdAll){fixture.inFlight++;fixture.maxInFlight=Math.max(fixture.maxInFlight,fixture.inFlight);const result=structuredClone(fixture.status);return new Promise(resolve=>fixture.held.push(()=>{fixture.inFlight--;resolve(result);}));}
  if(!body){const result=structuredClone(fixture.status);if(fixture.deferGet){fixture.deferGet=false;return new Promise(resolve=>fixture.resolveRead=()=>resolve(result));}if(fixture.error)throw Error(fixture.error);return result;}
  const response=()=>{if(body.action==='connect')return {...fixture.status,consent_url:fixture.nextConsent||consent};
  if(body.confirm!==true)throw Error('Confirmation missing');
@@ -30,13 +35,23 @@ let host=makeHost('one');
 // artificial effect change; real DriveSettings uses useCallback as well.
 const isActive=()=>fixture.active;
 const mount=()=>react.render(<OwnedContext.Provider value={{root,app,portals}}><RelayAttachmentStorage host={host} isActive={isActive}/></OwnedContext.Provider>);
-fixture.switchHost=()=>{host=makeHost('two');mount();};
+fixture.switchHost=(id='two')=>{host=makeHost(id);mount();};
 fixture.useAndroid=()=>{fixture.platform='android';host=makeHost('android');mount();};
 mount();
 `;
-const bundle = web('esbuild').buildSync({ stdin: { contents: entry, resolveDir: webDir, loader: 'tsx' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, write: false, logLevel: 'silent' }).outputFiles[0].text;
+// AGENTNET_RELAY_STORAGE_SKIN=office: Office's overlay over Comic's source, as build.sh makes it.
+const skin = process.env.AGENTNET_RELAY_STORAGE_SKIN === 'office' ? 'office' : 'comic';
+let srcRoot = webDir;
+if (skin === 'office') {
+  srcRoot = path.join(work, 'office');
+  fs.cpSync(path.join(webDir, 'src'), path.join(srcRoot, 'src'), { recursive: true });
+  const overlay = path.resolve(webDir, '../skins/office/overlay');
+  for (const f of fs.readdirSync(overlay)) fs.copyFileSync(path.join(overlay, f), path.join(srcRoot, 'src/skin', f));
+  fs.symlinkSync(path.join(webDir, 'node_modules'), path.join(srcRoot, 'node_modules'), 'dir');
+}
+const bundle = web('esbuild').buildSync({ stdin: { contents: entry, resolveDir: srcRoot, loader: 'tsx' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, write: false, logLevel: 'silent' }).outputFiles[0].text;
 const cssFile = path.join(work, 'style.css');
-execFileSync(path.join(webDir, 'node_modules/.bin/tailwindcss'), ['-i', path.join(webDir, 'src/styles.css'), '-o', cssFile, '--minify'], { cwd: webDir, stdio: 'pipe' });
+execFileSync(path.join(webDir, 'node_modules/.bin/tailwindcss'), ['-i', path.join(srcRoot, 'src/styles.css'), '-o', cssFile, '--minify'], { cwd: srcRoot, stdio: 'pipe' });
 const css = fs.readFileSync(cssFile, 'utf8') + '\nbody{margin:0}.fixture{max-width:720px;margin-inline:auto;padding:16px}.an-root{height:auto;min-height:100vh}.an-app{height:auto}';
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
@@ -44,6 +59,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relay attachment storage fixture</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><div id="root" class="an-root" data-theme="' + (url.searchParams.get('theme') === 'dark' ? 'dark' : 'light') + '"><div class="fixture"><div id="app" class="an-app"></div></div><div id="portals"></div></div><script type="module" src="/fixture.mjs"></script>'); return; }
   if (url.pathname === '/fixture.mjs') { res.setHeader('Content-Type', 'text/javascript'); res.end(bundle); return; }
   if (url.pathname === '/style.css') { res.setHeader('Content-Type', 'text/css'); res.end(css); return; }
+  if (url.pathname === '/api/storage/attachments') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ can_admin: true, configured: true, connected: false, state: 'local', local: { files: 4, bytes: 4096 }, remote: { files: 0, bytes: 0 }, pending: { files: 4, bytes: 4096 }, remote_only_files: 0, migration: { running: false, files: 0, bytes: 0, total_files: 0, total_bytes: 0 } })); return; }
   res.writeHead(404).end();
 });
 
@@ -56,12 +72,169 @@ function contrast(a, b) {
   return (Math.max(x, y) + .05) / (Math.min(x, y) + .05);
 }
 
+// Android regression (owner's Play app, v0.11.12): a history copy's burst of
+// change events started one relay read each; Chromium rejected the excess
+// queued requests ("Failed to fetch") and superseded reads left the button on
+// "Refreshing…". Reads stay bounded, a failure names this card truthfully,
+// background reads never lock Refresh, and Refresh retries.
+async function burstAndFailures(browser, origin) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 900 }, reducedMotion: 'reduce' }), page = await context.newPage(), errors = [];
+  page.setDefaultTimeout(5000);
+  page.on('pageerror', e => errors.push(e.message));
+  await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+  // A genuine network-level rejection of the real request, as on the phone.
+  await page.route('**/api/storage/attachments', route => route.abort('failed'));
+  await page.clock.install();
+  await page.goto(origin + '/?real=1');
+  const panel = page.locator('[data-part="relay-attachment-storage"]');
+  const refresh = panel.getByRole('button', { name: 'Refresh storage status', exact: true });
+  const alert = panel.getByRole('alert');
+  await alert.waitFor();
+  assert.equal(await alert.innerText(), 'Workspace attachment status couldn’t be read just now. Refresh to try again.');
+  assert.equal(await refresh.isDisabled(), false, 'a failed read leaves Refresh usable');
+  // A burst of change events while reads are held: at most two in flight,
+  // one follow-up for the rest, and Refresh never locks or relabels.
+  await page.evaluate(() => { fixture.real = false; fixture.holdAll = true; fixture.calls.length = 0; for (let i = 0; i < 300; i++) fixture.emit(); });
+  await page.waitForFunction(() => fixture.held.length === 2);
+  assert.equal(await page.evaluate(() => fixture.calls.length), 2, 'a 300-event burst starts two reads, not 300');
+  assert.equal(await refresh.isDisabled(), false, 'background reads never disable Refresh');
+  assert.equal(await alert.count(), 1, 'the earlier failure stays until a read answers');
+  await page.evaluate(() => { const held = fixture.held.splice(0); for (const done of held) done(); });
+  await page.waitForFunction(() => fixture.held.length === 1);
+  assert.equal(await page.evaluate(() => fixture.calls.length), 3, 'the burst coalesces into exactly one follow-up read');
+  await page.evaluate(() => { fixture.holdAll = false; fixture.held.splice(0).forEach(done => done()); });
+  await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
+  await alert.waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => fixture.maxInFlight), 2);
+  // Steady traffic, as during a long copy: events keep arriving while reads
+  // answer one by one. A fresh workspace's status still appears, and a
+  // pressed Refresh returns, before the events stop.
+  await page.evaluate(() => { fixture.holdAll = true; fixture.held.length = 0; fixture.inFlight = 0; fixture.switchHost(); });
+  await page.waitForFunction(() => fixture.held.length === 1);
+  await panel.getByText('Reading attachment storage…', { exact: true }).waitFor();
+  const steady = async rounds => { for (let i = 0; i < rounds; i++) { await page.evaluate(() => { fixture.emit(); fixture.emit(); fixture.held.shift()(); }); await page.waitForTimeout(10); } };
+  await steady(10);
+  await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
+  assert.ok(await page.evaluate(() => fixture.held.length) >= 1, 'status appears while reads are still in flight');
+  await refresh.click();
+  await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+  await steady(10);
+  await refresh.waitFor();
+  assert.ok(await page.evaluate(() => fixture.held.length) >= 1, 'Refresh returns while events continue');
+  assert.ok(await page.evaluate(() => fixture.maxInFlight) <= 3, 'steady traffic keeps at most two background reads plus one manual read in flight');
+  await page.evaluate(() => { fixture.holdAll = false; fixture.held.splice(0).forEach(done => done()); });
+  await alert.waitFor({ state: 'detached' });
+  // Refresh after another real network failure: the press clears the old
+  // error and shows "Refreshing…" at once, then the retry succeeds.
+  await page.evaluate(() => { fixture.real = true; });
+  await refresh.click();
+  await alert.waitFor();
+  await page.unroute('**/api/storage/attachments');
+  await page.evaluate(() => { fixture.real = false; fixture.deferGet = true; fixture.resolveRead = null; });
+  const feedback = await page.evaluate(() => new Promise(resolve => {
+    const card = document.querySelector('[data-part="relay-attachment-storage"]');
+    const button = [...card.querySelectorAll('button')].find(e => e.textContent === 'Refresh storage status');
+    const started = performance.now();
+    const shown = () => button.textContent === 'Refreshing…' && !card.querySelector('[role="alert"]');
+    const watch = new MutationObserver(() => { if (shown()) { watch.disconnect(); resolve(performance.now() - started); } });
+    watch.observe(card, { subtree: true, childList: true, characterData: true, attributes: true });
+    button.click();
+  }));
+  assert.ok(feedback < 1100, 'Refresh feedback ' + feedback + ' ms');
+  assert.equal(await alert.count(), 0, 'pressing Refresh removes the old error immediately');
+  await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+  await page.evaluate(() => fixture.resolveRead());
+  await refresh.waitFor();
+  await page.evaluate(() => { fixture.real = true; });
+  await refresh.click();
+  await refresh.waitFor();
+  assert.equal(await alert.count(), 0, 'a real read through fetch succeeds after the failure');
+  // A read that never answers ends in a truthful state within the bound.
+  await page.evaluate(() => { fixture.real = false; fixture.hang = true; });
+  await refresh.click();
+  await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+  await page.clock.runFor(30_000);
+  await alert.waitFor();
+  assert.equal(await alert.innerText(), 'No answer about workspace attachments yet. Refresh to try again.');
+  assert.equal(await refresh.isDisabled(), false);
+  await page.evaluate(() => { fixture.hang = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
+  await refresh.waitFor();
+  // Refresh pressed while two background reads hang: it starts its own read
+  // at once, and the earlier reads' timeouts never bring back an error.
+  await page.evaluate(() => { fixture.hang = true; fixture.calls.length = 0; fixture.emit(); fixture.emit(); });
+  await page.waitForFunction(() => fixture.calls.length === 2);
+  await page.clock.runFor(5_000);
+  await refresh.click();
+  await page.waitForFunction(() => fixture.calls.length === 3);
+  await page.clock.runFor(25_500);
+  assert.equal(await alert.count(), 0, 'reads started before the press cannot show their timeout');
+  await panel.getByRole('button', { name: 'Refreshing…', exact: true }).waitFor();
+  await page.clock.runFor(5_000);
+  await alert.waitFor();
+  assert.equal(await alert.count(), 1);
+  assert.equal(await alert.innerText(), 'No answer about workspace attachments yet. Refresh to try again.');
+  assert.equal(await refresh.isDisabled(), false, 'Refresh is usable when its own read ends');
+  await page.evaluate(() => { fixture.hang = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
+  // A queued follow-up of a replaced workspace never starts.
+  await page.evaluate(() => { fixture.holdAll = true; fixture.held.length = 0; fixture.switchHost('old'); });
+  await page.waitForFunction(() => fixture.held.length === 1);
+  await page.evaluate(() => { fixture.emit(); fixture.emit(); });
+  await page.waitForFunction(() => fixture.held.length === 2);
+  await page.evaluate(() => { fixture.oldReads = fixture.held.splice(0); fixture.holdAll = false; fixture.switchHost('new'); });
+  await page.waitForFunction(() => fixture.calls.some(c => c.id === 'new'));
+  await page.evaluate(() => fixture.oldReads.forEach(done => done()));
+  await panel.getByText('Attachments stored on this relay', { exact: true }).waitFor();
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  assert.equal(await page.evaluate(() => fixture.calls.filter(c => c.id === 'old').length), 2, 'no follow-up read after its workspace was replaced');
+  // An action that never answers releases the card at the bound with a
+  // truthful message, and background reads do not clear that message.
+  await page.evaluate(() => { fixture.status = { ...fixture.base(), connected: true, state: 'connected' }; fixture.hangAction = true; fixture.emit(); });
+  const move = panel.getByRole('button', { name: 'Move existing attachments…', exact: true });
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].find(e => e.textContent === 'Move existing attachments…')?.disabled === false);
+  await move.click();
+  const dialog = page.getByRole('dialog', { name: 'Move existing relay attachments?', exact: true });
+  await dialog.getByRole('button', { name: 'Move attachments', exact: true }).click();
+  await panel.getByRole('button', { name: 'Starting move…', exact: true }).waitFor();
+  assert.equal(await refresh.isDisabled(), true);
+  await page.clock.runFor(30_000);
+  await alert.waitFor();
+  assert.equal(await alert.innerText(), 'No answer about this change yet. Refresh to see whether it happened.');
+  assert.equal(await refresh.isDisabled(), false, 'a silent action does not lock the card');
+  const beforeEvents = await page.evaluate(() => fixture.calls.length);
+  for (let i = 0; i < 5; i++) await page.evaluate(() => fixture.emit());
+  await page.waitForFunction(n => fixture.calls.length > n, beforeEvents);
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
+  assert.equal(await alert.innerText(), 'No answer about this change yet. Refresh to see whether it happened.', 'background reads keep the action error');
+  // An action rejected at the network says it could not be confirmed.
+  await page.evaluate(() => { fixture.hangAction = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
+  await page.route('**/api/storage/attachments', route => route.abort('failed'));
+  await page.evaluate(() => { fixture.real = true; });
+  await move.click();
+  await dialog.getByRole('button', { name: 'Move attachments', exact: true }).click();
+  await alert.waitFor();
+  assert.equal(await alert.innerText(), 'This change couldn’t be confirmed. Refresh to see whether it happened.');
+  await page.unroute('**/api/storage/attachments');
+  await page.evaluate(() => { fixture.real = false; });
+  await refresh.click();
+  await alert.waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await context.close();
+  console.log(`390 light burst PASS (Refresh feedback ${Math.round(feedback)} ms): real fetch failure is named truthfully, 300 change events → 2 reads + 1 follow-up, steady events still land reads and return Refresh, Refresh stays usable, clears the error at once and retries; a silent read ends at the 30 s bound; Refresh over hung reads owns its own result; no follow-up after a workspace change; silent/failed actions release the card and keep their message (${skin})`);
+}
+
 (async () => {
   let browser;
   try {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const origin = 'http://127.0.0.1:' + server.address().port;
     browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
+    await burstAndFailures(browser, origin);
     const focused = process.env.AGENTNET_RELAY_STORAGE_FOCUS === 'move';
     const memberOnly = process.env.AGENTNET_RELAY_STORAGE_FOCUS === 'member';
     const views = focused || memberOnly ? [[1280, 'dark'], [390, 'light']] : [1280, 390, 320].flatMap(width => ['light', 'dark'].map(theme => [width, theme]));
@@ -278,7 +451,7 @@ function contrast(a, b) {
       assert.deepEqual(errors, []); assert.deepEqual(external, []);
       assert.ok((await page.evaluate(() => fixture.calls)).every(c => c.url === '/api/storage/attachments'));
       await context.close();
-      console.log(`${width} ${theme} PASS: members status-only; admin consent/confirmations; progress; remote-only and stale-response guards; keyboard, overflow, no polling/provider calls`);
+      console.log(`${skin} ${width} ${theme} PASS: members status-only; admin consent/confirmations; progress; remote-only and stale-response guards; keyboard, overflow, no polling/provider calls`);
     }
   } finally {
     await browser?.close();

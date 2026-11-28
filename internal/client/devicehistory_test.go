@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -30,7 +31,11 @@ func TestDeviceHistoryLinkedLegacyConversation(t *testing.T) {
 	}
 	// The phone's program has run once and said it reads direct history:
 	// nothing is sealed for a device before it does (ownSyncReader).
-	stopPhone := runAgent(t, phone)
+	// runPublished waits for this run's own session record: the hub may
+	// still list the linking session, and a session it lists without a
+	// record makes the phone read nothing (Profile.Supports), so signing
+	// before that record exists left the copy with no reader at random.
+	stopPhone := runPublished(t, phone)
 	waitNamedAgentCaps(t, phone)
 	// This test delivers individual carriers, not an archive descriptor.
 	// Publish the same signed older-reader profile as the catch-up fixture.
@@ -623,4 +628,65 @@ func TestDeviceHistoryOwnEndpointsReordered(t *testing.T) {
 		t.Fatalf("repair changed original execution: attempts=%d err=%v", attempts, err)
 	}
 
+}
+
+// A current (ha2) phone gets the same legacy direct-agent history inside a
+// history archive part: the archive path stages device-history sources as
+// it does conversation history, and nothing is dropped.
+func TestDeviceHistoryLinkedLegacyConversationThroughArchive(t *testing.T) {
+	w, phone, _, _ := historyCatchupFixture(t, 0)
+	request, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "existing direct-agent question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := sealTo(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindAnswer, Body: "existing direct-agent answer", ReplyTo: request.ID})
+	if err := w.alice.verifyAndStore(tctx(t), reply); err != nil {
+		t.Fatal(err)
+	}
+	stopPhone := runPublished(t, phone)
+	label, name, _ := protocol.SplitAddress(phone.Address)
+	eventually(t, "sender sees a signed archive reader", func() bool {
+		var profile protocol.Profile
+		err := w.alice.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile)
+		return err == nil && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapHistoryArchive) && profile.Supports(phone.Address, phone.Self().SignKey, protocol.CapOwnSyncV3)
+	})
+	stopPhone()
+	a := w.alice
+	for range 8 {
+		a.convWork.due(convHistory)
+		a.convSyncByHand(tctx(t))
+	}
+	var staged int
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub=? AND state IN (?,?)`, phone.Address, envelope.SubDeviceHistory, archiveStaged, archiveAccepted).Scan(&staged); err != nil || staged != 2 {
+		t.Fatalf("direct-agent history staged for the archive: %d %v", staged, err)
+	}
+	if err := a.archivePack(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	desc := archiveDescriptor(t, a)
+	if _, err := a.archiveStep(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := phone.storeReceived(tctx(t), desc); err != nil {
+		t.Fatal(err)
+	}
+	importCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := phone.archiveImportStep(importCtx); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := phone.Conversation(request.ID, 0, 0)
+	if err != nil || len(thread.Messages) != 2 {
+		t.Fatalf("archive reader lacks direct-agent history: messages=%d err=%v", len(thread.Messages), err)
+	}
+	if thread.Peer != w.bob.Address || thread.Messages[0].ID != request.ID || thread.Messages[0].Dir != "out" || thread.Messages[0].From != w.alice.Address || thread.Messages[1].ID != reply.ID || thread.Messages[1].Dir != "in" || thread.Messages[1].ReplyTo != request.ID {
+		t.Fatalf("archive changed direct agent or original provenance: %+v", thread)
+	}
+	var executable int
+	if err := phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id IN (?,?) AND (replica!=1 OR state!='' OR attempts!=0)`, request.ID, reply.ID).Scan(&executable); err != nil || executable != 0 {
+		t.Fatalf("archived direct history gained executable state: %d %v", executable, err)
+	}
 }

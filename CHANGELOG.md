@@ -6,6 +6,11 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Photos and videos sent together show as one album, laid out the way
+  Telegram does it, with the message text underneath (MEL-856). Tap any
+  tile to open it, then swipe or use the arrows to go through the album.
+  Documents and audio sent together show as one list. Up to ten items form
+  a group; different kinds are never mixed, and the order stays as sent.
 - Your own agents work in "My agents" when you have only one device
   (MEL-840). With only you in the group and your agent on the same
   computer, messages, inviting the agent and asking it all failed with
@@ -39,9 +44,12 @@ This record starts with v0.8.1; earlier releases remain on the
   history no longer receives messages sent while they were away.
 - The Google Play version of the Android app says on About that it updates
   through Google Play, instead of showing "Invalid native request."
-- Copying your history to a newly linked device is several times faster.
-  The device that holds the history reads far less of its database per page
-  (about 40 MB down to 8 MB for a busy chat), using a new index.
+- Copying your history to a newly linked device is much faster. The
+  history moves in large compressed parts of up to 5,000 messages, up to
+  four at a time, instead of 50 messages per part one after another, as
+  Signal and WhatsApp do. The device that holds the history reads far less
+  of its database per page, using new indexes. A copy that was under way
+  when you update finishes, and nothing in it is lost.
 
 - Photos attached to the same message can be browsed in one viewer. Use
   Previous and Next, the arrow keys, or swipe at fit zoom.

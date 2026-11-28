@@ -64,10 +64,13 @@ func TestLiveTopicOrganizationNoticeDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := NewLive(a)
-	conv, err := l.NewDM(b.Address)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var conv string
+	var err error
+	// Bob's daemon publishes its signed session capabilities asynchronously.
+	waitFor(t, "bob's conversation capabilities", func() bool {
+		conv, err = l.NewDM(b.Address)
+		return err == nil
+	})
 	first, err := a.SendConv(t.Context(), conv, client.ConvOutgoing{Body: "source"})
 	if err != nil {
 		t.Fatal(err)

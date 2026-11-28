@@ -10,17 +10,23 @@ import (
 )
 
 // ConversationDeletion deletes a conversation (all of this person's
-// devices) or a device thread (it exists on this device only).
+// devices), one device topic, or a whole device chat (every topic of its
+// row) — each on all of this person's devices; others keep their copies.
 type ConversationDeletion interface {
 	DeleteConversation(DeleteConversationAction) (string, error)
 }
 
 // DeleteConversationAction names what to delete: a conversation by id, or
 // a device thread by its peer and its earliest message (ThreadSummary.ID).
+// With Chat, the whole device chat that thread is in: every topic of its
+// chat-list row, archived ones too. Without Chat, that one topic only: kept
+// for skins that call it; the bundled UI never offers it (owner,
+// 2026-11-27: a topic is archived or marked done, a chat is deleted).
 type DeleteConversationAction struct {
 	Conv   string `json:"conv,omitempty"`
 	Peer   string `json:"peer,omitempty"`
 	Thread string `json:"thread,omitempty"`
+	Chat   bool   `json:"chat,omitempty"`
 }
 
 // deleteConversation implements POST /api/conversation/delete.
@@ -43,10 +49,12 @@ func (l *Live) DeleteConversation(x DeleteConversationAction) (string, error) {
 	var done client.ConversationDeleted
 	var err error
 	switch {
-	case x.Conv != "" && x.Peer == "" && x.Thread == "":
+	case x.Conv != "" && x.Peer == "" && x.Thread == "" && !x.Chat:
 		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 		defer cancel()
 		done, err = l.a.DeleteConversation(ctx, x.Conv)
+	case x.Conv == "" && x.Peer != "" && x.Thread != "" && x.Chat:
+		done, err = l.a.DeleteDeviceChat(x.Peer, x.Thread)
 	case x.Conv == "" && x.Peer != "" && x.Thread != "":
 		done, err = l.a.DeleteThread(x.Peer, x.Thread)
 	default:
@@ -63,8 +71,8 @@ func (l *Live) DeleteConversation(x DeleteConversationAction) (string, error) {
 	l.a.NoteChange()
 	var note string
 	switch {
-	case done.ThisOnly:
-		note = "Deleted. This thread was stored on this device only; the other person keeps their copy."
+	case x.Conv == "": // a device topic or chat (client DeleteThread, DeleteDeviceChat)
+		note = l.a.DeviceChatNote(done, x.Peer)
 	case done.Devices == 0:
 		note = "Deleted here. No other device of yours was linked; one you link later gets the deletion. Others in it keep their copies."
 	default:

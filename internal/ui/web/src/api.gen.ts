@@ -380,6 +380,7 @@ export interface DeleteConversationAction {
   conv?: string;
   peer?: string;
   thread?: string;
+  chat?: boolean;
 }
 
 export interface DesktopChat {
@@ -909,12 +910,14 @@ export interface Overview {
   person?: PersonView;
   people: PersonView[] | null;
   dms: DMSummary[] | null;
+  my_agents?: string;
   role?: string;
   link?: LinkState;
   links?: LinkRequest[];
   history?: HistoryCopy[];
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
+  removed_devices?: RemovedDevice[];
   model_reports?: PrivateModelReport[];
   update_required?: UpdateRequiredView;
   transport_error?: string;
@@ -1114,6 +1117,11 @@ export interface RemoteStorage {
   status: string;
   reason?: string;
   usage?: HubStorage;
+}
+
+export interface RemovedDevice {
+  address: string;
+  person: string;
 }
 
 export interface ReplyReceiverBindingView {

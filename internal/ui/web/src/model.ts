@@ -52,7 +52,9 @@ export function concreteAgentName(id:string,names:Record<string,string>):string 
 
 export function historicalAgentName(id:string,names:Record<string,string>):string {const name=names[id]||"Agent "+id.slice(0,8);return names[id+"#current"]!=="true"&&Object.keys(names).filter(k=>/^[a-f0-9]{32}$/.test(k)&&names[k]===name).length>1?name+" · "+id.slice(0,8):name;}
 
-export const directChatKey=(t:Pick<T.ThreadSummary,"peer"|"agent_host"|"agent_key"|"agent_id"|"agent_legacy">)=>JSON.stringify(t.agent_id||t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"",t.agent_id||""]:[t.peer,"","human"]);
+// client topicAgentKey: a legacy agent thread (no agent_id) is grouped per peer
+// too, so "Delete chat" never reaches another peer's threads.
+export const directChatKey=(t:Pick<T.ThreadSummary,"peer"|"agent_host"|"agent_key"|"agent_id"|"agent_legacy">)=>JSON.stringify(t.agent_id?[t.agent_host||t.peer,t.agent_key||"",t.agent_id]:t.agent_legacy?[t.agent_host||t.peer,t.agent_key||"","",t.peer]:[t.peer,"","human"]);
 
 // ---- people and agents ---------------------------------------------------
 
@@ -254,6 +256,10 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
     const ts = summaries.map(topicOf).sort(newestFirst);
     const latest = c && (!ts[0] || newestFirst(topicOf(c.latest), ts[0]) < 0) ? topicOf(c.latest) : ts[0];
     if (!latest) continue;
+    // A removed device (yours or another person's) is history (searchable),
+    // not an active chat: the row's device is its agent's host, else the peer,
+    // so an agent hosted here that it asked stays a current agent row.
+    if(removedDevice(binding.agent_id||binding.agent_legacy?binding.agent_host||peer:peer,o))continue;
     const row = threadRow(peer, o, agentNames,binding); // an agent only where one runs (MEL-529)
     if(row.kind==="agent"&&!currentAgentTarget(binding.agent_id,binding.agent_host||peer,binding.agent_key,agentNames))continue;
     items.push({
@@ -289,6 +295,17 @@ export function deviceOwner(address: string, o: T.Overview | null): T.PersonView
 
 /** personOf: the person a device address belongs to, as the overview knows it. */
 export const personOf = (address: string, o: T.Overview | null): T.PersonView | null => (address ? deviceOwner(address, o) : null);
+
+/** removedDevice: the verified person (you, or someone you know) whose
+ *  signed roster dropped this exact device (overview.removed_devices), while
+ *  no current roster names it. Its threads are history, never an active
+ *  chat. Only rows name it ("Your Pixel", "Vitalii’s Phone"): it is never
+ *  "you" or that person for review or authority (removed devices lose it). */
+export const removedDevice = (address: string, o: T.Overview | null | undefined): T.PersonView | null => {
+  const r = address && o ? (o.removed_devices || []).find((d) => d.address === address) : undefined;
+  if (!r || !o || deviceOwner(address, o)) return null;
+  return (o.person?.person === r.person ? o.person : (o.people || []).find((p) => p.person === r.person)) || null;
+};
 
 /** isMine: the address is this device, or another device of this person. */
 export const isMine = (address: string, o: T.Overview | null) =>
@@ -374,6 +391,8 @@ export interface ThreadRow { kind: "agent" | "person"; title: string; subtitle: 
  *  - another person's device that runs none: that person ("Vitalii" · "from Phone"). */
 export function threadRow(peer: string, o: T.Overview | null | undefined, names: Record<string, string>, binding?:T.ThreadSummary): ThreadRow {
   if(binding?.agent_host&&(binding.agent_id||binding.agent_legacy)){const host=binding.agent_host;return {kind:"agent",title:binding.agent_id?concreteAgentName(binding.agent_id,names):"Agent history",subtitle:"on "+niceDevice(host)+(binding.agent_legacy?" · original agent unknown":""),seed:binding.agent_id||host,local:host===o?.me.address};}
+  const gone = removedDevice(peer, o);
+  if (gone) return { kind: "person", title: owner(gone, o?.person) + " " + niceDevice(peer), subtitle: "Removed device", seed: peer, local: false };
   const w = deviceWho(peer, o), me = o?.person;
   if (w.agent) {
     if (!w.person) return { kind: "agent", title: w.device || "Agent", subtitle: "Agent · not linked to a person", seed: peer, local: false };
@@ -850,13 +869,15 @@ export function holdSentence(code: string, name: string, browser = false): strin
 }
 
 /** The person's "My agents" room (MEL-713), chosen as client.MyAgentsRoom
- *  chooses it so the app and terminals share one: the oldest current group
+ *  chooses it so the app and terminals share one: overview.my_agents, which
+ *  names it also while it is deleted here; else the oldest current group
  *  of theirs by that title with no other person. Only that one room is the
  *  built-in group; another group that happens to share the title is not. */
 export const MY_AGENTS = "My agents";
 export function myAgentsRoomId(o: T.Overview | null | undefined): string | undefined {
   const me = o?.person?.person;
   if (!me) return;
+  if (o!.my_agents) return o!.my_agents; // the host's choice, also while the room is deleted here (left out of dms)
   const at = (d: T.DMSummary) => Date.parse(d.created) || 0;
   return (o!.dms || []).filter(d => d.kind === "group" && d.title === MY_AGENTS && !d.frozen && d.members?.length === 1 && d.members[0].person === me)
     .sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1))[0]?.id;

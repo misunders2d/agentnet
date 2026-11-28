@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,7 +24,8 @@ import (
 // What is erased is named exactly: every turn (logical id and sender key)
 // of the conversation the deleting device holds. The names travel as a
 // version 3 control (sub "clear") to the person's other devices only, held
-// for each until it reads clr1 (protocol.CapConvClear); a device linked
+// for each until it reads clr1 (protocol.CapConvClear), or rem3 for a
+// device chat (protocol.CapDeviceClear); a device linked
 // later gets every name erased here (replayErased), and one the deleting
 // device did not know of gets them from a device that did (forwardClear).
 // Each device keeps every erased name (conv_erased), so a copy of an erased
@@ -34,13 +37,27 @@ import (
 // named, so a device that holds it keeps it (and shows it), as any later
 // turn. No order or time decides what is erased.
 //
+// A DM or group with no turn yet (started, nothing said) is deleted too, as
+// TDLib's delete_dialog_history removes an empty chat from the list (owner,
+// 2026-11-27, for groups too): the deletion then names one marker turn,
+// keyed by this device and the deletion's own id, which matches no message
+// anywhere. It travels and is replayed like any named turn, so every own
+// device leaves the chat out until a turn arrives. The people, membership,
+// keys, grants, blocks and agents stay as they are.
+//
 // A body that unfinished work still needs (a request the worker or a person
 // still has to deal with, a reply a selected receiver has not taken, a copy
 // not yet sent) is hidden at once and erased by the local change that ends
 // that work (eraseLoop, on the daemon's change feed, as the worker's).
 //
-// A device thread (no conversation) exists on this device only: deleting
-// one erases exactly that reply-linked thread here, and tells no one.
+// A device chat (threads with no conversation: a DM with a person or an
+// agent, owner decision 2026-11-27) is deleted the same way: its turns are
+// named in a clear with no conversation, held for each own device until it
+// reads rem3 (protocol.CapDeviceClear) — an older device refuses such a clear
+// as malformed, so it never receives one. The other person keeps theirs.
+//
+// Deleting one topic (DeleteThread) erases exactly that reply-linked thread;
+// deleting the chat (DeleteDeviceChat) erases every topic of its row.
 const convClearSchema = `
 CREATE TABLE conv_erased(
   conv TEXT NOT NULL,
@@ -84,10 +101,10 @@ const retainedOut = `o.state IN ('queued', 'waiting')`
 // ConversationDeleted is what a deletion did here.
 type ConversationDeleted struct {
 	Deletion string `json:"deletion"`
-	Erased   int    `json:"erased"`              // turns erased here
-	Kept     int    `json:"kept,omitempty"`      // of those, hidden but kept until their work ends
-	Devices  int    `json:"devices,omitempty"`   // other devices of this person it is queued for (each applies it when it can read it)
-	ThisOnly bool   `json:"this_only,omitempty"` // a device thread: it exists on this device only
+	Erased   int    `json:"erased"`            // turns erased here
+	Kept     int    `json:"kept,omitempty"`    // of those, hidden but kept until their work ends
+	Devices  int    `json:"devices,omitempty"` // other devices of this person it is queued for (each applies it when it can read it)
+	Peers    int    `json:"peers,omitempty"`   // device threads: how many peers' threads it erased
 }
 
 // ErrNothingToDelete refuses a deletion that would erase nothing.
@@ -130,6 +147,17 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 		return ConversationDeleted{}, ErrNoConversation
 	}
 	selfFP := a.Self().Fingerprint()
+	// A recovered person's chat shows its earlier DMs too: read its family
+	// only when this row holds no turn, before the transaction.
+	var family []ConversationInfo
+	empty := false
+	if turns, err := convTurns(a.store.db, conv, selfFP); err != nil {
+		return ConversationDeleted{}, err
+	} else if empty = len(turns) == 0; empty {
+		if family, err = a.continuityDMs(conv); err != nil {
+			return ConversationDeleted{}, err
+		}
+	}
 	out := ConversationDeleted{Deletion: protocol.NewID()}
 	tx, err := a.store.db.Begin()
 	if err != nil {
@@ -140,8 +168,21 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if err != nil {
 		return out, err
 	}
+	marker := false
 	if len(turns) == 0 {
-		return out, ErrNothingToDelete
+		// A DM or group that never had a turn here: its deletion names a
+		// marker turn of its own (see the top of this file). One deleted
+		// already, or a recovered person's chat (it shows its earlier DMs
+		// too), has nothing to delete. The "My agents" room is hidden the
+		// same way: its agents still find it (MyAgentsRoomIn).
+		var erased int
+		if err := tx.QueryRow(`SELECT count(*) FROM conv_erased WHERE conv = ?`, conv).Scan(&erased); err != nil {
+			return out, err
+		}
+		if erased > 0 || !empty || len(family) > 1 { // !empty: its turns went meanwhile
+			return out, ErrNothingToDelete
+		}
+		turns, marker = []envelope.Ref{{Fingerprint: selfFP, ID: out.Deletion}}, true
 	}
 	for _, t := range turns {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared) VALUES(?, ?, ?, ?, 0)`, conv, t.Fingerprint, t.ID, out.Deletion); err != nil {
@@ -151,7 +192,9 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 	if err := eraseCoveredIn(tx, conv, selfFP); err != nil {
 		return out, err
 	}
-	out.Erased = len(turns)
+	if !marker {
+		out.Erased = len(turns)
+	}
 	if out.Kept, err = retainedCount(tx, conv, selfFP); err != nil {
 		return out, err
 	}
@@ -165,57 +208,127 @@ func (a *Agent) DeleteConversation(ctx context.Context, conv string) (Conversati
 }
 
 // DeleteThread erases exactly the device thread with peer whose earliest
-// message is id (ThreadSummary.ID), here: device threads are kept by this
-// device only. Other threads with the same peer stay.
+// message is id (ThreadSummary.ID), here: one topic of a device chat. Other
+// threads with the same peer stay.
 func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 	groups, rows, err := a.peerThreadGroups(peer)
 	if err != nil {
 		return ConversationDeleted{}, err
 	}
-	var thread []string
 	for _, g := range groups {
 		if len(g) > 0 && directTopicID(g, rows) == id {
-			thread = g
+			return a.eraseDeviceThreads(map[string]peerThreads{peer: {groups: [][]string{g}, rows: rows}})
 		}
 	}
-	if len(thread) == 0 {
+	return ConversationDeleted{}, ErrNoMessage
+}
+
+// DeleteDeviceChat erases the whole device chat that the thread with peer
+// whose earliest message is id belongs to: every topic the chat list shows
+// in that one row (the same topicAgentKey: one agent's chat, or the human
+// chat with peer), archived ones included. Review-notice-only threads are
+// not part of the row and stay.
+func (a *Agent) DeleteDeviceChat(peer, id string) (ConversationDeleted, error) {
+	all, err := a.Threads()
+	if err != nil {
+		return ConversationDeleted{}, err
+	}
+	key := ""
+	for _, t := range all {
+		if t.Peer == peer && t.ID == id && !t.NoticeOnly { // as the engine: a notice-only thread is not a chat row
+			key = topicAgentKey(t)
+		}
+	}
+	if key == "" {
 		return ConversationDeleted{}, ErrNoMessage
 	}
+	want := map[string]map[string]bool{}
+	for _, t := range all {
+		if !t.NoticeOnly && topicAgentKey(t) == key {
+			if want[t.Peer] == nil {
+				want[t.Peer] = map[string]bool{}
+			}
+			want[t.Peer][t.ID] = true
+		}
+	}
+	threads := map[string]peerThreads{}
+	for p, ids := range want {
+		groups, rows, err := a.peerThreadGroups(p)
+		if err != nil {
+			return ConversationDeleted{}, err
+		}
+		pt := peerThreads{rows: rows}
+		for _, g := range groups {
+			if len(g) > 0 && ids[directTopicID(g, rows)] {
+				pt.groups = append(pt.groups, g)
+			}
+		}
+		if len(pt.groups) > 0 {
+			threads[p] = pt
+		}
+	}
+	if len(threads) == 0 {
+		return ConversationDeleted{}, ErrNoMessage
+	}
+	return a.eraseDeviceThreads(threads)
+}
+
+// peerThreads are some reply-linked threads with one peer and the rows
+// peerThreadGroups read with them.
+type peerThreads struct {
+	groups [][]string
+	rows   map[string]threadRow
+}
+
+// eraseDeviceThreads erases the named device threads here as one deletion,
+// with the controls on their messages.
+func (a *Agent) eraseDeviceThreads(threads map[string]peerThreads) (ConversationDeleted, error) {
 	selfFP := a.Self().Fingerprint()
-	out := ConversationDeleted{Deletion: protocol.NewID(), ThisOnly: true}
+	out := ConversationDeleted{Deletion: protocol.NewID()}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback()
-	for _, m := range thread {
-		key := selfFP
-		err := tx.QueryRow(`SELECT author_fp FROM device_history_rows WHERE id=? LIMIT 1`, m).Scan(&key)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return out, err
-		}
-		if errors.Is(err, sql.ErrNoRows) && rows[m].in {
-			if err := tx.QueryRow(`SELECT coalesce(verified_by,claimed_fp) FROM inbox WHERE id = ? AND conv IS NULL`, m).Scan(&key); err != nil {
+	peers := make([]string, 0, len(threads))
+	for peer := range threads {
+		peers = append(peers, peer)
+	}
+	sort.Strings(peers) // one order every time
+	out.Peers = len(peers)
+	for _, peer := range peers {
+		pt := threads[peer]
+		for _, thread := range pt.groups {
+			for _, m := range thread {
+				key := selfFP
+				err := tx.QueryRow(`SELECT author_fp FROM device_history_rows WHERE id=? LIMIT 1`, m).Scan(&key)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return out, err
+				}
+				if errors.Is(err, sql.ErrNoRows) && pt.rows[m].in {
+					if err := tx.QueryRow(`SELECT coalesce(verified_by,claimed_fp) FROM inbox WHERE id = ? AND conv IS NULL`, m).Scan(&key); err != nil {
+						return out, err
+					}
+				}
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared) VALUES('', ?, ?, ?, 0)`, key, m, out.Deletion); err != nil {
+					return out, err
+				}
+				out.Erased++
+			}
+			if err := forgetTopics(tx, peer, thread); err != nil { // its name and marks go with it (topics.go)
 				return out, err
 			}
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion) VALUES('', ?, ?, ?)`, key, m, out.Deletion); err != nil {
-			return out, err
-		}
-		out.Erased++
 	}
 	// Controls on its messages are erased with them.
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion)
-		SELECT '', coalesce(i.verified_by,i.claimed_fp), i.id, ? FROM inbox i JOIN conv_erased t ON t.conv = '' AND t.lid = i.ref_id AND t.key = i.ref_fp
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion, shared)
+		SELECT '', coalesce(i.verified_by,i.claimed_fp), i.id, ?, 0 FROM inbox i JOIN conv_erased t ON t.conv = '' AND t.lid = i.ref_id AND t.key = i.ref_fp
 		 WHERE i.conv IS NULL AND i.ref_id IS NOT NULL AND coalesce(i.verified_by,i.claimed_fp) IS NOT NULL AND t.deletion = ?
-		UNION SELECT '', ?, o.id, ? FROM outbox o JOIN conv_erased t ON t.conv = '' AND t.lid = o.ref_id AND t.key = o.ref_fp
+		UNION SELECT '', ?, o.id, ?, 0 FROM outbox o JOIN conv_erased t ON t.conv = '' AND t.lid = o.ref_id AND t.key = o.ref_fp
 		 WHERE o.conv IS NULL AND o.ref_id IS NOT NULL AND t.deletion = ?`, out.Deletion, out.Deletion, selfFP, out.Deletion, out.Deletion); err != nil {
 		return out, err
 	}
 	if err := eraseCoveredIn(tx, "", selfFP); err != nil {
-		return out, err
-	}
-	if err := forgetTopics(tx, peer, thread); err != nil { // its name and marks go with it (topics.go)
 		return out, err
 	}
 	if out.Kept, err = retainedCount(tx, "", selfFP); err != nil {
@@ -225,8 +338,11 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 		return out, err
 	}
 	a.dropErasedFiles("")
+	// The person's other devices erase the same turns (shared state follows
+	// the person, AGENTS.md); each applies it once it reads rem3.
+	out.Devices, err = a.shareErased(context.Background())
 	notifyDaemon(a.home)
-	return out, nil
+	return out, err
 }
 
 // eraseCoveredIn blanks what erased turns of conv ("" for device threads)
@@ -386,11 +502,11 @@ func (a *Agent) admitClear(ctx context.Context, env envelope.Envelope, in envelo
 	if !ok || !me.has(env.From, sender.Fingerprint()) || env.From == a.Address {
 		return hold(reasonInvalid, "a conversation deletion comes only from another current device of this person")
 	}
-	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
-		return err
-	} else if !found {
-		return hold(reasonProof, "the conversation is not here (yet)")
-	}
+	// The names are kept even while the conversation is not here: a device
+	// linked after the deletion never gets a chat that has nothing later
+	// (syncRoots, history), and a named turn that arrives later, from any
+	// device, is kept as a skeleton. Holding it would leave it held for good.
+	// A device chat (no conversation, rem3) names its turns alone.
 	selfFP := a.Self().Fingerprint()
 	tx, err := a.store.db.Begin()
 	if err != nil {
@@ -419,6 +535,13 @@ func (a *Agent) admitClear(ctx context.Context, env envelope.Envelope, in envelo
 	for _, t := range turns {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion) VALUES(?, ?, ?, ?)`, in.Conv, t.Fingerprint, t.ID, part.Deletion); err != nil {
 			return err
+		}
+	}
+	if in.Conv == "" { // a device chat's topics: their names and marks go with them (forgetTopics)
+		for _, t := range turns {
+			if _, err := tx.Exec(`DELETE FROM topic_state WHERE topic = ?`, t.ID); err != nil {
+				return err
+			}
 		}
 	}
 	if err := eraseCoveredIn(tx, in.Conv, selfFP); err != nil {
@@ -454,7 +577,8 @@ func clearParts(conv, deletion string, turns []envelope.Ref) []clearPart {
 }
 
 // clearCopies seals parts for devs (other devices of this person), each
-// held until that device reads clr1. The fan names this person's roster:
+// held until that device reads clr1, or rem3 for a device chat (conv
+// ""). The fan names this person's roster:
 // the copies go to its devices only.
 func (a *Agent) clearCopies(me personRow, devs []identity.Public, parts []clearPart) ([]outCopy, error) {
 	var copies []outCopy
@@ -473,7 +597,11 @@ func (a *Agent) clearCopies(me personRow, devs []identity.Public, parts []clearP
 			if err != nil {
 				return nil, err
 			}
-			copies = append(copies, outCopy{env: env, in: in, state: stateQueued, required: protocol.CapConvClear, recipientFP: dev.Fingerprint()})
+			required := protocol.CapConvClear
+			if p.conv == "" { // a device chat: older devices refuse it as malformed (envelope.go)
+				required = protocol.CapDeviceClear
+			}
+			copies = append(copies, outCopy{env: env, in: in, state: stateQueued, required: required, recipientFP: dev.Fingerprint()})
 		}
 	}
 	return copies, nil
@@ -499,7 +627,7 @@ func (a *Agent) shareErased(ctx context.Context) (int, error) {
 	if err != nil || !ok {
 		return 0, err
 	}
-	rows, err := a.store.db.Query(`SELECT DISTINCT deletion, conv FROM conv_erased WHERE shared = 0 AND conv <> '' ORDER BY deletion`)
+	rows, err := a.store.db.Query(`SELECT DISTINCT deletion, conv FROM conv_erased WHERE shared = 0 ORDER BY deletion`)
 	if err != nil {
 		return 0, err
 	}
@@ -554,7 +682,7 @@ func (a *Agent) shareErased(ctx context.Context) (int, error) {
 		}
 	}
 	if len(all) > 0 {
-		a.kickNow() // queued copies go out with the outbox, each when its device reads clr1
+		a.kickNow() // queued copies go out with the outbox, each when its device reads clr1 (rem3 for a device chat)
 	}
 	return len(devs), nil
 }
@@ -610,7 +738,7 @@ func (a *Agent) replayErased(dev identity.Public) {
 	if err != nil || !ok {
 		return
 	}
-	rows, err := a.store.db.Query(`SELECT conv, key, lid FROM conv_erased WHERE conv <> '' ORDER BY conv, key, lid`)
+	rows, err := a.store.db.Query(`SELECT conv, key, lid FROM conv_erased ORDER BY conv, key, lid`)
 	if err != nil {
 		return
 	}
@@ -778,9 +906,16 @@ func (a *Agent) sweepErased(ctx context.Context) (held bool) {
 		a.Logf("conversation deletions: %v", err)
 		held = true
 	}
+	// Untold deletions hold the sweep until shared, but only with a person:
+	// with none there is no other device to tell yet, and holding would
+	// re-sweep on every change (they are shared once this device has one).
 	var untold bool
-	if err := a.store.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM conv_erased WHERE shared = 0 AND conv <> '')`).Scan(&untold); err != nil || untold {
+	if _, mine, err := a.store.selfPerson(a.Address); err != nil {
 		held = true
+	} else if mine {
+		if err := a.store.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM conv_erased WHERE shared = 0)`).Scan(&untold); err != nil || untold {
+			held = true
+		}
 	}
 	return held
 }
@@ -827,4 +962,63 @@ func (s *store) convDeleted(conv, selfFP string) bool {
 	s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox i WHERE i.conv = ? AND i.local = 0 AND i.ref_id IS NULL AND coalesce(i.sub, '') IN `+erasableSubs+` AND NOT `+erasedIn+`)
 		+ (SELECT count(*) FROM outbox o WHERE o.conv = ? AND o.ref_id IS NULL AND coalesce(o.sub, '') IN `+erasableSubs+` AND NOT `+erasedOut+`)`, conv, conv, selfFP).Scan(&visible)
 	return visible == 0
+}
+
+// DeviceChatNote is what a device topic or chat deletion says (ui
+// livedelete.go; engine deletionNote): where it is deleted, then who keeps a
+// copy. peer is the one asked for; a chat whose erased topics span several
+// peers (an agent's chat several devices talked to) says only that others
+// keep theirs.
+func (a *Agent) DeviceChatNote(done ConversationDeleted, peer string) string {
+	note := "Deleted on all your devices: no other device of yours is linked now, and one you link later gets the deletion."
+	if done.Devices > 0 {
+		note = fmt.Sprintf("Deleted on all your devices: here now; your %d other device(s) remove it once each is connected and runs an AgentNet version that applies it, and until then still show it.", done.Devices)
+	}
+	if done.Peers > 1 {
+		return note + " Others keep their copies."
+	}
+	if keeper, err := a.DeviceChatKeeper(peer); err == nil && keeper != "" {
+		note += " " + keeper
+	}
+	return note
+}
+
+// DeviceChatKeeper is the truthful last sentence of a device topic or chat
+// deletion with peer: who still keeps a copy. Deletions reach only this
+// person's current devices, so another current device of theirs keeps
+// nothing (""), a removed one is not told, and anyone else keeps theirs.
+func (a *Agent) DeviceChatKeeper(peer string) (string, error) {
+	me, _, err := a.Person()
+	if err != nil {
+		return "", err
+	}
+	owners, err := a.store.devicePersons()
+	if err != nil {
+		return "", err
+	}
+	if p := owners[peer]; p != "" && p == me.Person {
+		return "", nil
+	}
+	removed, err := a.RemovedDeviceOwners()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range removed {
+		if r.Address == peer && r.Person == me.Person {
+			return "Your removed device is not told.", nil
+		}
+		if r.Address == peer {
+			return "That removed device keeps its copy.", nil
+		}
+	}
+	known, err := a.KnownPersons()
+	if err != nil {
+		return "", err
+	}
+	for _, k := range known {
+		if k.Person != "" && k.Person == owners[peer] && strings.TrimSpace(k.Label) != "" {
+			return strings.TrimSpace(k.Label) + " keeps their copy.", nil
+		}
+	}
+	return "That device keeps its copy.", nil
 }

@@ -99,19 +99,28 @@ func (a *Agent) historySourceRowsMode(q dbq, own bool, filter, order string, lim
 	visibleOut := `
 		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('root-sync', 'history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND ` + outVisible
-	listed := ` WHERE conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots)`
-	narrow := `SELECT dir, id FROM (
-		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, sub, pid, lid, arrival, 0 AS outseq` + visible + `
-		  UNION ALL
-		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, o.sub, o.pid, o.lid, 0, +o.rowid` + visibleOut + `)` + listed + ` AND (` + filter + `) ORDER BY ` + order + ` LIMIT ?`
+	listed := ` WHERE +conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context UNION SELECT conv FROM group_proof_roots)`
+	// Each side takes its own first page in the requested order before the
+	// two are merged: the first page of a union is the first page of its
+	// sides' first pages. A side's page is then an index walk that stops at
+	// the limit (inbox_history_pick, inbox_history_arrival and
+	// outbox_history_source), not a sort of the whole history on every
+	// page; at 70,000 messages that sort alone cost 100-250 ms a page.
+	side := func(columns, from string) string {
+		return `SELECT * FROM (SELECT * FROM (` + columns + from + `)` + listed + ` AND (` + filter + `) ORDER BY ` + order + ` LIMIT ?)`
+	}
+	narrow := `SELECT dir, id FROM (` +
+		side(`SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, sub, pid, lid, arrival, 0 AS outseq`, visible) + `
+		  UNION ALL ` +
+		side(`SELECT o.conv, o.created_ms AS ms, o.id, 'out' AS dir, ? AS sender, ? AS verified_by, NULL AS claimed_fp, o.sub, o.pid, o.lid, 0 AS arrival, +o.rowid AS outseq`, visibleOut) + `) ORDER BY ` + order + ` LIMIT ?`
 	// Filters name these columns, as the full query below has them. The outbox
 	// side reads them all from outbox_history_source (+rowid keeps an outseq
 	// bound from choosing a scan of the table itself).
-	params := []any{a.Address, a.Self().Fingerprint(), a.Self().Fingerprint()}
+	params := append(append([]any{}, args...), limit, a.Address, a.Self().Fingerprint(), a.Self().Fingerprint())
 	if own {
 		params = append(params, a.Self().Fingerprint())
 	}
-	params = append(append(params, args...), limit)
+	params = append(append(params, args...), limit, limit)
 	picked, err := q.Query(narrow, params...)
 	if err != nil {
 		return nil, err
@@ -203,6 +212,12 @@ var betweenHistoryPickAndRead = func() {}
 // from the table row behind its inline envelope (owner's store: the busiest
 // chat's page 40 MB -> 8 MB, an older-history page 75 MB -> 17 MB).
 const historySourceSchema = `CREATE INDEX outbox_history_source ON outbox(conv, created_ms, sub, lid, pid, id, topic, topic_event);`
+
+// The received side of a history page walks one of these to its limit: by
+// conversation and time (newest page per chat, older pages forward), or by
+// arrival (the tail of what came in during a copy).
+const historySourcePickSchema = `CREATE INDEX inbox_history_pick ON inbox(conv, received_ms, id) WHERE conv IS NOT NULL AND local = 0;
+CREATE INDEX inbox_history_arrival ON inbox(arrival) WHERE conv IS NOT NULL AND local = 0;`
 
 // historyVia names the own device a received row came from as history or
 // device history ("" for an original received here, or one sent here). An

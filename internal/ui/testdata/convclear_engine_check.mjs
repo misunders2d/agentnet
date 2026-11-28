@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { Engine, memoryStore } from '../static/engine.mjs';
 import * as wire from '../static/wire.mjs';
+import { world as groupWorld } from './human_engine_check.mjs';
 let checks = 0, sequence = 1;
 const id = () => (sequence++).toString(16).padStart(32, '0');
 const now = 1790000000123;
@@ -105,6 +106,7 @@ check(wire.clearJSON(wire.parseControl(wire.SubClear, body)) === body, 'browser 
   const rec = wire.parseCaps(puts[0]); await wire.verifyCaps(rec, pub.sign_key);
   check(rec.caps.length <= wire.MaxAdvertisedCaps, 'published capabilities fit the advertisement bound');
   check(await wire.profileSupports({ sessions: [rec.session], caps: [JSON.parse(puts[0])] }, address, pub.sign_key, wire.CapConvClear), 'signed browser profile supports clr1');
+  check(rec.caps.includes(wire.CapReminderSyncV3) && !rec.caps.includes(wire.CapReminderSyncV2) && await wire.profileSupports({ sessions: [rec.session], caps: [JSON.parse(puts[0])] }, address, pub.sign_key, wire.CapReminderSyncV2), 'rem3 holds rem2\'s slot and reads as rem2');
   e.stop();
 }
 
@@ -168,6 +170,16 @@ const late = await wire.seal({ v: 2, id: id(), from: b.address, to: phone.addres
 await w.receive(late, phone);
 check(!(await phone.dm(conv)).messages.some((m) => m.body === 'OLD FROM BOB') && (await phone.store.all('inbox')).filter((r) => r.lid === oldBob.lid).every((r) => r.body === ''), 'a late copy of an erased turn stays a skeleton');
 
+// A second DM deleted with nothing later: a device linked afterwards never gets it.
+const gone = await a.newDM(b.address);
+await a.sendDM({ conv: gone, body: 'GONE FROM ALICE' });
+await w.drain(b); await w.drain(phone);
+await b.sendDM({ conv: gone, body: 'GONE FROM BOB' });
+await w.drain(a); await w.drain(phone);
+await a.api('/api/conversation/delete', { conv: gone }); await w.settle(a);
+await a.flushOutbox(); await w.drain(phone); await w.settle(phone);
+check(!(await phone.dm(gone)).messages.some((m) => m.body === 'GONE FROM BOB'), 'the second deletion reached the phone');
+
 // A device linked later learns every name and gets no deleted history.
 const tablet = await w.sibling(a, 'alice/tablet');
 await w.caps(tablet, [...defaults, wire.CapConvClear]);
@@ -175,6 +187,23 @@ await a.startHistory(tablet.address, tablet.fp); await a.runHistory(); await a.f
 const tView = await tablet.dm(conv).catch(() => ({ messages: [] }));
 check(!tView.messages.some((m) => /OLD FROM/.test(m.body || '')), 'new link: no deleted turn in its history');
 check((await tablet.store.all('erased')).length >= (await a.store.all('erased')).length, 'new link learns every erased name');
+// The replayed deletion of a chat the tablet never gets is applied, not held.
+check(!(await tablet.store.get('convs', gone)) && (await tablet.store.all('erased')).some((r) => r.conv === gone), 'new link keeps the names of a chat it does not hold');
+check(!(await tablet.store.all('held')).some((h) => h.reason === 'proof_pending'), 'new link holds no replayed deletion');
+check(!(await tablet.overview()).dms.some((d) => d.id === gone), 'the chat it does not hold stays unlisted');
+// A stale copy of an erased turn in that chat stays a skeleton; a later turn shows alone.
+const goneBob = (await a.store.all('inbox')).find((r) => r.conv === gone && r.from === b.address && !r.sub && r.lid);
+const goneRoot = (await b.store.get('convs', gone)).root;
+await w.receive(await wire.seal({ v: 2, id: id(), from: b.address, to: tablet.address, ts: Math.floor(now / 1000), conv: gone, root: goneRoot, lid: goneBob.lid, kind: 'message', body: 'GONE FROM BOB' }, b.keys, tablet.pub), tablet);
+await w.receive(await wire.seal({ v: 2, id: id(), from: b.address, to: tablet.address, ts: Math.floor(now / 1000), conv: gone, root: goneRoot, lid: id(), kind: 'message', body: 'GONE LATER' }, b.keys, tablet.pub), tablet);
+const goneView = (await tablet.dm(gone)).messages.filter((m) => m.body);
+check(goneView.length === 1 && goneView[0].body === 'GONE LATER' && (await tablet.store.all('inbox')).filter((r) => r.lid === goneBob.lid).every((r) => r.body === ''), 'new link: a stale copy stays a skeleton, the later turn shows alone');
+// A deletion an older build held for proof is applied on the next held look.
+const unheld = 'ab'.repeat(32), unheldLid = id();
+const [heldClear] = await a.clearCopies([tablet.me.devices.find((d) => d.address === tablet.address)], unheld, id(), [{ id: unheldLid, fingerprint: b.fp }]);
+await tablet.store.write([{ s: 'held', k: heldClear.id, v: { id: heldClear.id, from: a.address, reason: 'proof_pending', envelope: heldClear.envelope, at: now } }]);
+await tablet.retryHeld(); await w.settle(tablet);
+check(!(await tablet.store.get('held', heldClear.id)) && (await tablet.store.all('erased')).some((r) => r.conv === unheld && r.lid === unheldLid), 'a deletion held for proof is applied on retry');
 
 // Another person cannot delete anything here.
 const ref = { id: (await a.store.all('outbox')).find((r) => r.conv === conv && r.lid).lid, fingerprint: a.fp };
@@ -183,14 +212,155 @@ const foreign = await wire.seal({ v: 3, id: id(), from: b.address, to: a.address
 const fid = await w.receive(foreign, a);
 check((await a.store.get('held', fid))?.reason === 'invalid' && !(await a.store.get('inbox', fid)), "another person's deletion is refused");
 
-// A device thread is erased exactly, here only.
+// A device thread is erased exactly, and told to this person's other devices
+// only (rem3): they hold it until they read rem3; the other person gets nothing.
 const v1 = async (bodyText) => { const raw = await wire.seal({ v: 1, id: id(), from: b.address, to: a.address, ts: Math.floor(now / 1000), kind: 'message', body: bodyText }, b.keys, a.pub); await w.receive(raw, a); return wire.parseEnvelope(raw).id; };
 const t1 = await v1('THREAD ONE'), t2 = await v1('THREAD TWO');
-const before = (await a.store.all('outbox')).length;
+const deviceClears = async () => (await a.store.all('outbox')).filter((r) => r.sub === wire.SubClear && !r.conv);
 const td = await a.deleteConversation({ peer: b.address, thread: t1 });
-check(/stored on this device only/.test(td.note), 'thread deletion says this device only');
+check(/^Deleted on all your devices: here now; your 2 other device\(s\)/.test(td.note) && / bob keeps their copy\.$/.test(td.note), 'truthful device deletion note: ' + td.note);
 const threads = (await a.overview()).threads;
 check(!threads.some((t) => t.id === t1) && threads.some((t) => t.id === t2), 'exactly that thread is gone; the other stays');
-check((await a.store.all('outbox')).length === before, 'a thread deletion tells no one');
+let dc = await deviceClears();
+check(dc.length === 2 && dc.every((r) => r.required_cap === wire.CapReminderSyncV3 && r.state === 'waiting') && new Set(dc.map((r) => r.to)).size === 2 && dc.every((r) => [phone.address, tablet.address].includes(r.to)), 'one clear per other own device, each waiting for rem3');
+
+// The whole device chat (owner 2026-11-27): every topic of its row goes at once.
+const t3 = await v1('THREAD THREE'), t4 = await v1('THREAD FOUR');
+const old4 = await a.store.get('inbox', t4); await a.store.write([{ s: 'inbox', k: t4, v: { ...old4, at: old4.at - 8 * 86400 * 1000 } }]); a.changed(); // quiet past TopicArchiveAfter: archived
+const rowOf = async () => (await a.overview()).threads.filter((t) => t.peer === b.address && !t.notice_only).map((t) => t.id);
+check((await rowOf()).length === 3, 'the chat row holds three topics');
+check((await a.overview()).threads.some((t) => t.id === t4 && t.state === 'archived'), 'one of them archived');
+const cd = await a.deleteConversation({ peer: b.address, thread: t3, chat: true });
+check(/^Deleted on all your devices:/.test(cd.note), 'chat deletion says all your devices');
+check((await rowOf()).length === 0 && !((await a.overview()).topics || []).some((c) => c.peer === b.address), 'every topic of the chat is gone, archived too; no row is left');
+check((await deviceClears()).length === 4, 'queued for both own devices again');
+check((await b.store.all('inbox')).every((r) => r.sub !== wire.SubClear), 'nothing is told to the other person');
+
+// Threads of several peers (an agent's chat several devices talked to): the
+// note names no one keeper (client DeviceChatNote); one peer's names that peer.
+const v1From = async (s, bodyText) => { const raw = await wire.seal({ v: 1, id: id(), from: s.address, to: a.address, ts: Math.floor(now / 1000), kind: 'message', body: bodyText }, s.keys, a.pub); await w.receive(raw, a); return wire.parseEnvelope(raw).id; };
+const t5 = await v1('THREAD FIVE'), t6 = await v1From(phone, 'PHONE THREAD');
+const many = await a.eraseDeviceThreads([[phone.address, t6], [b.address, t5]], b.address);
+check(/ Others keep their copies\.$/.test(many.note) && !/keeps (their|its) copy/.test(many.note), "several peers' threads name no one keeper: " + many.note);
+const t7 = await v1('THREAD SEVEN'), one = await a.deleteDeviceChat(b.address, t7);
+check(/ bob keeps their copy\.$/.test(one.note), 'the clicked peer names the keeper: ' + one.note);
+
+// The phone updates (rem3): it applies exactly the named device-chat turns.
+await w.caps(phone, [...defaults, wire.CapConvClear, wire.CapReminderSyncV3]);
+await a.flushOutbox(); await w.drain(phone); await w.settle(phone);
+const pErased = await phone.store.all('erased');
+check([t1, t2, t3, t4].every((x) => pErased.some((r) => r.conv === '' && r.lid === x)), 'the updated phone erased every named device-chat turn');
+dc = await deviceClears();
+check(dc.filter((r) => r.to === tablet.address).every((r) => r.state === 'waiting'), 'the not-yet-updated tablet still holds its copies: ' + JSON.stringify(dc.map((r) => [r.to, r.state, r.detail])));
+
+// The overview names a removed device of a verified person (client
+// RemovedDeviceOwners): Bob's signed roster named bob/phone, then dropped it.
+const pk = await wire.newKeys(), ppub = await wire.publicEntry(pk, 'bob/phone'), pfp = await wire.fingerprint(ppub);
+const r2 = await wire.nextRoster(b.keys, b.address, b.roster, [b.pub, ppub], await wire.joinConsent(pk, 'bob/phone', b.me.person, b.me.seq + 1, b.me.hash));
+const r3 = await wire.nextRoster(b.keys, b.address, r2, [b.pub], null);
+const bobHere = async (steps) => { const p = await a.personRecord(steps, 'pinned', null); await a.store.write([{ s: 'persons', k: p.person, v: p }]); a.changed(); };
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(ppub), fingerprint: pfp, pending: null } }]);
+await bobHere([b.roster, r2]);
+check((await a.overview()).removed_devices === undefined, 'a current device is not removed');
+await bobHere([b.roster, r2, r3]);
+assert.deepEqual((await a.overview()).removed_devices, [{ address: 'bob/phone', person: b.me.person }]); checks++;
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(b.pub), fingerprint: b.fp, pending: null } }]); a.changed();
+check((await a.overview()).removed_devices === undefined, 'a different key at that address is never the removed device');
+await a.store.write([{ s: 'pins', k: 'bob/phone', v: { address: 'bob/phone', json: wire.marshalPublic(ppub), fingerprint: pfp, pending: null } }]);
+const nk = await wire.newKeys(), npub = await wire.publicEntry(nk, 'bob/phone');
+const r4 = await wire.nextRoster(b.keys, b.address, r3, [b.pub, npub], await wire.joinConsent(nk, 'bob/phone', b.me.person, r3.seq, await wire.rosterHash(r3)));
+await bobHere([b.roster, r2, r3, r4]);
+check((await a.overview()).removed_devices === undefined, 'a re-enrolled address (a current roster names it, new key) is not removed');
+// This person's own removed device (the owner's case): Alice drops alice/tablet
+// as removeDevice does (a new signed roster kept in kv "person").
+const prevA = await wire.parseRoster(a.me.json), nextA = await wire.nextRoster(a.keys, a.address, prevA, prevA.devices.filter((d) => d.address !== tablet.address), null);
+a.me = { ...(await a.personRecord([prevA, nextA], 'self', a.me)), published: true }; await a.store.write([{ s: 'kv', k: 'person', v: a.me }]); a.changed();
+assert.deepEqual((await a.overview()).removed_devices, [{ address: tablet.address, person: a.me.person }]); checks++;
+
+// A device with no person has nobody to tell yet: its untold deletions do not
+// start a share on every change (client sweepErased), and stay untold.
+{
+  const lone = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', fetch: async () => { throw Error('offline'); } });
+  await lone.store.write([{ s: 'erased', k: '|fp|gone', v: { conv: '', key: 'fp', lid: 'gone', deletion: id(), shared: false } }]);
+  let shares = 0; const share = lone.shareErased.bind(lone); lone.shareErased = async () => { shares++; return share(); };
+  for (let i = 0; i < 3; i++) await lone.sweepErased();
+  check(!lone.me && shares === 0 && (await lone.store.all('erased')).every((r) => !r.shared), 'no person: untold deletions start no share per change and stay untold (' + shares + ')');
+  lone.stop();
+}
+
+// A DM never written in (nothing said, only its root) is deleted too, on
+// every own device, and nothing else changes: the people stay.
+{
+  const w2 = await world(), { alice: a2, bob: b2 } = w2;
+  const phone2 = await w2.sibling(a2, 'alice/phone');
+  const empty = await a2.newDM(b2.address);
+  // The phone holds the same root, as root-sync leaves it (this world has
+  // no human keys for root-sync itself; its own checks cover it).
+  await phone2.store.write([{ s: 'convs', k: empty, v: await a2.store.get('convs', empty) }]);
+  check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'the empty DM is listed on both own devices');
+  const people = JSON.stringify(await a2.store.all('persons'));
+  await w2.caps(phone2, [...defaults, wire.CapConvClear]);
+  const gone = await a2.api('/api/conversation/delete', { conv: empty });
+  check(/Queued for your 1 other device/.test(gone.note), 'an empty DM deletes with a truthful note: ' + gone.note);
+  check(!(await a2.overview()).dms.some((d) => d.id === empty), 'the empty DM leaves the list here');
+  check(JSON.stringify(await a2.store.all('persons')) === people, 'the people stay as they are');
+  await refuses(() => a2.deleteConversation({ conv: empty }), /nothing here to delete/);
+  check((await a2.store.all('erased')).filter((r) => r.conv === empty).length === 1, 'a second deletion adds no marker');
+  await a2.flushOutbox(); await w2.drain(phone2); await w2.settle(phone2);
+  check(!(await phone2.overview()).dms.some((d) => d.id === empty), 'the empty DM leaves the list on the own phone');
+  await a2.sendDM({ conv: empty, body: 'HELLO AGAIN' });
+  await w2.drain(phone2);
+  check((await a2.overview()).dms.some((d) => d.id === empty) && (await phone2.overview()).dms.some((d) => d.id === empty), 'a new turn brings it back on both');
+}
+
+// An empty group leaves the list too, membership kept; the built-in
+// "My agents" room is kept (its agents find it there). The group world of
+// human_engine_check.mjs, whose synthetic server carries groups.
+{
+  const gw = await groupWorld(), ga = gw.alice;
+  for (const e of gw.users) { e.realm = 'f'.repeat(32); await gw.caps(e, [...defaults, wire.CapGroup, wire.CapConvClear]); }
+  const group = await ga.createGroup('Empty group');
+  const context = (await ga.store.get('kv', 'group/' + group))?.context;
+  check(!!context && (await ga.overview()).dms.some((d) => d.id === group), 'the empty group is listed');
+  await ga.deleteConversation({ conv: group });
+  check(!(await ga.overview()).dms.some((d) => d.id === group), 'the empty group leaves the list');
+  check((await ga.store.get('kv', 'group/' + group))?.context === context, 'its membership stays as it was');
+  await refuses(() => ga.deleteConversation({ conv: group }), /nothing here to delete/);
+  await ga.sendDM({ conv: group, body: 'GROUP HELLO' });
+  check((await ga.overview()).dms.some((d) => d.id === group), 'a turn brings the group back');
+  // My agents, empty and then with a message: hidden, still named by
+  // overview.my_agents and still the built-in group, back with a turn.
+  const room = await ga.createGroup('My agents');
+  check(await ga.builtInGroup(room) && (await ga.overview()).my_agents === room, 'the fixture room is the built-in My agents');
+  for (const body of ['', 'A JOB']) {
+    if (body) await ga.sendDM({ conv: room, body });
+    await ga.deleteConversation({ conv: room });
+    const o = await ga.overview();
+    check(!o.dms.some((d) => d.id === room) && o.my_agents === room, 'My agents leaves the list and stays named ' + (body ? 'with a message' : 'empty'));
+    check(await ga.builtInGroup(room), 'a deleted My agents is still the built-in group');
+    await refuses(() => ga.manageGroup({ action: 'rename', conv: room, title: 'Renamed' }), /built-in group/);
+  }
+  await ga.sendDM({ conv: room, body: 'NEXT JOB' });
+  check((await ga.overview()).dms.some((d) => d.id === room && d.title === 'My agents'), 'the next turn brings the same room back');
+  // A skin that looks only among listed chats asks for a new "My agents"
+  // while it is deleted: it gets the same room, and no second one is made.
+  const rooms = async () => (await ga.store.all('kv')).filter((v) => v?.context && wire.parseGroupContext(v.context).state.title === 'My agents').map((v) => wire.parseGroupContext(v.context).state.conv);
+  await ga.deleteConversation({ conv: room });
+  check(await ga.createGroup('My agents') === room && (await rooms()).length === 1, 'creating "My agents" while it is deleted returns the same room');
+  // Two rooms from before the guard (overview hidden from createGroup):
+  // the oldest listed one wins over an older deleted one; when all are
+  // deleted, the oldest.
+  const overview = ga.overview, now = ga.now;
+  ga.overview = async (...args) => { const o = await overview.apply(ga, args); delete o.my_agents; return o; };
+  ga.now = () => now() + 60_000;
+  const second = await ga.createGroup('My agents');
+  ga.overview = overview; ga.now = now;
+  check(second !== room && (await rooms()).length === 2, 'the fixture has a second, newer My agents');
+  check((await ga.overview()).my_agents === second, 'a listed newer room wins over the older deleted one');
+  await ga.deleteConversation({ conv: second });
+  check((await ga.overview()).my_agents === room, 'with both deleted, the oldest wins');
+  await ga.sendDM({ conv: room, body: 'BACK' });
+  check((await ga.overview()).my_agents === room, 'with both listed, the oldest wins');
+}
 
 console.log(JSON.stringify({ shapes, checks }));
