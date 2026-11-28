@@ -123,8 +123,10 @@ source. The packaged bundles ran the same script directly:
 `AGENTNET_IMAGE_PACKAGE=static/skins/office` for Office (57 of 57 each).
 
 Measured (Chromium, every case at all three widths, source and built Comic,
-built Office): viewer open at most 112 ms, a step at most 288 ms, close at
-most 290 ms; a pending album appears at most 153 ms after Send.
+built Office): viewer open at most 246 ms, a step at most 288 ms, close at
+most 290 ms; a pending album appears at most 153 ms after Send. After the
+fling fix: 10 runs from source, 5 of packaged Office and 2 of packaged
+Comic, 57 of 57 cases each.
 
 ## Next release after v0.11.10 — MEL-825 and MEL-826
 
