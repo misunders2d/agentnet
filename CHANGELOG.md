@@ -6,6 +6,11 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+- Photos and videos sent together show as one album, laid out the way
+  Telegram does it, with the message text underneath (MEL-856). Tap any
+  tile to open it, then swipe or use the arrows to go through the album.
+  Documents and audio sent together show as one list. Up to ten items form
+  a group; different kinds are never mixed, and the order stays as sent.
 - Your own agents work in "My agents" when you have only one device
   (MEL-840). With only you in the group and your agent on the same
   computer, messages, inviting the agent and asking it all failed with

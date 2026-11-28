@@ -92,6 +92,134 @@ before release for the new overview field.
 Not rerun: the rendered latency suite (web code unchanged this round); not
 checked on the real installed app or Android.
 
+## MEL-856 grouped photos, videos and files — unreleased, November 27, 2026
+
+Owner: "multiple photos should be grouped nicely and beautifully", and check
+how others do it. This replaces the MEL-668/MEL-813 picture rows below.
+
+Reuse evidence. Telegram Desktop at
+`fca0d08b6852df2195e11db91f7a4e3be2cbc4a4`:
+[`ui/grouped_layout.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/ui/grouped_layout.cpp)
+(`LayoutMediaGroup`),
+[`history_view_media_grouped.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/history/view/media/history_view_media_grouped.cpp)
+(`Mode::Grid`/`Mode::Column`, `countCurrentSize`, `kMaxSize`),
+[`attach_prepare.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/ui/chat/attach/attach_prepare.cpp)
+(`GroupRanges`, `kMaxAlbumCount = 10`), `chat.style` (`maxMediaSize`
+430, `minPhotoSize` 100, `historyGroupSkip` 4) and
+[`send_files_box.cpp`](https://github.com/telegramdesktop/tdesktop/blob/fca0d08b6852df2195e11db91f7a4e3be2cbc4a4/Telegram/SourceFiles/boxes/send_files_box.cpp#L2948-L2958)
+(the composer's caption goes to the last group: the first item of a photo
+album, shown under it, or the last file of a column).
+[Telegram API: albums](https://core.telegram.org/api/files) (ten items).
+
+Compared, not ported. Telegram Android at
+`21f7d109da6ab3506c9e9577f98c6a38771ab335`,
+[`MessageObject.GroupedMessages.calculate`](https://github.com/DrKLO/Telegram/blob/21f7d109da6ab3506c9e9577f98c6a38771ab335/TMessagesProj/src/main/java/org/telegram/messenger/MessageObject.java#L1394):
+the same w/n/q thresholds (1.2/0.8), branches for two to four items, the
+complex rows for five or more or a ratio above 2, and the same caption rule
+(one captioned item gives the album caption; documents keep theirs). It
+differs in its 800×814 reference block, ratios cropped to 0.667–1.7 (Desktop
+1–2.75 or 0.667–1), a 1.2 rather than 1.5 penalty for falling row counts, and
+ratio 1 for a picture without a thumbnail, which Comic reuses until sizes are
+known. Signal-Android at `2dd57038758b7630c028dcfd5eaf4e27acc0b11a`,
+[`AlbumThumbnailView`](https://github.com/signalapp/Signal-Android/blob/2dd57038758b7630c028dcfd5eaf4e27acc0b11a/app/src/main/java/org/thoughtcrime/securesms/components/AlbumThumbnailView.java#L143-L165):
+fixed layouts for two to five tiles, ignoring shape, and a "+N" fifth tile
+beyond five. Telegram shows all ten, so nothing is taken from it. WhatsApp:
+its help center pages returned no readable content to a fetch (the article
+URL was "page not found", the index and blog had no body), so its album
+behaviour, including the 2×2 "+N" grid, remains unverified and unused.
+
+What Comic does (`Message.groups.ts`, `Message.files.tsx`):
+
+- Attachments split as `GroupRanges` does: consecutive photos/videos
+  (album), audio (column) or other files (column); a kind change or ten items
+  starts a new group; a group of one keeps the existing single picture, video
+  card or file row. A GIF is `AlbumType::None` there
+  (`attach_prepare.cpp` 177–183): never in an album or a column, always on
+  its own, and it splits the groups around it. Order never changes.
+- An album is `LayoutMediaGroup` at 430 px, scaled with its 4 px gaps to the
+  bubble as `countCurrentSize` does, positioned in percentages. Tiles fill
+  their cell (cover); only the block's outer corners are rounded. Videos show
+  their poster with Telegram's play badge, or the size when the file is not
+  here or is over 16 MiB.
+- Documents and audio are one bordered block of rows, each with its name,
+  size, Preview/Download and the Drive copy, as before.
+- The message text, AgentNet's single caption, sits under the attachments.
+- Tapping a tile opens the existing viewer at that item. Previous/Next, the
+  arrow keys and a swipe step through the album, photos and videos alike; a
+  video plays in the viewer inside its existing card (`VideoFile`: the same
+  load, 16 MiB, WebKitGTK interleave, release and Android download paths), and
+  leaving it unloads it.
+- The viewer cancels the touchmoves of its own swipes. Without that,
+  Chromium (Android's WebView) started a fling of about 400 ms after a quick
+  swipe, and a tap during it (Close right after the last swipe) only stopped
+  the fling: no click. An input trace showed `GestureFlingCancel` then a
+  suppressed `GestureTap`. With the old viewer, the rendered check (Close
+  150 ms after a finger-like swipe) failed 3 of 3 runs; with the fix it
+  passed 24 of 24 cases.
+
+AgentNet-specific adaptations. One AgentNet message carries up to
+`envelope.MaxAttachments` (8) files and one text, so a message is split into
+groups for display rather than sent as several messages; the protocol and
+manifest are unchanged. More than ten items cannot be sent; the over-ten case
+is covered with fixture data only. The manifest has no picture dimensions,
+so an album lays out with unit ratios (Telegram Android's default) until every
+picture in it has decoded, then lays out once; a video counts as 16:9 until
+its poster is made, then takes the poster's shape. A ratio is kept within
+`ValidateThumbDimensions`' bounds (1:20 to 20:1); a size that gives none
+(0, NaN, Infinity) counts as square. A picture whose bytes are not a picture
+leaves the album and becomes a file row, and the album re-forms around it. A
+fetch or decode that fails shows the file row only until the conversation is
+opened again, when the picture is tried again. An album tile's focus ring is
+drawn inside the tile, since the album clips anything outside it. A message
+still sending shows its album at once (tiles marked busy, no thumbnails yet)
+instead of "sent, not kept here" rows.
+
+Not done (issue scope): the composer's attach preview still lists files as
+before; it neither groups them like the message nor offers Telegram's
+"group or send separately" choice. Also not done: an inline audio player
+(none existed), video durations on tiles, and the collection skins
+(Classic, Holonet, Zoom), which have their own renderers. Firefox and WebKit
+did not run locally for the adjusted video checks; the installed app
+(WebKitGTK) and Android are checked separately.
+
+Layout fidelity. `TestGroupedMediaLayout` compares the port with 34 vectors
+produced by Telegram's unmodified `grouped_layout.cpp`, compiled against a
+small shim (`testdata/grouped_layout_oracle`), covering every branch; all
+match exactly. It also checks the grouping rules (GIFs included) and the
+ratio bounds, including 0, NaN and Infinity sizes.
+
+| Control or state | Rendered evidence in `testdata/message_images_rendered.cjs` (1440, 360, 320 px; 360/320 with touch and the Android host) |
+|---|---|
+| Album of 2–10 photos, portrait/landscape/square/panorama mixed, received and sent | Tile geometry equals Telegram's layout scaled to the block within 1.5 px; order; square inner corners, rounded block; no horizontal scroll |
+| Album tile (Enter / tap) | Keyboard focus ring drawn inside the tile; opens the viewer at that item, under 1100 ms |
+| Viewer Previous/Next (click) and swipe (touch) | Step through every item with "i / n", stop at the ends; each step under 1100 ms |
+| Viewer Download, Close, Escape | Original bytes and filename; focus returns to the tile; under 1100 ms |
+| Video tile, playable (one playable and one large video in a 4-item album) | Poster, play badge; viewer plays the real clip and keeps Download; stepping away pauses, unloads and detaches it |
+| Video tile over 16 MiB | Size label; viewer says "Videos up to 16 MiB can play here."; the file is never read |
+| Held original | Unit-ratio layout and no viewer until the bytes arrive; then one layout |
+| Failed picture | Becomes a file row with Download; the album re-forms |
+| Documents (2 in the mixed case, 4 and 8), audio (3) | One block, one row per file in order, Download returns the original bytes |
+| Mixed selection | photos → documents → single audio → photos, in order, never mixed |
+| More than ten (fixture) | Albums of 10 and 2 |
+| Caption | Under the last group in every case |
+| Pending send of three photos | Album with busy tiles under 1100 ms of the Send tap, caption under it, no file-row flash |
+| Single picture | Unchanged: whole shape, own Drive link |
+
+Existing checks adjusted: the shared video fixture (`imageviewer_rendered_test.go`)
+now puts each video in its own message, since videos sent together now form
+an album; `TestImageViewerRendered` expects its three pictures as an album.
+
+`TestMessageImagesGroupedRendered` runs the script on Comic built from
+source. The packaged bundles ran the same script directly:
+`AGENTNET_IMAGE_BUILT=1` for Comic, plus
+`AGENTNET_IMAGE_PACKAGE=static/skins/office` for Office (57 of 57 each).
+
+Measured (Chromium, every case at all three widths, source and built Comic,
+built Office): viewer open at most 246 ms, a step at most 288 ms, close at
+most 290 ms; a pending album appears at most 153 ms after Send. After the
+fling fix: 10 runs from source, 5 of packaged Office and 2 of packaged
+Comic, 57 of 57 cases each.
+
 ## Next release after v0.11.10 — MEL-825 and MEL-826
 
 MEL-825 keeps a revision on the original message. The first claim reads the
@@ -957,6 +1085,8 @@ app's WebKitGTK webview (capture uses Play's interleaved bytes there),
 macOS/Windows/Android shells, physical devices.
 
 ## MEL-813 compact image groups — November 24, 2026
+
+Superseded by MEL-856 (above): pictures sent together now form a Telegram album.
 
 Three sent 2:1 screenshots filled two square-tile rows on `aa58315f`.
 Comic now gives the first image a full-width row with the other two below.
